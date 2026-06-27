@@ -12,6 +12,7 @@ export async function scanSwiftFolder(inputRoot) {
   const edges = [];
   const typeNames = new Set();
   const declarations = [];
+  const functions = [];
 
   addNode(nodes, {
     id: "repo:root",
@@ -90,6 +91,11 @@ export async function scanSwiftFolder(inputRoot) {
         });
         addEdge(edges, currentType.id, functionId, "defines");
         currentType.metrics.methods += 1;
+        functions.push({
+          id: functionId,
+          parentTypeName: currentType.name,
+          source: extractFunctionBody(lines, index)
+        });
         return;
       }
 
@@ -133,6 +139,15 @@ export async function scanSwiftFolder(inputRoot) {
       if (typeName === declaration.name) continue;
       if (referencesType(declaration.source, typeName)) {
         addEdge(edges, declaration.id, `type:${typeName}`, "uses");
+      }
+    }
+  }
+
+  for (const functionNode of functions) {
+    for (const typeName of typeNames) {
+      if (typeName === functionNode.parentTypeName) continue;
+      if (referencesType(functionNode.source, typeName)) {
+        addEdge(edges, functionNode.id, `type:${typeName}`, "uses");
       }
     }
   }
@@ -187,6 +202,30 @@ function referencesType(source, typeName) {
     || source.includes(`: ${typeName}`)
     || source.includes(`[${typeName}]`)
     || source.includes(`<${typeName}>`);
+}
+
+function extractFunctionBody(lines, startIndex) {
+  const collected = [];
+  let depth = 0;
+  let foundOpeningBrace = false;
+
+  for (let index = startIndex; index < lines.length; index += 1) {
+    const line = lines[index];
+    collected.push(line);
+
+    for (const character of line) {
+      if (character === "{") {
+        depth += 1;
+        foundOpeningBrace = true;
+      } else if (character === "}") {
+        depth -= 1;
+      }
+    }
+
+    if (foundOpeningBrace && depth <= 0) break;
+  }
+
+  return collected.join("\n");
 }
 
 function addNode(nodes, node) {

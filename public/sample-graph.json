@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "project": {
     "name": "SampleSwiftApp",
-    "scannedAt": "2026-06-27T10:33:17.282Z",
+    "scannedAt": "2026-06-27T14:13:14.695Z",
     "sourceRoot": "examples/SampleSwiftApp"
   },
   "nodes": [
@@ -768,6 +768,16 @@
     {
       "from": "type:SettingsView",
       "to": "type:SessionStore",
+      "kind": "uses"
+    },
+    {
+      "from": "function:AuthenticationService.currentUser",
+      "to": "type:UserProfile",
+      "kind": "uses"
+    },
+    {
+      "from": "function:AnalyticsService.recentEvents",
+      "to": "type:ActivityEvent",
       "kind": "uses"
     }
   ]

@@ -11,6 +11,7 @@ const pickProjectButton = document.querySelector("#pickProjectButton");
 const loadSampleButton = document.querySelector("#loadSampleButton");
 const showFilesToggle = document.querySelector("#showFilesToggle");
 const showModulesToggle = document.querySelector("#showModulesToggle");
+const showPropertiesToggle = document.querySelector("#showPropertiesToggle");
 const selectedEdgesOnlyToggle = document.querySelector("#selectedEdgesOnlyToggle");
 const projectName = document.querySelector("#projectName");
 const projectMeta = document.querySelector("#projectMeta");
@@ -45,6 +46,7 @@ const state = {
   focusMode: false,
   showFiles: true,
   showModules: true,
+  showProperties: true,
   pointer: new THREE.Vector2(),
   pointerDown: null,
   dragDistance: 0,
@@ -247,7 +249,7 @@ function buildScene() {
   }
 
   for (const edge of state.graph.edges) {
-    if (!["uses", "imports", "conforms_to", "owns_state"].includes(edge.kind)) continue;
+    if (!["uses", "imports", "conforms_to"].includes(edge.kind)) continue;
     const from = state.layout.find((node) => node.id === edge.from);
     const to = state.layout.find((node) => node.id === edge.to);
     if (!from || !to) continue;
@@ -256,11 +258,18 @@ function buildScene() {
       new THREE.Vector3((from.x + to.x) / 2, Math.max(from.height, to.height) + 92, (from.z + to.z) / 2),
       new THREE.Vector3(to.x, (to.y || 0) + to.height + 10, to.z)
     );
-    const geometry = new THREE.BufferGeometry().setFromPoints(curve.getPoints(24));
-    const material = new THREE.LineBasicMaterial({ color: edgeColor(edge.kind), transparent: true, opacity: 0.58 });
+    const color = edgeColor(edge.kind);
+    const points = curve.getPoints(24);
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const material = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.58 });
     const line = new THREE.Line(geometry, material);
-    line.userData.edge = edge;
-    edgeRoot.add(line);
+    const arrow = makeArrowHead(points, color);
+    const group = new THREE.Group();
+    group.add(line, arrow);
+    group.userData.edge = edge;
+    group.userData.lineMaterial = material;
+    group.userData.arrowMaterial = arrow.material;
+    edgeRoot.add(group);
   }
 }
 
@@ -302,15 +311,17 @@ function applyFilters() {
   });
 
   edgeRoot.visible = state.showEdges;
-  edgeRoot.children.forEach((line) => {
-    const edge = line.userData.edge;
+  edgeRoot.children.forEach((edgeObject) => {
+    const edge = edgeObject.userData.edge;
     const matchesSelection = !state.selectedEdgesOnly || edge.from === state.selectedId || edge.to === state.selectedId;
     const visible = (!state.focusMode || neighborhood.has(edge.from) || neighborhood.has(edge.to))
       && matchesSelection
       && root.children.some((object) => object.userData.nodeId === edge.from && object.visible)
       && root.children.some((object) => object.userData.nodeId === edge.to && object.visible);
-    line.visible = visible;
-    line.material.opacity = edge.from === state.selectedId || edge.to === state.selectedId ? 1 : 0.58;
+    edgeObject.visible = visible;
+    const opacity = edge.from === state.selectedId || edge.to === state.selectedId ? 1 : 0.58;
+    edgeObject.userData.lineMaterial.opacity = opacity;
+    edgeObject.userData.arrowMaterial.opacity = opacity;
   });
 }
 
@@ -377,8 +388,20 @@ function bindEvents() {
     state.showModules = showModulesToggle.checked;
   });
 
+  showPropertiesToggle.addEventListener("change", () => {
+    state.showProperties = showPropertiesToggle.checked;
+  });
+
   selectedEdgesOnlyToggle.addEventListener("change", () => {
     state.selectedEdgesOnly = selectedEdgesOnlyToggle.checked;
+  });
+
+  selectedDetails.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-source-node-id]");
+    if (!button) return;
+    const node = state.graph.nodes.find((candidate) => candidate.id === button.dataset.sourceNodeId);
+    if (!node) return;
+    await showSourcePreview(node);
   });
 
   pickProjectButton.addEventListener("click", async () => {
@@ -419,6 +442,8 @@ function renderDetails(node) {
   const incoming = state.graph.edges.filter((edge) => edge.to === node.id);
   const kindMeaning = describeKind(node.kind);
   const memberIds = getInspectableMemberIds(node.id);
+  const externalUses = getExternalUses(node);
+  const ownedState = getOwnedState(node);
   const names = (edges, direction) => edges
     .slice(0, 6)
     .map((edge) => {
@@ -430,11 +455,61 @@ function renderDetails(node) {
 
   return `
     <p><strong>${escapeHtml(node.name)}</strong><br>${escapeHtml(node.kind)} · ${escapeHtml(kindMeaning)} ${node.file ? `in <code>${escapeHtml(node.file)}:${node.line}</code>` : ""}</p>
+    ${node.file ? `<button class="button source-button" type="button" data-source-node-id="${escapeHtml(node.id)}">Source</button><div id="sourcePreview" class="source-preview"></div>` : ""}
     <p>Metrics: <code>${escapeHtml(JSON.stringify(node.metrics || {}))}</code></p>
     <p><strong>Members</strong><br>${memberIds.length > 0 ? `${memberIds.length} functions / properties stacked inside on selection.` : "No stackable members."}</p>
-    <p><strong>Uses</strong><br>${names(outgoing, "out") || "No outgoing relationships yet."}</p>
+    ${ownedState.length > 0 ? `<p><strong>State properties</strong><br>${names(ownedState, "out")}</p>` : ""}
+    ${node.kind === "function" ? `<p><strong>Outside parent</strong><br>${names(externalUses, "out") || "No external type usage detected."}</p>` : ""}
+    <p><strong>Uses</strong><br>${names(outgoing.filter((edge) => edge.kind !== "owns_state"), "out") || "No outgoing relationships yet."}</p>
     <p><strong>Used by</strong><br>${names(incoming, "in") || "No incoming relationships yet."}</p>
   `;
+}
+
+async function showSourcePreview(node) {
+  const preview = document.querySelector("#sourcePreview");
+  if (!preview) return;
+
+  preview.innerHTML = "<p>Loading source...</p>";
+  try {
+    const response = await fetch("/api/source", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sourceRoot: state.graph.project.sourceRoot,
+        file: node.file,
+        line: node.line
+      })
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Source preview failed.");
+    }
+    preview.innerHTML = renderSourceSnippet(payload);
+  } catch (error) {
+    preview.innerHTML = `<p><strong>Source error</strong><br><code>${escapeHtml(error.message)}</code></p>`;
+  }
+}
+
+function renderSourceSnippet(payload) {
+  const rows = payload.code.map((line) => {
+    const isTarget = line.number === payload.line;
+    return `<span class="${isTarget ? "is-target" : ""}"><b>${line.number}</b>${escapeHtml(line.content || " ")}</span>`;
+  }).join("");
+
+  return `
+    <p><strong>${escapeHtml(payload.file)}:${payload.line}</strong></p>
+    <pre>${rows}</pre>
+  `;
+}
+
+function getExternalUses(node) {
+  if (node.kind !== "function") return [];
+  const parentId = state.graph.edges.find((edge) => edge.kind === "defines" && edge.to === node.id)?.from;
+  return state.graph.edges.filter((edge) => edge.kind === "uses" && edge.from === node.id && edge.to !== parentId);
+}
+
+function getOwnedState(node) {
+  return state.graph.edges.filter((edge) => edge.kind === "owns_state" && edge.from === node.id);
 }
 
 function focusedNeighborhood() {
@@ -506,6 +581,18 @@ function edgeColor(kind) {
   return 0xffffff;
 }
 
+function makeArrowHead(points, color) {
+  const tip = points[Math.max(1, points.length - 2)];
+  const tail = points[Math.max(0, points.length - 5)];
+  const direction = new THREE.Vector3().subVectors(tip, tail).normalize();
+  const geometry = new THREE.ConeGeometry(4.5, 11, 14);
+  const material = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.58 });
+  const arrow = new THREE.Mesh(geometry, material);
+  arrow.position.copy(tip);
+  arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
+  return arrow;
+}
+
 function describeKind(kind) {
   if (kind === "repository") return "whole scanned app";
   if (kind === "file") return "Swift source file";
@@ -559,6 +646,7 @@ function shouldShowLabel(nodeId) {
   const node = state.graph?.nodes.find((candidate) => candidate.id === nodeId);
   if (!node) return false;
   if (importantKinds.has(node.kind)) return true;
+  if (!state.showProperties && node.kind === "property") return false;
   if (node.kind === "function" || node.kind === "property") {
     const parentId = state.graph.edges.find((edge) => edge.kind === "defines" && edge.to === nodeId)?.from;
     return parentId === state.openShellId;
@@ -569,6 +657,7 @@ function shouldShowLabel(nodeId) {
 function shouldShowMesh(nodeId) {
   const node = state.graph?.nodes.find((candidate) => candidate.id === nodeId);
   if (!node) return false;
+  if (!state.showProperties && node.kind === "property") return false;
   if (node.kind === "function" || node.kind === "property") {
     const parentId = state.graph.edges.find((edge) => edge.kind === "defines" && edge.to === nodeId)?.from;
     return parentId === state.openShellId;

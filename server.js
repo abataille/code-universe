@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
-import { extname, dirname, join, normalize, resolve } from "node:path";
+import { extname, dirname, join, normalize, relative, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { scanSwiftFolder } from "./scripts/scan-swift-core.js";
@@ -30,6 +30,13 @@ createServer(async (request, response) => {
     if (url.pathname === "/api/scan-path" && request.method === "POST") {
       const body = await readJsonBody(request);
       const payload = await scanExplicitPath(body?.path);
+      sendJson(response, 200, payload);
+      return;
+    }
+
+    if (url.pathname === "/api/source" && request.method === "POST") {
+      const body = await readJsonBody(request);
+      const payload = await readSourceSnippet(body);
       sendJson(response, 200, payload);
       return;
     }
@@ -96,6 +103,41 @@ async function scanResolvedPath(inputPath) {
       pickedPath: resolvedInput,
       sourceRoot: projectRoot
     }
+  };
+}
+
+async function readSourceSnippet(body) {
+  const sourceRoot = body?.sourceRoot;
+  const file = body?.file;
+  const line = Number(body?.line || 1);
+
+  if (!sourceRoot || !file || typeof sourceRoot !== "string" || typeof file !== "string") {
+    throw new Error("Missing source location.");
+  }
+
+  const resolvedRoot = resolve(sourceRoot);
+  const resolvedFile = resolve(resolvedRoot, file);
+  const relativeFile = relative(resolvedRoot, resolvedFile);
+
+  if (relativeFile.startsWith("..") || relativeFile === "" || relativeFile.startsWith("/")) {
+    throw new Error("Source file is outside the scanned project.");
+  }
+
+  const source = await readFile(resolvedFile, "utf8");
+  const lines = source.split(/\r?\n/);
+  const targetLine = Math.max(1, Math.min(lines.length, Number.isFinite(line) ? line : 1));
+  const startLine = Math.max(1, targetLine - 8);
+  const endLine = Math.min(lines.length, targetLine + 18);
+
+  return {
+    file: relativeFile,
+    line: targetLine,
+    startLine,
+    endLine,
+    code: lines.slice(startLine - 1, endLine).map((content, index) => ({
+      number: startLine + index,
+      content
+    }))
   };
 }
 

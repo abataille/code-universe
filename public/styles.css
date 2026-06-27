@@ -210,6 +210,47 @@ h1 {
   white-space: pre-wrap;
 }
 
+.source-button {
+  width: 100%;
+}
+
+.source-preview {
+  display: grid;
+  gap: 8px;
+}
+
+.source-preview pre {
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #081017;
+  color: #dce8ee;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.source-preview span {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  gap: 10px;
+  min-width: max-content;
+  white-space: pre;
+}
+
+.source-preview b {
+  color: var(--muted);
+  font-weight: 500;
+  text-align: right;
+  user-select: none;
+}
+
+.source-preview .is-target {
+  color: var(--text);
+  background: rgba(99, 210, 255, 0.12);
+}
+
 .stats {
   display: grid;
   gap: 10px;
