@@ -1,0 +1,13 @@
+{
+  "name": "code-universe-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "scan:sample": "node scripts/scan-swift.js examples/SampleSwiftApp public/sample-graph.json"
+  },
+  "dependencies": {
+    "three": "^0.185.0"
+  }
+}

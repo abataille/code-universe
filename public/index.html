@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Code Universe Prototype</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">CU</div>
+          <div>
+            <h1>Code Universe</h1>
+            <p>Swift app architecture explorer</p>
+          </div>
+        </div>
+
+        <section class="panel panel-accent">
+          <h2>Project</h2>
+          <p class="panel-copy">Choose the folder that contains your `.xcodeproj`. The scan runs locally in the browser.</p>
+          <div class="stack">
+            <button id="pickProjectButton" class="button button-primary" type="button">Choose Xcode Project</button>
+            <button id="loadSampleButton" class="button" type="button">Load Sample Universe</button>
+            <p id="pickerStatus" class="status-copy">No project chosen yet.</p>
+            <p id="scanSummary" class="status-copy">The sample universe is available immediately.</p>
+          </div>
+        </section>
+
+        <label class="field-label" for="searchInput">Search symbol</label>
+        <input id="searchInput" class="search" type="search" placeholder="ContentView, AuthService..." />
+
+        <div class="control-row">
+          <button id="viewAllButton" class="button is-active" type="button">Map</button>
+          <button id="focusButton" class="button" type="button">Focus</button>
+          <button id="edgesButton" class="button" type="button">Edges</button>
+        </div>
+
+        <section class="panel">
+          <h2>Visibility</h2>
+          <div class="stack">
+            <label class="toggle-row">
+              <input id="showFilesToggle" type="checkbox" checked />
+              <span>Show files</span>
+            </label>
+            <label class="toggle-row">
+              <input id="showModulesToggle" type="checkbox" checked />
+              <span>Show imported modules</span>
+            </label>
+            <label class="toggle-row">
+              <input id="selectedEdgesOnlyToggle" type="checkbox" />
+              <span>Selected object edges only</span>
+            </label>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Selected</h2>
+          <div id="selectedDetails" class="details">
+            <p>Select a tower, building, or road to inspect the code graph.</p>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Graph Stats</h2>
+          <dl class="stats">
+            <div><dt>Nodes</dt><dd id="nodeCount">0</dd></div>
+            <div><dt>Edges</dt><dd id="edgeCount">0</dd></div>
+            <div><dt>SwiftUI Views</dt><dd id="viewCount">0</dd></div>
+            <div><dt>Services</dt><dd id="serviceCount">0</dd></div>
+          </dl>
+        </section>
+      </aside>
+
+      <section class="stage">
+        <header class="topbar">
+          <div>
+            <strong id="projectName">Loading universe...</strong>
+            <span id="projectMeta"></span>
+          </div>
+          <div class="legend">
+            <span><i class="legend-file"></i>File</span>
+            <span><i class="legend-view"></i>View</span>
+            <span><i class="legend-service"></i>Service</span>
+            <span><i class="legend-model"></i>Model</span>
+            <span><i class="legend-protocol"></i>Protocol</span>
+            <span><i class="legend-function"></i>Function / Property</span>
+            <span><i class="legend-repository"></i>Repository / Module</span>
+          </div>
+        </header>
+        <canvas id="worldCanvas" aria-label="3D code universe canvas"></canvas>
+        <div class="hint">Drag to orbit. Scroll to zoom. Click objects to inspect.</div>
+        <div class="edge-legend">
+          <span><i class="edge-uses"></i>Uses</span>
+          <span><i class="edge-imports"></i>Imports</span>
+          <span><i class="edge-state"></i>State ownership</span>
+          <span><i class="edge-conforms"></i>Conforms to</span>
+        </div>
+      </section>
+    </main>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "./vendor/three.module.js",
+          "three/addons/controls/OrbitControls.js": "./vendor/OrbitControls.js"
+        }
+      }
+    </script>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

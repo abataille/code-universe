@@ -1,0 +1,774 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "name": "SampleSwiftApp",
+    "scannedAt": "2026-06-27T10:33:17.282Z",
+    "sourceRoot": "examples/SampleSwiftApp"
+  },
+  "nodes": [
+    {
+      "id": "repo:root",
+      "kind": "repository",
+      "name": "SampleSwiftApp",
+      "file": "",
+      "line": 1,
+      "metrics": {}
+    },
+    {
+      "id": "file:ContentView.swift",
+      "kind": "file",
+      "name": "ContentView.swift",
+      "file": "ContentView.swift",
+      "line": 1,
+      "metrics": {
+        "lines": 20
+      }
+    },
+    {
+      "id": "type:ContentView",
+      "kind": "swiftui_view",
+      "declarationKind": "struct",
+      "name": "ContentView",
+      "file": "ContentView.swift",
+      "line": 3,
+      "metrics": {
+        "methods": 0,
+        "properties": 3
+      }
+    },
+    {
+      "id": "property:ContentView.sessionStore",
+      "kind": "property",
+      "name": "sessionStore",
+      "file": "ContentView.swift",
+      "line": 4,
+      "metrics": {}
+    },
+    {
+      "id": "property:ContentView.selectedTab",
+      "kind": "property",
+      "name": "selectedTab",
+      "file": "ContentView.swift",
+      "line": 5,
+      "metrics": {}
+    },
+    {
+      "id": "property:ContentView.body",
+      "kind": "property",
+      "name": "body",
+      "file": "ContentView.swift",
+      "line": 7,
+      "metrics": {}
+    },
+    {
+      "id": "module:SwiftUI",
+      "kind": "module",
+      "name": "SwiftUI",
+      "file": "",
+      "line": 1,
+      "metrics": {}
+    },
+    {
+      "id": "file:DashboardView.swift",
+      "kind": "file",
+      "name": "DashboardView.swift",
+      "file": "DashboardView.swift",
+      "line": 1,
+      "metrics": {
+        "lines": 24
+      }
+    },
+    {
+      "id": "type:DashboardView",
+      "kind": "swiftui_view",
+      "declarationKind": "struct",
+      "name": "DashboardView",
+      "file": "DashboardView.swift",
+      "line": 3,
+      "metrics": {
+        "methods": 0,
+        "properties": 3
+      }
+    },
+    {
+      "id": "property:DashboardView.sessionStore",
+      "kind": "property",
+      "name": "sessionStore",
+      "file": "DashboardView.swift",
+      "line": 4,
+      "metrics": {}
+    },
+    {
+      "id": "property:DashboardView.analyticsService",
+      "kind": "property",
+      "name": "analyticsService",
+      "file": "DashboardView.swift",
+      "line": 5,
+      "metrics": {}
+    },
+    {
+      "id": "property:DashboardView.body",
+      "kind": "property",
+      "name": "body",
+      "file": "DashboardView.swift",
+      "line": 7,
+      "metrics": {}
+    },
+    {
+      "id": "type:ActivityChartView",
+      "kind": "swiftui_view",
+      "declarationKind": "struct",
+      "name": "ActivityChartView",
+      "file": "DashboardView.swift",
+      "line": 15,
+      "metrics": {
+        "methods": 0,
+        "properties": 2
+      }
+    },
+    {
+      "id": "property:ActivityChartView.events",
+      "kind": "property",
+      "name": "events",
+      "file": "DashboardView.swift",
+      "line": 16,
+      "metrics": {}
+    },
+    {
+      "id": "property:ActivityChartView.body",
+      "kind": "property",
+      "name": "body",
+      "file": "DashboardView.swift",
+      "line": 18,
+      "metrics": {}
+    },
+    {
+      "id": "file:Models.swift",
+      "kind": "file",
+      "name": "Models.swift",
+      "file": "Models.swift",
+      "line": 1,
+      "metrics": {
+        "lines": 11
+      }
+    },
+    {
+      "id": "type:UserProfile",
+      "kind": "struct",
+      "declarationKind": "struct",
+      "name": "UserProfile",
+      "file": "Models.swift",
+      "line": 3,
+      "metrics": {
+        "methods": 0,
+        "properties": 1
+      }
+    },
+    {
+      "id": "property:UserProfile.displayName",
+      "kind": "property",
+      "name": "displayName",
+      "file": "Models.swift",
+      "line": 4,
+      "metrics": {}
+    },
+    {
+      "id": "type:ActivityEvent",
+      "kind": "struct",
+      "declarationKind": "struct",
+      "name": "ActivityEvent",
+      "file": "Models.swift",
+      "line": 7,
+      "metrics": {
+        "methods": 0,
+        "properties": 2
+      }
+    },
+    {
+      "id": "property:ActivityEvent.id",
+      "kind": "property",
+      "name": "id",
+      "file": "Models.swift",
+      "line": 8,
+      "metrics": {}
+    },
+    {
+      "id": "property:ActivityEvent.title",
+      "kind": "property",
+      "name": "title",
+      "file": "Models.swift",
+      "line": 9,
+      "metrics": {}
+    },
+    {
+      "id": "module:Foundation",
+      "kind": "module",
+      "name": "Foundation",
+      "file": "",
+      "line": 1,
+      "metrics": {}
+    },
+    {
+      "id": "file:SampleApp.swift",
+      "kind": "file",
+      "name": "SampleApp.swift",
+      "file": "SampleApp.swift",
+      "line": 1,
+      "metrics": {
+        "lines": 14
+      }
+    },
+    {
+      "id": "type:SampleApp",
+      "kind": "struct",
+      "declarationKind": "struct",
+      "name": "SampleApp",
+      "file": "SampleApp.swift",
+      "line": 4,
+      "metrics": {
+        "methods": 0,
+        "properties": 2
+      }
+    },
+    {
+      "id": "property:SampleApp.sessionStore",
+      "kind": "property",
+      "name": "sessionStore",
+      "file": "SampleApp.swift",
+      "line": 5,
+      "metrics": {}
+    },
+    {
+      "id": "property:SampleApp.body",
+      "kind": "property",
+      "name": "body",
+      "file": "SampleApp.swift",
+      "line": 7,
+      "metrics": {}
+    },
+    {
+      "id": "file:Services.swift",
+      "kind": "file",
+      "name": "Services.swift",
+      "file": "Services.swift",
+      "line": 1,
+      "metrics": {
+        "lines": 20
+      }
+    },
+    {
+      "id": "type:AuthenticationService",
+      "kind": "service",
+      "declarationKind": "struct",
+      "name": "AuthenticationService",
+      "file": "Services.swift",
+      "line": 3,
+      "metrics": {
+        "methods": 2,
+        "properties": 0
+      }
+    },
+    {
+      "id": "function:AuthenticationService.currentUser",
+      "kind": "function",
+      "name": "currentUser",
+      "file": "Services.swift",
+      "line": 4,
+      "metrics": {}
+    },
+    {
+      "id": "function:AuthenticationService.signOut",
+      "kind": "function",
+      "name": "signOut",
+      "file": "Services.swift",
+      "line": 8,
+      "metrics": {}
+    },
+    {
+      "id": "type:AnalyticsService",
+      "kind": "service",
+      "declarationKind": "struct",
+      "name": "AnalyticsService",
+      "file": "Services.swift",
+      "line": 12,
+      "metrics": {
+        "methods": 1,
+        "properties": 0
+      }
+    },
+    {
+      "id": "function:AnalyticsService.recentEvents",
+      "kind": "function",
+      "name": "recentEvents",
+      "file": "Services.swift",
+      "line": 13,
+      "metrics": {}
+    },
+    {
+      "id": "file:SessionStore.swift",
+      "kind": "file",
+      "name": "SessionStore.swift",
+      "file": "SessionStore.swift",
+      "line": 1,
+      "metrics": {
+        "lines": 15
+      }
+    },
+    {
+      "id": "type:SessionStore",
+      "kind": "class",
+      "declarationKind": "class",
+      "name": "SessionStore",
+      "file": "SessionStore.swift",
+      "line": 3,
+      "metrics": {
+        "methods": 2,
+        "properties": 1
+      }
+    },
+    {
+      "id": "property:SessionStore.authenticationService",
+      "kind": "property",
+      "name": "authenticationService",
+      "file": "SessionStore.swift",
+      "line": 5,
+      "metrics": {}
+    },
+    {
+      "id": "function:SessionStore.refresh",
+      "kind": "function",
+      "name": "refresh",
+      "file": "SessionStore.swift",
+      "line": 7,
+      "metrics": {}
+    },
+    {
+      "id": "function:SessionStore.signOut",
+      "kind": "function",
+      "name": "signOut",
+      "file": "SessionStore.swift",
+      "line": 11,
+      "metrics": {}
+    },
+    {
+      "id": "file:SettingsView.swift",
+      "kind": "file",
+      "name": "SettingsView.swift",
+      "file": "SettingsView.swift",
+      "line": 1,
+      "metrics": {
+        "lines": 15
+      }
+    },
+    {
+      "id": "type:SettingsView",
+      "kind": "swiftui_view",
+      "declarationKind": "struct",
+      "name": "SettingsView",
+      "file": "SettingsView.swift",
+      "line": 3,
+      "metrics": {
+        "methods": 0,
+        "properties": 2
+      }
+    },
+    {
+      "id": "property:SettingsView.sessionStore",
+      "kind": "property",
+      "name": "sessionStore",
+      "file": "SettingsView.swift",
+      "line": 4,
+      "metrics": {}
+    },
+    {
+      "id": "property:SettingsView.body",
+      "kind": "property",
+      "name": "body",
+      "file": "SettingsView.swift",
+      "line": 6,
+      "metrics": {}
+    }
+  ],
+  "edges": [
+    {
+      "from": "repo:root",
+      "to": "file:ContentView.swift",
+      "kind": "contains"
+    },
+    {
+      "from": "file:ContentView.swift",
+      "to": "type:ContentView",
+      "kind": "defines"
+    },
+    {
+      "from": "type:ContentView",
+      "to": "type:View",
+      "kind": "conforms_to"
+    },
+    {
+      "from": "type:ContentView",
+      "to": "property:ContentView.sessionStore",
+      "kind": "defines"
+    },
+    {
+      "from": "type:ContentView",
+      "to": "property:ContentView.sessionStore",
+      "kind": "owns_state"
+    },
+    {
+      "from": "type:ContentView",
+      "to": "property:ContentView.selectedTab",
+      "kind": "defines"
+    },
+    {
+      "from": "type:ContentView",
+      "to": "property:ContentView.selectedTab",
+      "kind": "owns_state"
+    },
+    {
+      "from": "type:ContentView",
+      "to": "property:ContentView.body",
+      "kind": "defines"
+    },
+    {
+      "from": "file:ContentView.swift",
+      "to": "module:SwiftUI",
+      "kind": "imports"
+    },
+    {
+      "from": "repo:root",
+      "to": "file:DashboardView.swift",
+      "kind": "contains"
+    },
+    {
+      "from": "file:DashboardView.swift",
+      "to": "type:DashboardView",
+      "kind": "defines"
+    },
+    {
+      "from": "type:DashboardView",
+      "to": "type:View",
+      "kind": "conforms_to"
+    },
+    {
+      "from": "type:DashboardView",
+      "to": "property:DashboardView.sessionStore",
+      "kind": "defines"
+    },
+    {
+      "from": "type:DashboardView",
+      "to": "property:DashboardView.sessionStore",
+      "kind": "owns_state"
+    },
+    {
+      "from": "type:DashboardView",
+      "to": "property:DashboardView.analyticsService",
+      "kind": "defines"
+    },
+    {
+      "from": "type:DashboardView",
+      "to": "property:DashboardView.body",
+      "kind": "defines"
+    },
+    {
+      "from": "file:DashboardView.swift",
+      "to": "type:ActivityChartView",
+      "kind": "defines"
+    },
+    {
+      "from": "type:ActivityChartView",
+      "to": "type:View",
+      "kind": "conforms_to"
+    },
+    {
+      "from": "type:ActivityChartView",
+      "to": "property:ActivityChartView.events",
+      "kind": "defines"
+    },
+    {
+      "from": "type:ActivityChartView",
+      "to": "property:ActivityChartView.body",
+      "kind": "defines"
+    },
+    {
+      "from": "file:DashboardView.swift",
+      "to": "module:SwiftUI",
+      "kind": "imports"
+    },
+    {
+      "from": "repo:root",
+      "to": "file:Models.swift",
+      "kind": "contains"
+    },
+    {
+      "from": "file:Models.swift",
+      "to": "type:UserProfile",
+      "kind": "defines"
+    },
+    {
+      "from": "type:UserProfile",
+      "to": "property:UserProfile.displayName",
+      "kind": "defines"
+    },
+    {
+      "from": "file:Models.swift",
+      "to": "type:ActivityEvent",
+      "kind": "defines"
+    },
+    {
+      "from": "type:ActivityEvent",
+      "to": "type:Identifiable",
+      "kind": "conforms_to"
+    },
+    {
+      "from": "type:ActivityEvent",
+      "to": "property:ActivityEvent.id",
+      "kind": "defines"
+    },
+    {
+      "from": "type:ActivityEvent",
+      "to": "property:ActivityEvent.title",
+      "kind": "defines"
+    },
+    {
+      "from": "file:Models.swift",
+      "to": "module:Foundation",
+      "kind": "imports"
+    },
+    {
+      "from": "repo:root",
+      "to": "file:SampleApp.swift",
+      "kind": "contains"
+    },
+    {
+      "from": "file:SampleApp.swift",
+      "to": "type:SampleApp",
+      "kind": "defines"
+    },
+    {
+      "from": "type:SampleApp",
+      "to": "type:App",
+      "kind": "conforms_to"
+    },
+    {
+      "from": "type:SampleApp",
+      "to": "property:SampleApp.sessionStore",
+      "kind": "defines"
+    },
+    {
+      "from": "type:SampleApp",
+      "to": "property:SampleApp.sessionStore",
+      "kind": "owns_state"
+    },
+    {
+      "from": "type:SampleApp",
+      "to": "property:SampleApp.body",
+      "kind": "defines"
+    },
+    {
+      "from": "file:SampleApp.swift",
+      "to": "module:SwiftUI",
+      "kind": "imports"
+    },
+    {
+      "from": "repo:root",
+      "to": "file:Services.swift",
+      "kind": "contains"
+    },
+    {
+      "from": "file:Services.swift",
+      "to": "type:AuthenticationService",
+      "kind": "defines"
+    },
+    {
+      "from": "type:AuthenticationService",
+      "to": "function:AuthenticationService.currentUser",
+      "kind": "defines"
+    },
+    {
+      "from": "type:AuthenticationService",
+      "to": "function:AuthenticationService.signOut",
+      "kind": "defines"
+    },
+    {
+      "from": "file:Services.swift",
+      "to": "type:AnalyticsService",
+      "kind": "defines"
+    },
+    {
+      "from": "type:AnalyticsService",
+      "to": "function:AnalyticsService.recentEvents",
+      "kind": "defines"
+    },
+    {
+      "from": "file:Services.swift",
+      "to": "module:Foundation",
+      "kind": "imports"
+    },
+    {
+      "from": "repo:root",
+      "to": "file:SessionStore.swift",
+      "kind": "contains"
+    },
+    {
+      "from": "file:SessionStore.swift",
+      "to": "type:SessionStore",
+      "kind": "defines"
+    },
+    {
+      "from": "type:SessionStore",
+      "to": "type:ObservableObject",
+      "kind": "conforms_to"
+    },
+    {
+      "from": "type:SessionStore",
+      "to": "property:SessionStore.authenticationService",
+      "kind": "defines"
+    },
+    {
+      "from": "type:SessionStore",
+      "to": "function:SessionStore.refresh",
+      "kind": "defines"
+    },
+    {
+      "from": "type:SessionStore",
+      "to": "function:SessionStore.signOut",
+      "kind": "defines"
+    },
+    {
+      "from": "file:SessionStore.swift",
+      "to": "module:Foundation",
+      "kind": "imports"
+    },
+    {
+      "from": "repo:root",
+      "to": "file:SettingsView.swift",
+      "kind": "contains"
+    },
+    {
+      "from": "file:SettingsView.swift",
+      "to": "type:SettingsView",
+      "kind": "defines"
+    },
+    {
+      "from": "type:SettingsView",
+      "to": "type:View",
+      "kind": "conforms_to"
+    },
+    {
+      "from": "type:SettingsView",
+      "to": "property:SettingsView.sessionStore",
+      "kind": "defines"
+    },
+    {
+      "from": "type:SettingsView",
+      "to": "property:SettingsView.sessionStore",
+      "kind": "owns_state"
+    },
+    {
+      "from": "type:SettingsView",
+      "to": "property:SettingsView.body",
+      "kind": "defines"
+    },
+    {
+      "from": "file:SettingsView.swift",
+      "to": "module:SwiftUI",
+      "kind": "imports"
+    },
+    {
+      "from": "type:ContentView",
+      "to": "type:DashboardView",
+      "kind": "uses"
+    },
+    {
+      "from": "type:ContentView",
+      "to": "type:SessionStore",
+      "kind": "uses"
+    },
+    {
+      "from": "type:ContentView",
+      "to": "type:SettingsView",
+      "kind": "uses"
+    },
+    {
+      "from": "type:DashboardView",
+      "to": "type:ActivityChartView",
+      "kind": "uses"
+    },
+    {
+      "from": "type:DashboardView",
+      "to": "type:ActivityEvent",
+      "kind": "uses"
+    },
+    {
+      "from": "type:DashboardView",
+      "to": "type:AnalyticsService",
+      "kind": "uses"
+    },
+    {
+      "from": "type:DashboardView",
+      "to": "type:SessionStore",
+      "kind": "uses"
+    },
+    {
+      "from": "type:ActivityChartView",
+      "to": "type:ActivityEvent",
+      "kind": "uses"
+    },
+    {
+      "from": "type:ActivityChartView",
+      "to": "type:AnalyticsService",
+      "kind": "uses"
+    },
+    {
+      "from": "type:ActivityChartView",
+      "to": "type:SessionStore",
+      "kind": "uses"
+    },
+    {
+      "from": "type:SampleApp",
+      "to": "type:ContentView",
+      "kind": "uses"
+    },
+    {
+      "from": "type:SampleApp",
+      "to": "type:SessionStore",
+      "kind": "uses"
+    },
+    {
+      "from": "type:AuthenticationService",
+      "to": "type:UserProfile",
+      "kind": "uses"
+    },
+    {
+      "from": "type:AuthenticationService",
+      "to": "type:ActivityEvent",
+      "kind": "uses"
+    },
+    {
+      "from": "type:AnalyticsService",
+      "to": "type:UserProfile",
+      "kind": "uses"
+    },
+    {
+      "from": "type:AnalyticsService",
+      "to": "type:ActivityEvent",
+      "kind": "uses"
+    },
+    {
+      "from": "type:SessionStore",
+      "to": "type:UserProfile",
+      "kind": "uses"
+    },
+    {
+      "from": "type:SessionStore",
+      "to": "type:AuthenticationService",
+      "kind": "uses"
+    },
+    {
+      "from": "type:SettingsView",
+      "to": "type:SessionStore",
+      "kind": "uses"
+    }
+  ]
+}
