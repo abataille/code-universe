@@ -210,8 +210,10 @@ h1 {
   white-space: pre-wrap;
 }
 
-.source-button {
-  width: 100%;
+.source-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
 }
 
 .source-preview {

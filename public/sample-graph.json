@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "project": {
     "name": "SampleSwiftApp",
-    "scannedAt": "2026-06-27T14:13:14.695Z",
+    "scannedAt": "2026-06-29T09:21:20.080Z",
     "sourceRoot": "examples/SampleSwiftApp"
   },
   "nodes": [
@@ -779,6 +779,16 @@
       "from": "function:AnalyticsService.recentEvents",
       "to": "type:ActivityEvent",
       "kind": "uses"
+    },
+    {
+      "from": "function:SessionStore.refresh",
+      "to": "property:SessionStore.authenticationService",
+      "kind": "uses_member"
+    },
+    {
+      "from": "function:SessionStore.signOut",
+      "to": "property:SessionStore.authenticationService",
+      "kind": "uses_member"
     }
   ]
 }

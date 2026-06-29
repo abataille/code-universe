@@ -13,6 +13,7 @@ export async function scanSwiftFolder(inputRoot) {
   const typeNames = new Set();
   const declarations = [];
   const functions = [];
+  const properties = [];
 
   addNode(nodes, {
     id: "repo:root",
@@ -113,6 +114,11 @@ export async function scanSwiftFolder(inputRoot) {
         });
         addEdge(edges, currentType.id, propertyId, "defines");
         currentType.metrics.properties += 1;
+        properties.push({
+          id: propertyId,
+          parentTypeName: currentType.name,
+          name
+        });
 
         if (line.includes("@State") || line.includes("@Environment") || line.includes("@Observable") || line.includes("@Binding")) {
           addEdge(edges, currentType.id, propertyId, "owns_state");
@@ -148,6 +154,15 @@ export async function scanSwiftFolder(inputRoot) {
       if (typeName === functionNode.parentTypeName) continue;
       if (referencesType(functionNode.source, typeName)) {
         addEdge(edges, functionNode.id, `type:${typeName}`, "uses");
+      }
+    }
+  }
+
+  for (const functionNode of functions) {
+    for (const property of properties) {
+      if (property.parentTypeName !== functionNode.parentTypeName) continue;
+      if (referencesMember(functionNode.source, property.name)) {
+        addEdge(edges, functionNode.id, property.id, "uses_member");
       }
     }
   }
@@ -202,6 +217,10 @@ function referencesType(source, typeName) {
     || source.includes(`: ${typeName}`)
     || source.includes(`[${typeName}]`)
     || source.includes(`<${typeName}>`);
+}
+
+function referencesMember(source, memberName) {
+  return new RegExp(`\\b${memberName}\\b`).test(source);
 }
 
 function extractFunctionBody(lines, startIndex) {

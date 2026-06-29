@@ -41,6 +41,13 @@ createServer(async (request, response) => {
       return;
     }
 
+    if (url.pathname === "/api/open-source" && request.method === "POST") {
+      const body = await readJsonBody(request);
+      const payload = await openSourceInXcode(body);
+      sendJson(response, 200, payload);
+      return;
+    }
+
     await serveStatic(url, response);
   } catch (error) {
     sendJson(response, 500, { error: error.message });
@@ -107,6 +114,36 @@ async function scanResolvedPath(inputPath) {
 }
 
 async function readSourceSnippet(body) {
+  const { resolvedFile, relativeFile, targetLine } = resolveSourceLocation(body);
+  const source = await readFile(resolvedFile, "utf8");
+  const lines = source.split(/\r?\n/);
+  const clampedLine = Math.max(1, Math.min(lines.length, targetLine));
+  const startLine = Math.max(1, clampedLine - 8);
+  const endLine = Math.min(lines.length, clampedLine + 18);
+
+  return {
+    file: relativeFile,
+    line: clampedLine,
+    startLine,
+    endLine,
+    code: lines.slice(startLine - 1, endLine).map((content, index) => ({
+      number: startLine + index,
+      content
+    }))
+  };
+}
+
+async function openSourceInXcode(body) {
+  const { resolvedFile, relativeFile, targetLine } = resolveSourceLocation(body);
+  await execFileAsync("xed", ["--line", String(targetLine), resolvedFile]);
+  return {
+    opened: true,
+    file: relativeFile,
+    line: targetLine
+  };
+}
+
+function resolveSourceLocation(body) {
   const sourceRoot = body?.sourceRoot;
   const file = body?.file;
   const line = Number(body?.line || 1);
@@ -123,21 +160,10 @@ async function readSourceSnippet(body) {
     throw new Error("Source file is outside the scanned project.");
   }
 
-  const source = await readFile(resolvedFile, "utf8");
-  const lines = source.split(/\r?\n/);
-  const targetLine = Math.max(1, Math.min(lines.length, Number.isFinite(line) ? line : 1));
-  const startLine = Math.max(1, targetLine - 8);
-  const endLine = Math.min(lines.length, targetLine + 18);
-
   return {
-    file: relativeFile,
-    line: targetLine,
-    startLine,
-    endLine,
-    code: lines.slice(startLine - 1, endLine).map((content, index) => ({
-      number: startLine + index,
-      content
-    }))
+    resolvedFile,
+    relativeFile,
+    targetLine: Math.max(1, Number.isFinite(line) ? Math.floor(line) : 1)
   };
 }
 
