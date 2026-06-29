@@ -1,6 +1,6 @@
-# Code Universe Prototype
+# Code Universe 
 
-A first prototype for exploring a Swift macOS/iOS codebase as a 3D software universe.
+A first view for exploring a Swift macOS/iOS codebase as a 3D software universe.
 
 ## What It Does
 
