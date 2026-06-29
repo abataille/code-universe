@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "scan:sample": "node scripts/scan-swift.js examples/SampleSwiftApp public/sample-graph.json"
+    "scan:sample": "node scripts/scan-swift.js examples/SampleSwiftApp public/sample-graph.json",
+    "scan:sample:swiftsyntax": "node scripts/scan-swift-syntax.js examples/SampleSwiftApp public/sample-graph.json"
   },
   "dependencies": {
     "three": "^0.185.0"

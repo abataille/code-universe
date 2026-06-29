@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { readFile, stat } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import { extname, dirname, join, normalize, relative, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -9,6 +9,7 @@ const execFileAsync = promisify(execFile);
 const port = Number(process.env.PORT || 4173);
 const host = process.env.HOST || "127.0.0.1";
 const root = join(process.cwd(), "public");
+const scannerMode = process.env.CODE_UNIVERSE_SCANNER || "heuristic";
 
 const contentTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -22,14 +23,15 @@ createServer(async (request, response) => {
 
   try {
     if (url.pathname === "/api/pick-project" && request.method === "POST") {
-      const payload = await pickAndScanProject();
+      const body = await readJsonBody(request);
+      const payload = await pickAndScanProject(body?.scanner);
       sendJson(response, 200, payload);
       return;
     }
 
     if (url.pathname === "/api/scan-path" && request.method === "POST") {
       const body = await readJsonBody(request);
-      const payload = await scanExplicitPath(body?.path);
+      const payload = await scanExplicitPath(body?.path, body?.scanner);
       sendJson(response, 200, payload);
       return;
     }
@@ -79,22 +81,25 @@ async function serveStatic(url, response) {
   }
 }
 
-async function pickAndScanProject() {
+async function pickAndScanProject(scanner) {
   const pickedPath = await showNativeProjectPicker();
-  return scanResolvedPath(pickedPath);
+  return scanResolvedPath(pickedPath, scanner);
 }
 
-async function scanExplicitPath(inputPath) {
+async function scanExplicitPath(inputPath, scanner) {
   if (!inputPath || typeof inputPath !== "string") {
     throw new Error("Missing path.");
   }
-  return scanResolvedPath(inputPath);
+  return scanResolvedPath(inputPath, scanner);
 }
 
-async function scanResolvedPath(inputPath) {
+async function scanResolvedPath(inputPath, scanner) {
   const resolvedInput = resolve(inputPath);
   const projectRoot = await resolveProjectRoot(resolvedInput);
-  const { graph, diagnostics } = await scanSwiftFolder(projectRoot);
+  const resolvedScanner = resolveScannerMode(scanner);
+  const { graph, diagnostics } = resolvedScanner === "swiftsyntax"
+    ? await scanSwiftFolderWithSwiftSyntax(projectRoot)
+    : await scanSwiftFolder(projectRoot);
 
   return {
     graph: {
@@ -107,8 +112,39 @@ async function scanResolvedPath(inputPath) {
     },
     diagnostics: {
       ...diagnostics,
+      scanner: resolvedScanner,
       pickedPath: resolvedInput,
       sourceRoot: projectRoot
+    }
+  };
+}
+
+function resolveScannerMode(scanner) {
+  if (scanner === "swiftsyntax" || scanner === "heuristic") {
+    return scanner;
+  }
+  return scannerMode === "swiftsyntax" ? "swiftsyntax" : "heuristic";
+}
+
+async function scanSwiftFolderWithSwiftSyntax(projectRoot) {
+  const outputDir = resolve(".swift-cache/server");
+  const outputPath = join(outputDir, "graph.json");
+  await mkdir(outputDir, { recursive: true });
+  await execFileAsync("node", ["scripts/scan-swift-syntax.js", projectRoot, outputPath], {
+    env: {
+      ...process.env,
+      CLANG_MODULE_CACHE_PATH: resolve(".swift-cache/clang-module-cache")
+    }
+  });
+
+  const graph = JSON.parse(await readFile(outputPath, "utf8"));
+  return {
+    graph,
+    diagnostics: {
+      swiftFileCount: graph.nodes.filter((node) => node.kind === "file").length,
+      typeCount: graph.nodes.filter((node) => node.id.startsWith("type:")).length,
+      functionCount: graph.nodes.filter((node) => node.kind === "function").length,
+      propertyCount: graph.nodes.filter((node) => node.kind === "property").length
     }
   };
 }

@@ -32,6 +32,24 @@ Inside the app, click `Choose Xcode Project`, then select the `.xcodeproj` in th
 
 Use `Load Sample Universe` any time to return to the bundled demo graph.
 
+## SwiftSyntax Scanner
+
+The current default scanner is still the JavaScript heuristic scanner. An experimental SwiftSyntax scanner is available as the next step:
+
+```sh
+npm run scan:sample:swiftsyntax
+```
+
+The first run resolves the `swift-syntax` Swift package dependency, so it needs network access. After that, it emits the same graph JSON shape as the prototype scanner.
+
+To use SwiftSyntax for scans from the running app:
+
+```sh
+CODE_UNIVERSE_SCANNER=swiftsyntax npm start
+```
+
+Use the parser selector in the Project panel to switch between `Fast heuristic` and `SwiftSyntax accurate` per scan. The environment variable only sets the server default.
+
 ## Prototype Notes
 
 The scanner is intentionally heuristic. It validates the product idea and data flow, but production analysis should move to `SwiftSyntax`, SourceKit-LSP, and Xcode index data.

@@ -21,6 +21,11 @@
           <h2>Project</h2>
           <p class="panel-copy">Choose the folder that contains your `.xcodeproj`. The scan runs locally in the browser.</p>
           <div class="stack">
+            <label class="field-label" for="parserSelect">Parser</label>
+            <select id="parserSelect" class="search">
+              <option value="heuristic">Fast heuristic</option>
+              <option value="swiftsyntax">SwiftSyntax accurate</option>
+            </select>
             <button id="pickProjectButton" class="button button-primary" type="button">Choose Xcode Project</button>
             <button id="loadSampleButton" class="button" type="button">Load Sample Universe</button>
             <p id="pickerStatus" class="status-copy">No project chosen yet.</p>
@@ -55,6 +60,40 @@
             <label class="toggle-row">
               <input id="selectedEdgesOnlyToggle" type="checkbox" />
               <span>Selected object edges only</span>
+            </label>
+            <label class="toggle-row">
+              <input id="performanceModeToggle" type="checkbox" />
+              <span>Performance mode</span>
+            </label>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Edge Filters</h2>
+          <div class="stack">
+            <label class="toggle-row">
+              <input id="edgeUsesToggle" type="checkbox" checked />
+              <span>Uses</span>
+            </label>
+            <label class="toggle-row">
+              <input id="edgeImportsToggle" type="checkbox" checked />
+              <span>Imports</span>
+            </label>
+            <label class="toggle-row">
+              <input id="edgeConformsToggle" type="checkbox" checked />
+              <span>Conforms</span>
+            </label>
+            <label class="toggle-row">
+              <input id="edgeDefinesToggle" type="checkbox" checked />
+              <span>Defines</span>
+            </label>
+            <label class="toggle-row">
+              <input id="edgeStateToggle" type="checkbox" checked />
+              <span>State</span>
+            </label>
+            <label class="toggle-row">
+              <input id="edgeMembersToggle" type="checkbox" checked />
+              <span>Member usage</span>
             </label>
           </div>
         </section>
@@ -99,6 +138,11 @@
           <span><i class="edge-uses"></i>Uses</span>
           <span><i class="edge-imports"></i>Imports</span>
           <span><i class="edge-conforms"></i>Conforms to</span>
+        </div>
+        <div class="shape-legend">
+          <span><i class="shape-cuboid"></i>Cuboid structure</span>
+          <span><i class="shape-cylinder"></i>Cylinder function/protocol</span>
+          <span><i class="shape-sphere"></i>Sphere property/state</span>
         </div>
       </section>
     </main>

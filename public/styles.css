@@ -386,6 +386,49 @@ h1 {
 .edge-state { background: #ff6b78; }
 .edge-conforms { background: rgba(255, 255, 255, 0.8); }
 
+.shape-legend {
+  position: absolute;
+  left: 18px;
+  bottom: 62px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(10, 15, 20, 0.72);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.shape-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.shape-legend i {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+.shape-cuboid {
+  border-radius: 2px;
+  background: var(--file);
+}
+
+.shape-cylinder {
+  border-radius: 999px / 45%;
+  background: #e8eef2;
+}
+
+.shape-sphere {
+  border-radius: 50%;
+  background: var(--muted);
+}
+
 @media (max-width: 860px) {
   body {
     overflow: auto;
@@ -413,6 +456,10 @@ h1 {
   }
 
   .edge-legend {
+    right: 18px;
+  }
+
+  .shape-legend {
     right: 18px;
   }
 }

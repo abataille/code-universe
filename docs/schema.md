@@ -65,3 +65,4 @@ Supported prototype edge kinds:
 - Add source ranges, not only start lines.
 - Add separate `callsite` nodes for precise call graph inspection.
 - Add graph snapshot metadata for comparisons over time.
+- Keep the SwiftSyntax scanner output compatible with this schema while adding richer optional fields.

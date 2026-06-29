@@ -9,10 +9,18 @@ const focusButton = document.querySelector("#focusButton");
 const edgesButton = document.querySelector("#edgesButton");
 const pickProjectButton = document.querySelector("#pickProjectButton");
 const loadSampleButton = document.querySelector("#loadSampleButton");
+const parserSelect = document.querySelector("#parserSelect");
 const showFilesToggle = document.querySelector("#showFilesToggle");
 const showModulesToggle = document.querySelector("#showModulesToggle");
 const showPropertiesToggle = document.querySelector("#showPropertiesToggle");
 const selectedEdgesOnlyToggle = document.querySelector("#selectedEdgesOnlyToggle");
+const performanceModeToggle = document.querySelector("#performanceModeToggle");
+const edgeUsesToggle = document.querySelector("#edgeUsesToggle");
+const edgeImportsToggle = document.querySelector("#edgeImportsToggle");
+const edgeConformsToggle = document.querySelector("#edgeConformsToggle");
+const edgeDefinesToggle = document.querySelector("#edgeDefinesToggle");
+const edgeStateToggle = document.querySelector("#edgeStateToggle");
+const edgeMembersToggle = document.querySelector("#edgeMembersToggle");
 const projectName = document.querySelector("#projectName");
 const projectMeta = document.querySelector("#projectMeta");
 const pickerStatus = document.querySelector("#pickerStatus");
@@ -36,6 +44,8 @@ const colors = {
 const geometryCache = new Map();
 const materialCache = new Map();
 const arrowHeadGeometry = new THREE.ConeGeometry(4.5, 11, 14);
+const lastProjectPathKey = "codeUniverse.lastProjectPath";
+const parserModeKey = "codeUniverse.parserMode";
 
 const importantKinds = new Set(["file", "swiftui_view", "service", "class", "model", "struct", "enum", "protocol"]);
 
@@ -51,12 +61,24 @@ const state = {
   showFiles: true,
   showModules: true,
   showProperties: true,
+  parserMode: "heuristic",
+  performanceMode: false,
+  edgeFilters: {
+    uses: true,
+    imports: true,
+    conforms_to: true,
+    defines: true,
+    owns_state: true,
+    uses_member: true
+  },
   pressedKeys: new Set(),
   pointer: new THREE.Vector2(),
   pointerDown: null,
   dragDistance: 0,
   meshById: new Map(),
-  labelById: new Map()
+  labelById: new Map(),
+  cameraAnimation: null,
+  popupFocusTarget: null
 };
 
 const scene = new THREE.Scene();
@@ -120,10 +142,33 @@ scene.add(grid);
 bootstrap().catch(showStartupError);
 
 async function bootstrap() {
+  initializeParserMode();
   bindEvents();
   resize();
-  await loadSampleUniverse();
+  await loadInitialUniverse();
   renderer.setAnimationLoop(draw);
+}
+
+function initializeParserMode() {
+  const savedMode = localStorage.getItem(parserModeKey);
+  state.parserMode = savedMode === "swiftsyntax" ? "swiftsyntax" : "heuristic";
+  parserSelect.value = state.parserMode;
+}
+
+async function loadInitialUniverse() {
+  const lastProjectPath = localStorage.getItem(lastProjectPathKey);
+  if (!lastProjectPath) {
+    await loadSampleUniverse();
+    return;
+  }
+
+  try {
+    await scanPath(lastProjectPath, "Last Xcode scan");
+  } catch (error) {
+    console.warn(error);
+    await loadSampleUniverse();
+    pickerStatus.textContent = "Last project could not be loaded.";
+  }
 }
 
 async function loadSampleUniverse() {
@@ -140,7 +185,7 @@ async function pickAndScanProject() {
   const response = await fetch("/api/pick-project", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: "{}"
+    body: JSON.stringify({ scanner: state.parserMode })
   });
 
   const payload = await response.json();
@@ -149,7 +194,31 @@ async function pickAndScanProject() {
   }
 
   loadGraph(payload.graph, "Native Xcode scan");
-  pickerStatus.textContent = `Loaded ${payload.graph.project.name}.`;
+  if (payload.diagnostics.sourceRoot) {
+    localStorage.setItem(lastProjectPathKey, payload.diagnostics.sourceRoot);
+  }
+  pickerStatus.textContent = `Loaded ${payload.graph.project.name} with ${describeParser(payload.diagnostics.scanner)}.`;
+  scanSummary.textContent = `${payload.diagnostics.swiftFileCount} Swift files · ${payload.diagnostics.typeCount} types · source root ${payload.diagnostics.sourceRoot}`;
+}
+
+async function scanPath(path, descriptor) {
+  pickerStatus.textContent = "Reloading last project...";
+  scanSummary.textContent = path;
+
+  const response = await fetch("/api/scan-path", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, scanner: state.parserMode })
+  });
+
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload.error || "Project scan failed.");
+  }
+
+  loadGraph(payload.graph, descriptor);
+  localStorage.setItem(lastProjectPathKey, payload.diagnostics.sourceRoot);
+  pickerStatus.textContent = `Loaded ${payload.graph.project.name} with ${describeParser(payload.diagnostics.scanner)}.`;
   scanSummary.textContent = `${payload.diagnostics.swiftFileCount} Swift files · ${payload.diagnostics.typeCount} types · source root ${payload.diagnostics.sourceRoot}`;
 }
 
@@ -283,6 +352,7 @@ function buildScene() {
 
   for (const edge of state.graph.edges) {
     if (!["uses", "imports", "conforms_to"].includes(edge.kind)) continue;
+    if (!isEdgeKindEnabled(edge.kind)) continue;
     const from = state.layout.find((node) => node.id === edge.from);
     const to = state.layout.find((node) => node.id === edge.to);
     if (!from || !to) continue;
@@ -307,6 +377,7 @@ function buildScene() {
 }
 
 function draw() {
+  applyCameraAnimation();
   if (!state.graph || state.layout.length === 0) {
     applyKeyboardNavigation();
     controls.update();
@@ -349,6 +420,7 @@ function applyFilters() {
     const edge = edgeObject.userData.edge;
     const matchesSelection = !state.selectedEdgesOnly || edge.from === state.selectedId || edge.to === state.selectedId;
     const visible = (!state.focusMode || neighborhood.has(edge.from) || neighborhood.has(edge.to))
+      && isEdgeKindEnabled(edge.kind)
       && matchesSelection
       && root.children.some((object) => object.userData.nodeId === edge.from && object.visible)
       && root.children.some((object) => object.userData.nodeId === edge.to && object.visible);
@@ -425,6 +497,22 @@ function bindEvents() {
     syncButtons();
   });
 
+  parserSelect.addEventListener("change", async () => {
+    state.parserMode = parserSelect.value === "swiftsyntax" ? "swiftsyntax" : "heuristic";
+    localStorage.setItem(parserModeKey, state.parserMode);
+    const lastProjectPath = localStorage.getItem(lastProjectPathKey);
+    if (!lastProjectPath || state.graph?.project?.sourceRoot === "examples/SampleSwiftApp") {
+      pickerStatus.textContent = `Parser set to ${describeParser(state.parserMode)}.`;
+      return;
+    }
+
+    try {
+      await scanPath(lastProjectPath, `Reloaded with ${describeParser(state.parserMode)}`);
+    } catch (error) {
+      showStartupError(error);
+    }
+  });
+
   showFilesToggle.addEventListener("change", () => {
     state.showFiles = showFilesToggle.checked;
   });
@@ -441,6 +529,20 @@ function bindEvents() {
   selectedEdgesOnlyToggle.addEventListener("change", () => {
     state.selectedEdgesOnly = selectedEdgesOnlyToggle.checked;
   });
+
+  performanceModeToggle.addEventListener("change", () => {
+    state.performanceMode = performanceModeToggle.checked;
+    renderer.setPixelRatio(state.performanceMode ? 1 : Math.min(window.devicePixelRatio, 2));
+    buildScene();
+    buildMemberPopup();
+  });
+
+  bindEdgeFilter(edgeUsesToggle, "uses");
+  bindEdgeFilter(edgeImportsToggle, "imports");
+  bindEdgeFilter(edgeConformsToggle, "conforms_to");
+  bindEdgeFilter(edgeDefinesToggle, "defines");
+  bindEdgeFilter(edgeStateToggle, "owns_state");
+  bindEdgeFilter(edgeMembersToggle, "uses_member");
 
   selectedDetails.addEventListener("click", async (event) => {
     const sourceButton = event.target.closest("[data-source-node-id]");
@@ -476,6 +578,18 @@ function bindEvents() {
   });
 }
 
+function bindEdgeFilter(toggle, kind) {
+  toggle.addEventListener("change", () => {
+    state.edgeFilters[kind] = toggle.checked;
+    buildScene();
+    buildMemberPopup();
+  });
+}
+
+function describeParser(mode) {
+  return mode === "swiftsyntax" ? "SwiftSyntax" : "fast heuristic";
+}
+
 function resize() {
   const rect = canvas.getBoundingClientRect();
   renderer.setSize(rect.width, rect.height, false);
@@ -505,6 +619,7 @@ function applyKeyboardNavigation() {
 
   const distance = camera.position.distanceTo(controls.target);
   const speed = Math.max(4, distance * 0.018);
+  state.cameraAnimation = null;
   movement.normalize().multiplyScalar(speed);
   camera.position.add(movement);
   controls.target.add(movement);
@@ -518,11 +633,46 @@ function resetMapView() {
   state.pressedKeys.clear();
   searchInput.value = "";
   popupRoot.clear();
+  state.cameraAnimation = null;
+  state.popupFocusTarget = null;
   camera.position.copy(defaultCameraPosition);
   controls.target.copy(defaultControlsTarget);
   controls.update();
   selectedDetails.innerHTML = `<p>Select a tower, building, or road to inspect the code graph.</p>`;
   syncButtons();
+}
+
+function focusCameraOnNode(node) {
+  const layoutNode = state.layout.find((candidate) => candidate.id === node?.id);
+  if (!layoutNode || layoutNode.kind === "repository") return;
+  const focusTarget = state.popupFocusTarget?.nodeId === node.id ? state.popupFocusTarget : null;
+  const target = focusTarget
+    ? focusTarget.target.clone()
+    : new THREE.Vector3(layoutNode.x, (layoutNode.y || 0) + layoutNode.height * 0.8, layoutNode.z);
+  const currentDirection = new THREE.Vector3().subVectors(camera.position, controls.target).normalize();
+  if (currentDirection.lengthSq() === 0) currentDirection.set(0.35, 0.55, 0.75).normalize();
+  const distance = focusTarget
+    ? focusTarget.distance
+    : clamp(Math.max(layoutNode.width, layoutNode.height, layoutNode.depth) * 8, 260, 760);
+  const position = target.clone().add(currentDirection.multiplyScalar(distance));
+  state.cameraAnimation = {
+    startPosition: camera.position.clone(),
+    startTarget: controls.target.clone(),
+    endPosition: position,
+    endTarget: target,
+    startedAt: performance.now(),
+    duration: 650
+  };
+}
+
+function applyCameraAnimation() {
+  if (!state.cameraAnimation) return;
+  const elapsed = performance.now() - state.cameraAnimation.startedAt;
+  const progress = clamp(elapsed / state.cameraAnimation.duration, 0, 1);
+  const eased = 1 - Math.pow(1 - progress, 3);
+  camera.position.lerpVectors(state.cameraAnimation.startPosition, state.cameraAnimation.endPosition, eased);
+  controls.target.lerpVectors(state.cameraAnimation.startTarget, state.cameraAnimation.endTarget, eased);
+  if (progress >= 1) state.cameraAnimation = null;
 }
 
 function selectNode(id) {
@@ -532,6 +682,7 @@ function selectNode(id) {
   state.openShellId = resolveOpenShellId(id);
   selectedDetails.innerHTML = renderDetails(node);
   buildMemberPopup();
+  focusCameraOnNode(node);
 }
 
 function renderDetails(node) {
@@ -856,6 +1007,7 @@ function nodeIdFromObject(object) {
 function shouldShowLabel(nodeId) {
   const node = state.graph?.nodes.find((candidate) => candidate.id === nodeId);
   if (!node) return false;
+  if (state.performanceMode && node.id !== state.selectedId && node.id !== state.openShellId) return false;
   if (importantKinds.has(node.kind)) return true;
   if (node.kind === "function" || node.kind === "property") return false;
   return false;
@@ -883,6 +1035,7 @@ function resetDynamicLayout() {
 
 function buildMemberPopup() {
   popupRoot.clear();
+  state.popupFocusTarget = null;
 
   const memberIds = getInspectableMemberIds(state.openShellId);
   if (memberIds.length === 0) return;
@@ -905,6 +1058,11 @@ function buildMemberPopup() {
   const frameWidth = Math.max(210, columns * 74);
   const frameHeight = 170;
   const frameDepth = Math.max(160, rows * 72);
+  state.popupFocusTarget = {
+    nodeId: shellNode.id,
+    target: new THREE.Vector3(origin.x, origin.y + 10, origin.z),
+    distance: clamp(Math.max(frameWidth, frameHeight, frameDepth) * 2.2, 360, 920)
+  };
   const frame = new THREE.Mesh(
     new THREE.BoxGeometry(frameWidth, frameHeight, frameDepth),
     getBasicMaterial("popup-frame", { color: 0x63d2ff, wireframe: true, transparent: true, opacity: 0.38 })
@@ -1042,6 +1200,7 @@ function getPopupEdges(parentId, memberIds, dependencyIds) {
   const edges = [];
 
   state.graph.edges.forEach((edge) => {
+    if (!isEdgeKindEnabled(edge.kind)) return;
     if (edge.kind === "defines" && edge.from === parentId && visibleIds.has(edge.to)) edges.push(edge);
     if (edge.kind === "owns_state" && edge.from === parentId && visibleIds.has(edge.to)) edges.push(edge);
     if (["uses", "conforms_to"].includes(edge.kind) && edge.from === parentId && visibleIds.has(edge.to)) edges.push(edge);
@@ -1049,6 +1208,10 @@ function getPopupEdges(parentId, memberIds, dependencyIds) {
   });
 
   return edges;
+}
+
+function isEdgeKindEnabled(kind) {
+  return state.edgeFilters[kind] !== false;
 }
 
 function drawPopupEdge(edge, positions) {
