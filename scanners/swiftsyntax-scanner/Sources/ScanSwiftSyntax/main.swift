@@ -316,6 +316,19 @@ for functionSource in functionSources {
   }
 }
 
+for edge in edges where edge.kind == "conforms_to" && nodes[edge.to] == nil {
+  let protocolName = String(edge.to.dropFirst("type:".count))
+  nodes[edge.to] = GraphNode(
+    id: edge.to,
+    kind: "protocol",
+    declarationKind: "protocol",
+    name: protocolName,
+    file: "",
+    line: 1,
+    metrics: [:]
+  )
+}
+
 let graph = Graph(
   schemaVersion: 1,
   project: Project(
@@ -380,11 +393,18 @@ func inheritanceConformances(_ inheritance: String) -> [String] {
 }
 
 func referencesType(source: String, typeName: String) -> Bool {
-  source.contains("\(typeName)(")
-    || source.contains("\(typeName).")
-    || source.contains(": \(typeName)")
-    || source.contains("[\(typeName)]")
-    || source.contains("<\(typeName)>")
+  let escapedTypeName = NSRegularExpression.escapedPattern(for: typeName)
+  let patterns = [
+    "\\b\(escapedTypeName)\\s*\\(",
+    "\\b\(escapedTypeName)\\s*\\.",
+    "\\b\(escapedTypeName)\\s*<",
+    "[:<,\\[]\\s*(?:some\\s+|any\\s+)?\(escapedTypeName)\\b",
+    "\\b\(escapedTypeName)\\b"
+  ]
+
+  return patterns.contains { pattern in
+    source.range(of: pattern, options: .regularExpression) != nil
+  }
 }
 
 func referencesMember(source: String, memberName: String) -> Bool {

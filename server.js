@@ -9,7 +9,7 @@ const execFileAsync = promisify(execFile);
 const port = Number(process.env.PORT || 4173);
 const host = process.env.HOST || "127.0.0.1";
 const root = join(process.cwd(), "public");
-const scannerMode = process.env.CODE_UNIVERSE_SCANNER || "heuristic";
+const scannerMode = process.env.CODE_UNIVERSE_SCANNER || "merged";
 
 const contentTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -32,6 +32,13 @@ createServer(async (request, response) => {
     if (url.pathname === "/api/scan-path" && request.method === "POST") {
       const body = await readJsonBody(request);
       const payload = await scanExplicitPath(body?.path, body?.scanner);
+      sendJson(response, 200, payload);
+      return;
+    }
+
+    if (url.pathname === "/api/compare-parsers" && request.method === "POST") {
+      const body = await readJsonBody(request);
+      const payload = await compareParsers(body?.path);
       sendJson(response, 200, payload);
       return;
     }
@@ -97,9 +104,11 @@ async function scanResolvedPath(inputPath, scanner) {
   const resolvedInput = resolve(inputPath);
   const projectRoot = await resolveProjectRoot(resolvedInput);
   const resolvedScanner = resolveScannerMode(scanner);
-  const { graph, diagnostics } = resolvedScanner === "swiftsyntax"
-    ? await scanSwiftFolderWithSwiftSyntax(projectRoot)
-    : await scanSwiftFolder(projectRoot);
+  const { graph, diagnostics } = resolvedScanner === "merged"
+    ? await scanSwiftFolderMerged(projectRoot)
+    : resolvedScanner === "swiftsyntax"
+      ? await scanSwiftFolderWithSwiftSyntax(projectRoot)
+      : await scanSwiftFolder(projectRoot);
 
   return {
     graph: {
@@ -119,11 +128,205 @@ async function scanResolvedPath(inputPath, scanner) {
   };
 }
 
+async function compareParsers(inputPath) {
+  if (!inputPath || typeof inputPath !== "string") {
+    throw new Error("Missing path.");
+  }
+
+  const resolvedInput = resolve(inputPath);
+  const projectRoot = await resolveProjectRoot(resolvedInput);
+  const [heuristicScan, swiftSyntaxScan] = await Promise.all([
+    scanSwiftFolder(projectRoot),
+    scanSwiftFolderWithSwiftSyntax(projectRoot)
+  ]);
+
+  return {
+    project: {
+      name: heuristicScan.graph.project.name,
+      pickedPath: resolvedInput,
+      sourceRoot: projectRoot
+    },
+    comparedAt: new Date().toISOString(),
+    heuristic: summarizeGraph(heuristicScan.graph),
+    swiftsyntax: summarizeGraph(swiftSyntaxScan.graph),
+    nodes: compareNodes(heuristicScan.graph.nodes, swiftSyntaxScan.graph.nodes),
+    edges: compareEdges(heuristicScan.graph.edges, swiftSyntaxScan.graph.edges)
+  };
+}
+
 function resolveScannerMode(scanner) {
-  if (scanner === "swiftsyntax" || scanner === "heuristic") {
+  if (scanner === "merged" || scanner === "swiftsyntax" || scanner === "heuristic") {
     return scanner;
   }
-  return scannerMode === "swiftsyntax" ? "swiftsyntax" : "heuristic";
+  if (scannerMode === "merged" || scannerMode === "swiftsyntax" || scannerMode === "heuristic") {
+    return scannerMode;
+  }
+  return "merged";
+}
+
+async function scanSwiftFolderMerged(projectRoot) {
+  const [heuristicScan, swiftSyntaxScan] = await Promise.all([
+    scanSwiftFolder(projectRoot),
+    scanSwiftFolderWithSwiftSyntax(projectRoot)
+  ]);
+  const graph = mergeGraphs(swiftSyntaxScan.graph, heuristicScan.graph);
+
+  return {
+    graph,
+    diagnostics: {
+      swiftFileCount: graph.nodes.filter((node) => node.kind === "file").length,
+      typeCount: graph.nodes.filter((node) => node.id.startsWith("type:")).length,
+      functionCount: graph.nodes.filter((node) => node.kind === "function").length,
+      propertyCount: graph.nodes.filter((node) => node.kind === "property").length,
+      mergedBaseNodes: swiftSyntaxScan.graph.nodes.length,
+      heuristicHintNodes: graph.nodes.filter((node) => node.source === "heuristic").length,
+      heuristicHintEdges: graph.edges.filter((edge) => edge.source === "heuristic").length
+    }
+  };
+}
+
+function mergeGraphs(swiftSyntaxGraph, heuristicGraph) {
+  const nodes = new Map(swiftSyntaxGraph.nodes.map((node) => [node.id, {
+    ...node,
+    source: "swiftsyntax",
+    confidence: 0.95
+  }]));
+  const edges = new Map(swiftSyntaxGraph.edges.map((edge) => [edgeComparisonKey(edge), {
+    ...edge,
+    source: "swiftsyntax",
+    confidence: 0.9
+  }]));
+
+  for (const node of heuristicGraph.nodes) {
+    if (!nodes.has(node.id)) {
+      nodes.set(node.id, {
+        ...node,
+        source: "heuristic",
+        confidence: 0.55,
+        inferred: true
+      });
+    }
+  }
+
+  for (const edge of heuristicGraph.edges) {
+    const key = edgeComparisonKey(edge);
+    if (edges.has(key)) continue;
+    if (!nodes.has(edge.from) || !nodes.has(edge.to)) continue;
+    edges.set(key, {
+      ...edge,
+      source: "heuristic",
+      confidence: 0.55,
+      inferred: true
+    });
+  }
+
+  return {
+    ...swiftSyntaxGraph,
+    project: {
+      ...swiftSyntaxGraph.project,
+      scanner: "merged"
+    },
+    nodes: [...nodes.values()].sort((left, right) => left.id.localeCompare(right.id)),
+    edges: [...edges.values()].sort((left, right) => edgeComparisonKey(left).localeCompare(edgeComparisonKey(right)))
+  };
+}
+
+function summarizeGraph(graph) {
+  return {
+    nodeCount: graph.nodes.length,
+    edgeCount: graph.edges.length,
+    byKind: countBy(graph.nodes, (node) => node.kind),
+    edgesByKind: countBy(graph.edges, (edge) => edge.kind)
+  };
+}
+
+function compareNodes(heuristicNodes, swiftSyntaxNodes) {
+  const heuristicMap = mapByKey(heuristicNodes, nodeComparisonKey);
+  const swiftSyntaxMap = mapByKey(swiftSyntaxNodes, nodeComparisonKey);
+  const shared = [];
+  const onlyHeuristic = [];
+  const onlySwiftSyntax = [];
+
+  for (const [key, node] of heuristicMap) {
+    if (swiftSyntaxMap.has(key)) {
+      shared.push(toComparableNode(node));
+    } else {
+      onlyHeuristic.push(toComparableNode(node));
+    }
+  }
+
+  for (const [key, node] of swiftSyntaxMap) {
+    if (!heuristicMap.has(key)) {
+      onlySwiftSyntax.push(toComparableNode(node));
+    }
+  }
+
+  return {
+    shared: shared.length,
+    onlyHeuristic: sortComparableNodes(onlyHeuristic),
+    onlySwiftSyntax: sortComparableNodes(onlySwiftSyntax),
+    onlyHeuristicByKind: countBy(onlyHeuristic, (node) => node.kind),
+    onlySwiftSyntaxByKind: countBy(onlySwiftSyntax, (node) => node.kind)
+  };
+}
+
+function compareEdges(heuristicEdges, swiftSyntaxEdges) {
+  const heuristicKeys = new Set(heuristicEdges.map(edgeComparisonKey));
+  const swiftSyntaxKeys = new Set(swiftSyntaxEdges.map(edgeComparisonKey));
+  return {
+    shared: [...heuristicKeys].filter((key) => swiftSyntaxKeys.has(key)).length,
+    onlyHeuristic: [...heuristicKeys].filter((key) => !swiftSyntaxKeys.has(key)).length,
+    onlySwiftSyntax: [...swiftSyntaxKeys].filter((key) => !heuristicKeys.has(key)).length
+  };
+}
+
+function nodeComparisonKey(node) {
+  if (node.kind === "repository") return `${node.kind}:${node.name}`;
+  if (node.kind === "file") return `${node.kind}:${node.file}`;
+  if (node.kind === "module") return `${node.kind}:${node.name}`;
+  return `${node.kind}:${node.file}:${node.name}`;
+}
+
+function edgeComparisonKey(edge) {
+  return `${edge.kind}:${edge.from}->${edge.to}`;
+}
+
+function mapByKey(items, keyForItem) {
+  const map = new Map();
+  for (const item of items) {
+    const key = keyForItem(item);
+    if (!map.has(key)) map.set(key, item);
+  }
+  return map;
+}
+
+function toComparableNode(node) {
+  return {
+    id: node.id,
+    kind: node.kind,
+    declarationKind: node.declarationKind || null,
+    name: node.name,
+    file: node.file,
+    line: node.line,
+    metrics: node.metrics || {}
+  };
+}
+
+function sortComparableNodes(nodes) {
+  return nodes.sort((left, right) =>
+    left.kind.localeCompare(right.kind)
+    || left.file.localeCompare(right.file)
+    || left.line - right.line
+    || left.name.localeCompare(right.name)
+  );
+}
+
+function countBy(items, keyForItem) {
+  return items.reduce((counts, item) => {
+    const key = keyForItem(item);
+    counts[key] = (counts[key] || 0) + 1;
+    return counts;
+  }, {});
 }
 
 async function scanSwiftFolderWithSwiftSyntax(projectRoot) {

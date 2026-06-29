@@ -8,6 +8,7 @@ const viewAllButton = document.querySelector("#viewAllButton");
 const focusButton = document.querySelector("#focusButton");
 const edgesButton = document.querySelector("#edgesButton");
 const pickProjectButton = document.querySelector("#pickProjectButton");
+const compareParsersButton = document.querySelector("#compareParsersButton");
 const loadSampleButton = document.querySelector("#loadSampleButton");
 const parserSelect = document.querySelector("#parserSelect");
 const showFilesToggle = document.querySelector("#showFilesToggle");
@@ -21,10 +22,12 @@ const edgeConformsToggle = document.querySelector("#edgeConformsToggle");
 const edgeDefinesToggle = document.querySelector("#edgeDefinesToggle");
 const edgeStateToggle = document.querySelector("#edgeStateToggle");
 const edgeMembersToggle = document.querySelector("#edgeMembersToggle");
+const edgeInferredToggle = document.querySelector("#edgeInferredToggle");
 const projectName = document.querySelector("#projectName");
 const projectMeta = document.querySelector("#projectMeta");
 const pickerStatus = document.querySelector("#pickerStatus");
 const scanSummary = document.querySelector("#scanSummary");
+const parserDiff = document.querySelector("#parserDiff");
 
 const colors = {
   repository: 0x63d2ff,
@@ -61,7 +64,8 @@ const state = {
   showFiles: true,
   showModules: true,
   showProperties: true,
-  parserMode: "heuristic",
+  parserMode: "merged",
+  parserComparison: null,
   performanceMode: false,
   edgeFilters: {
     uses: true,
@@ -69,7 +73,8 @@ const state = {
     conforms_to: true,
     defines: true,
     owns_state: true,
-    uses_member: true
+    uses_member: true,
+    inferred: true
   },
   pressedKeys: new Set(),
   pointer: new THREE.Vector2(),
@@ -151,7 +156,7 @@ async function bootstrap() {
 
 function initializeParserMode() {
   const savedMode = localStorage.getItem(parserModeKey);
-  state.parserMode = savedMode === "swiftsyntax" ? "swiftsyntax" : "heuristic";
+  state.parserMode = ["merged", "swiftsyntax", "heuristic"].includes(savedMode) ? savedMode : "merged";
   parserSelect.value = state.parserMode;
 }
 
@@ -198,7 +203,7 @@ async function pickAndScanProject() {
     localStorage.setItem(lastProjectPathKey, payload.diagnostics.sourceRoot);
   }
   pickerStatus.textContent = `Loaded ${payload.graph.project.name} with ${describeParser(payload.diagnostics.scanner)}.`;
-  scanSummary.textContent = `${payload.diagnostics.swiftFileCount} Swift files · ${payload.diagnostics.typeCount} types · source root ${payload.diagnostics.sourceRoot}`;
+  scanSummary.textContent = formatScanSummary(payload.diagnostics);
 }
 
 async function scanPath(path, descriptor) {
@@ -219,7 +224,30 @@ async function scanPath(path, descriptor) {
   loadGraph(payload.graph, descriptor);
   localStorage.setItem(lastProjectPathKey, payload.diagnostics.sourceRoot);
   pickerStatus.textContent = `Loaded ${payload.graph.project.name} with ${describeParser(payload.diagnostics.scanner)}.`;
-  scanSummary.textContent = `${payload.diagnostics.swiftFileCount} Swift files · ${payload.diagnostics.typeCount} types · source root ${payload.diagnostics.sourceRoot}`;
+  scanSummary.textContent = formatScanSummary(payload.diagnostics);
+}
+
+async function compareParsers() {
+  const sourceRoot = state.graph?.project?.sourceRoot || localStorage.getItem(lastProjectPathKey);
+  if (!sourceRoot || sourceRoot === "examples/SampleSwiftApp") {
+    parserDiff.innerHTML = "<p>Choose a real Xcode project first, then compare parsers.</p>";
+    return;
+  }
+
+  parserDiff.innerHTML = "<p>Running fast heuristic and SwiftSyntax scans...</p>";
+  const response = await fetch("/api/compare-parsers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path: sourceRoot })
+  });
+
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload.error || "Parser comparison failed.");
+  }
+
+  state.parserComparison = payload;
+  parserDiff.innerHTML = renderParserComparison(payload);
 }
 
 function loadGraph(graph, descriptor) {
@@ -352,7 +380,7 @@ function buildScene() {
 
   for (const edge of state.graph.edges) {
     if (!["uses", "imports", "conforms_to"].includes(edge.kind)) continue;
-    if (!isEdgeKindEnabled(edge.kind)) continue;
+    if (!isEdgeVisible(edge)) continue;
     const from = state.layout.find((node) => node.id === edge.from);
     const to = state.layout.find((node) => node.id === edge.to);
     if (!from || !to) continue;
@@ -364,9 +392,15 @@ function buildScene() {
     const color = edgeColor(edge.kind);
     const points = curve.getPoints(24);
     const geometry = new THREE.BufferGeometry().setFromPoints(points);
-    const material = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.58 });
+    const material = new THREE.LineBasicMaterial({
+      color,
+      transparent: true,
+      opacity: edgeOpacity(edge),
+      linewidth: edge.inferred ? 1 : 1.5
+    });
     const line = new THREE.Line(geometry, material);
     const arrow = makeArrowHead(points, color);
+    arrow.material.opacity = edgeOpacity(edge);
     const group = new THREE.Group();
     group.add(line, arrow);
     group.userData.edge = edge;
@@ -420,12 +454,12 @@ function applyFilters() {
     const edge = edgeObject.userData.edge;
     const matchesSelection = !state.selectedEdgesOnly || edge.from === state.selectedId || edge.to === state.selectedId;
     const visible = (!state.focusMode || neighborhood.has(edge.from) || neighborhood.has(edge.to))
-      && isEdgeKindEnabled(edge.kind)
+      && isEdgeVisible(edge)
       && matchesSelection
       && root.children.some((object) => object.userData.nodeId === edge.from && object.visible)
       && root.children.some((object) => object.userData.nodeId === edge.to && object.visible);
     edgeObject.visible = visible;
-    const opacity = edge.from === state.selectedId || edge.to === state.selectedId ? 1 : 0.58;
+    const opacity = edge.from === state.selectedId || edge.to === state.selectedId ? 1 : edgeOpacity(edge);
     edgeObject.userData.lineMaterial.opacity = opacity;
     edgeObject.userData.arrowMaterial.opacity = opacity;
   });
@@ -498,7 +532,7 @@ function bindEvents() {
   });
 
   parserSelect.addEventListener("change", async () => {
-    state.parserMode = parserSelect.value === "swiftsyntax" ? "swiftsyntax" : "heuristic";
+    state.parserMode = ["merged", "swiftsyntax", "heuristic"].includes(parserSelect.value) ? parserSelect.value : "merged";
     localStorage.setItem(parserModeKey, state.parserMode);
     const lastProjectPath = localStorage.getItem(lastProjectPathKey);
     if (!lastProjectPath || state.graph?.project?.sourceRoot === "examples/SampleSwiftApp") {
@@ -510,6 +544,14 @@ function bindEvents() {
       await scanPath(lastProjectPath, `Reloaded with ${describeParser(state.parserMode)}`);
     } catch (error) {
       showStartupError(error);
+    }
+  });
+
+  compareParsersButton.addEventListener("click", async () => {
+    try {
+      await compareParsers();
+    } catch (error) {
+      parserDiff.innerHTML = `<p><strong>Compare error</strong><br><code>${escapeHtml(error.message)}</code></p>`;
     }
   });
 
@@ -543,6 +585,7 @@ function bindEvents() {
   bindEdgeFilter(edgeDefinesToggle, "defines");
   bindEdgeFilter(edgeStateToggle, "owns_state");
   bindEdgeFilter(edgeMembersToggle, "uses_member");
+  bindEdgeFilter(edgeInferredToggle, "inferred");
 
   selectedDetails.addEventListener("click", async (event) => {
     const sourceButton = event.target.closest("[data-source-node-id]");
@@ -559,6 +602,15 @@ function bindEvents() {
       if (!node) return;
       await openSourceInXcode(node);
     }
+  });
+
+  parserDiff.addEventListener("click", async (event) => {
+    const sourceButton = event.target.closest("[data-diff-source]");
+    if (!sourceButton || !state.parserComparison) return;
+    const node = findComparisonNode(sourceButton.dataset.diffSource);
+    const preview = sourceButton.closest(".diff-item")?.querySelector(".diff-source-preview");
+    if (!node || !preview) return;
+    await showDiffSourcePreview(node, preview);
   });
 
   pickProjectButton.addEventListener("click", async () => {
@@ -587,7 +639,105 @@ function bindEdgeFilter(toggle, kind) {
 }
 
 function describeParser(mode) {
+  if (mode === "merged") return "merged layered";
   return mode === "swiftsyntax" ? "SwiftSyntax" : "fast heuristic";
+}
+
+function formatScanSummary(diagnostics) {
+  const parts = [
+    `${diagnostics.swiftFileCount} Swift files`,
+    `${diagnostics.typeCount} types`
+  ];
+  if (diagnostics.heuristicHintEdges !== undefined) {
+    parts.push(`${diagnostics.heuristicHintEdges} inferred hint edges`);
+  }
+  parts.push(`source root ${diagnostics.sourceRoot}`);
+  return parts.join(" · ");
+}
+
+function renderParserComparison(comparison) {
+  const heuristicOnly = comparison.nodes.onlyHeuristic;
+  const swiftSyntaxOnly = comparison.nodes.onlySwiftSyntax;
+  const nodeDelta = comparison.heuristic.nodeCount - comparison.swiftsyntax.nodeCount;
+
+  return `
+    <div class="diff-summary">
+      <div><strong>${comparison.heuristic.nodeCount}</strong><span>Fast heuristic nodes</span></div>
+      <div><strong>${comparison.swiftsyntax.nodeCount}</strong><span>SwiftSyntax nodes</span></div>
+      <div><strong>${formatSigned(nodeDelta)}</strong><span>Node delta</span></div>
+    </div>
+    <p>${comparison.nodes.shared} shared symbols · ${comparison.edges.shared} shared edges.</p>
+    ${renderKindDelta("Fast heuristic only", heuristicOnly, comparison.nodes.onlyHeuristicByKind, "heuristic")}
+    ${renderKindDelta("SwiftSyntax only", swiftSyntaxOnly, comparison.nodes.onlySwiftSyntaxByKind, "swiftsyntax")}
+  `;
+}
+
+function renderKindDelta(title, nodes, byKind, parserName) {
+  const kindSummary = Object.entries(byKind)
+    .sort(([leftKind], [rightKind]) => leftKind.localeCompare(rightKind))
+    .map(([kind, count]) => `<span><code>${escapeHtml(kind)}</code> ${count}</span>`)
+    .join("");
+  const items = nodes.slice(0, 40).map((node) => renderDiffNode(node, parserName)).join("");
+  const truncated = nodes.length > 40 ? `<p class="status-copy">Showing first 40 of ${nodes.length} parser-only symbols.</p>` : "";
+
+  return `
+    <details class="diff-group" open>
+      <summary>${escapeHtml(title)} <span>${nodes.length}</span></summary>
+      <div class="diff-kinds">${kindSummary || "<span>No parser-only symbols.</span>"}</div>
+      <div class="diff-list">${items || "<p>No differences in this direction.</p>"}</div>
+      ${truncated}
+    </details>
+  `;
+}
+
+function renderDiffNode(node, parserName) {
+  const sourceKey = `${parserName}:${node.id}`;
+  const location = node.file ? `${node.file}:${node.line}` : "no source location";
+  return `
+    <article class="diff-item">
+      <div>
+        <strong>${escapeHtml(node.name)}</strong>
+        <span><code>${escapeHtml(node.kind)}</code> ${escapeHtml(location)}</span>
+      </div>
+      ${node.file ? `<button class="button button-compact" type="button" data-diff-source="${escapeHtml(sourceKey)}">Source</button>` : ""}
+      <div class="diff-source-preview source-preview"></div>
+    </article>
+  `;
+}
+
+function findComparisonNode(sourceKey) {
+  const [parserName, ...idParts] = sourceKey.split(":");
+  const id = idParts.join(":");
+  const nodes = parserName === "swiftsyntax"
+    ? state.parserComparison.nodes.onlySwiftSyntax
+    : state.parserComparison.nodes.onlyHeuristic;
+  return nodes.find((node) => node.id === id);
+}
+
+async function showDiffSourcePreview(node, preview) {
+  preview.innerHTML = "<p>Loading source...</p>";
+  try {
+    const response = await fetch("/api/source", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sourceRoot: state.parserComparison.project.sourceRoot,
+        file: node.file,
+        line: node.line
+      })
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Source preview failed.");
+    }
+    preview.innerHTML = renderSourceSnippet(payload);
+  } catch (error) {
+    preview.innerHTML = `<p><strong>Source error</strong><br><code>${escapeHtml(error.message)}</code></p>`;
+  }
+}
+
+function formatSigned(value) {
+  return value > 0 ? `+${value}` : String(value);
 }
 
 function resize() {
@@ -703,6 +853,7 @@ function renderDetails(node) {
 
   return `
     <p><strong>${escapeHtml(node.name)}</strong><br>${escapeHtml(node.kind)} · ${escapeHtml(kindMeaning)} ${node.file ? `in <code>${escapeHtml(node.file)}:${node.line}</code>` : ""}</p>
+    ${node.source ? `<p>Source: <code>${escapeHtml(node.source)}</code>${node.inferred ? " · inferred hint" : ""}${node.confidence ? ` · confidence <code>${escapeHtml(node.confidence)}</code>` : ""}</p>` : ""}
     ${node.file ? `<div class="source-actions"><button class="button" type="button" data-source-node-id="${escapeHtml(node.id)}">Source</button><button class="button" type="button" data-xcode-node-id="${escapeHtml(node.id)}">Open in Xcode</button></div><div id="sourcePreview" class="source-preview"></div>` : ""}
     <p>Metrics: <code>${escapeHtml(JSON.stringify(node.metrics || {}))}</code></p>
     <p><strong>Members</strong><br>${memberIds.length > 0 ? `${memberIds.length} functions / properties shown in the 3D inspector popup.` : "No inspectable members."}</p>
@@ -804,6 +955,11 @@ function isNodeVisible(node, neighborhood) {
   if (!state.showFiles && node.kind === "file") return false;
   if (!state.showModules && node.kind === "module") return false;
   return !state.focusMode || neighborhood.has(node.id) || node.kind === "repository";
+}
+
+function isEdgeVisible(edge) {
+  if (edge.inferred && !state.edgeFilters.inferred) return false;
+  return isEdgeKindEnabled(edge.kind);
 }
 
 function updateStats(graph, descriptor) {
@@ -933,6 +1089,10 @@ function edgeColor(kind) {
   if (kind === "imports") return 0x63d2ff;
   if (kind === "owns_state") return 0xff6b78;
   return 0xffffff;
+}
+
+function edgeOpacity(edge) {
+  return edge.inferred ? 0.28 : 0.58;
 }
 
 function makeArrowHead(points, color) {
@@ -1200,7 +1360,7 @@ function getPopupEdges(parentId, memberIds, dependencyIds) {
   const edges = [];
 
   state.graph.edges.forEach((edge) => {
-    if (!isEdgeKindEnabled(edge.kind)) return;
+    if (!isEdgeVisible(edge)) return;
     if (edge.kind === "defines" && edge.from === parentId && visibleIds.has(edge.to)) edges.push(edge);
     if (edge.kind === "owns_state" && edge.from === parentId && visibleIds.has(edge.to)) edges.push(edge);
     if (["uses", "conforms_to"].includes(edge.kind) && edge.from === parentId && visibleIds.has(edge.to)) edges.push(edge);

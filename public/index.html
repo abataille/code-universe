@@ -23,13 +23,22 @@
           <div class="stack">
             <label class="field-label" for="parserSelect">Parser</label>
             <select id="parserSelect" class="search">
+              <option value="merged">Merged layered</option>
               <option value="heuristic">Fast heuristic</option>
               <option value="swiftsyntax">SwiftSyntax accurate</option>
             </select>
             <button id="pickProjectButton" class="button button-primary" type="button">Choose Xcode Project</button>
+            <button id="compareParsersButton" class="button" type="button">Compare Parsers</button>
             <button id="loadSampleButton" class="button" type="button">Load Sample Universe</button>
             <p id="pickerStatus" class="status-copy">No project chosen yet.</p>
             <p id="scanSummary" class="status-copy">The sample universe is available immediately.</p>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Parser Diff</h2>
+          <div id="parserDiff" class="parser-diff">
+            <p>Run both parsers on the current project to see which symbols only one parser finds.</p>
           </div>
         </section>
 
@@ -95,6 +104,10 @@
               <input id="edgeMembersToggle" type="checkbox" checked />
               <span>Member usage</span>
             </label>
+            <label class="toggle-row">
+              <input id="edgeInferredToggle" type="checkbox" checked />
+              <span>Inferred hints</span>
+            </label>
           </div>
         </section>
 
@@ -138,6 +151,7 @@
           <span><i class="edge-uses"></i>Uses</span>
           <span><i class="edge-imports"></i>Imports</span>
           <span><i class="edge-conforms"></i>Conforms to</span>
+          <span><i class="edge-inferred"></i>Inferred hint</span>
         </div>
         <div class="shape-legend">
           <span><i class="shape-cuboid"></i>Cuboid structure</span>

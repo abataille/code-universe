@@ -28,7 +28,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -147,6 +148,12 @@ h1 {
   background: linear-gradient(180deg, #226179, #164250);
 }
 
+.button-compact {
+  height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 .panel {
   padding: 16px;
   border: 1px solid var(--line);
@@ -251,6 +258,99 @@ h1 {
 .source-preview .is-target {
   color: var(--text);
   background: rgba(99, 210, 255, 0.12);
+}
+
+.parser-diff {
+  display: grid;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.diff-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.diff-summary div {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(8, 16, 23, 0.72);
+}
+
+.diff-summary strong,
+.diff-summary span {
+  display: block;
+}
+
+.diff-summary strong {
+  color: var(--text);
+  font-size: 18px;
+}
+
+.diff-summary span {
+  margin-top: 3px;
+  font-size: 11px;
+}
+
+.diff-group {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.diff-group summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.diff-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.diff-kinds span {
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.diff-list {
+  display: grid;
+  gap: 8px;
+}
+
+.diff-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: start;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(8, 16, 23, 0.62);
+}
+
+.diff-item strong,
+.diff-item span {
+  display: block;
+}
+
+.diff-item strong {
+  color: var(--text);
+}
+
+.diff-source-preview {
+  grid-column: 1 / -1;
 }
 
 .stats {
@@ -385,6 +485,11 @@ h1 {
 .edge-imports { background: #63d2ff; }
 .edge-state { background: #ff6b78; }
 .edge-conforms { background: rgba(255, 255, 255, 0.8); }
+.edge-inferred {
+  background: rgba(255, 255, 255, 0.38);
+  box-shadow: 7px 0 0 rgba(255, 255, 255, 0.18);
+  width: 10px;
+}
 
 .shape-legend {
   position: absolute;

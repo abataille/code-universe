@@ -43,7 +43,10 @@ Edges describe relationships between nodes.
 {
   "from": "type:ContentView",
   "to": "type:DashboardView",
-  "kind": "uses"
+  "kind": "uses",
+  "source": "heuristic",
+  "confidence": 0.55,
+  "inferred": true
 }
 ```
 
@@ -57,6 +60,12 @@ Supported prototype edge kinds:
 - `conforms_to`
 - `owns_state`
 - `depends_on`
+
+Merged parser output may add optional provenance fields:
+
+- `source`: `swiftsyntax` or `heuristic`
+- `confidence`: approximate scanner confidence
+- `inferred`: `true` for heuristic-only hints layered onto SwiftSyntax output
 
 ## Next Schema Steps
 
