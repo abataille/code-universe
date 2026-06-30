@@ -36,9 +36,30 @@ Inside the app, click `Choose Xcode Project`, then select the `.xcodeproj` in th
 
 Use `Load Sample Universe` any time to return to the bundled demo graph.
 
+## Map Controls
+
+- `Density`: switch edges between `Clean`, `Normal`, and `Everything`.
+- `Share PNG`: exports the current 3D map as a screenshot. Browsers with Web Share support open the native share sheet; others download a PNG.
+- `Search`: type a symbol and press `Enter`; matching objects are highlighted.
+
+## Mac App Shell
+
+A small SwiftPM macOS WebKit shell is available in `mac/CodeUniverseMac`.
+
+```sh
+npm run mac:build
+npm run mac:run
+```
+
+The shell opens `http://127.0.0.1:4174` and tries to start the local Node server from the repo root. You can override the URL:
+
+```sh
+CODE_UNIVERSE_URL=http://127.0.0.1:4174 npm run mac:run
+```
+
 ## Parser Modes
 
-The default app view is `Xcode Index layered`: SwiftSyntax supplies the structural nodes, the JavaScript heuristic scanner overlays lower-confidence inferred hints, and Xcode DerivedData index records add higher-confidence semantic links when the project has been built or indexed by Xcode.
+The default app view is `Merged layered`: SwiftSyntax supplies the structural nodes, and the JavaScript heuristic scanner overlays lower-confidence inferred hints. `Xcode Index layered` can add higher-confidence semantic links when the project has been built or indexed by Xcode.
 
 Available modes:
 

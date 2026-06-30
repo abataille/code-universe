@@ -7,6 +7,7 @@ const selectedDetails = document.querySelector("#selectedDetails");
 const viewAllButton = document.querySelector("#viewAllButton");
 const focusButton = document.querySelector("#focusButton");
 const edgesButton = document.querySelector("#edgesButton");
+const shareMapButton = document.querySelector("#shareMapButton");
 const pickProjectButton = document.querySelector("#pickProjectButton");
 const compareParsersButton = document.querySelector("#compareParsersButton");
 const loadSampleButton = document.querySelector("#loadSampleButton");
@@ -24,6 +25,7 @@ const edgeStateToggle = document.querySelector("#edgeStateToggle");
 const edgeMembersToggle = document.querySelector("#edgeMembersToggle");
 const edgeInferredToggle = document.querySelector("#edgeInferredToggle");
 const edgeIndexToggle = document.querySelector("#edgeIndexToggle");
+const edgeDensitySelect = document.querySelector("#edgeDensitySelect");
 const projectName = document.querySelector("#projectName");
 const projectMeta = document.querySelector("#projectMeta");
 const pickerStatus = document.querySelector("#pickerStatus");
@@ -60,6 +62,7 @@ const state = {
   openShellId: null,
   query: "",
   showEdges: true,
+  edgeDensity: "normal",
   selectedEdgesOnly: false,
   focusMode: false,
   showFiles: true,
@@ -98,7 +101,7 @@ const defaultControlsTarget = new THREE.Vector3(0, 120, 0);
 camera.position.copy(defaultCameraPosition);
 camera.lookAt(0, 0, 0);
 
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -158,7 +161,7 @@ async function bootstrap() {
 
 function initializeParserMode() {
   const savedMode = localStorage.getItem(parserModeKey);
-  state.parserMode = ["xcode-index", "merged", "swiftsyntax", "heuristic"].includes(savedMode) ? savedMode : "xcode-index";
+  state.parserMode = ["xcode-index", "merged", "swiftsyntax", "heuristic"].includes(savedMode) ? savedMode : "merged";
   parserSelect.value = state.parserMode;
 }
 
@@ -283,7 +286,7 @@ function buildLayout(graph) {
   files.forEach((file, index) => {
     layout.push({
       ...file,
-      ...gridPosition(index, Math.max(1, files.length), 190, 165, 0, 20),
+      ...gridPosition(index, Math.max(1, files.length), 260, 225, 0, 20),
       y: 0,
       ...dimensionsForNode(file)
     });
@@ -294,12 +297,12 @@ function buildLayout(graph) {
     const parent = layout.find((item) => item.id === fileEdge?.from);
     const siblings = types.filter((candidate) => graph.edges.some((edge) => edge.kind === "defines" && edge.from === fileEdge?.from && edge.to === candidate.id));
     const siblingIndex = siblings.findIndex((candidate) => candidate.id === type.id);
-    const offset = gridPosition(siblingIndex, Math.max(1, siblings.length), 66, 58);
+    const offset = childPositionOnFilePlane(siblingIndex, Math.max(1, siblings.length), parent);
     layout.push({
       ...type,
       x: (parent?.x || 0) + offset.x,
       z: (parent?.z || 0) + offset.z,
-      y: (parent?.y || 0) + (parent?.height || 0) + 44,
+      y: (parent?.y || 0) + (parent?.height || 0) + 22,
       ...dimensionsForNode(type)
     });
   });
@@ -338,11 +341,12 @@ function buildScene() {
   state.labelById.clear();
 
   for (const node of state.layout) {
+    if (node.kind === "repository") continue;
     const material = new THREE.MeshStandardMaterial({
-      color: colors[node.kind] || 0x95a4ad,
+      color: colorForNode(node),
       roughness: 0.64,
       metalness: node.kind === "swiftui_view" ? 0.24 : 0.12,
-      emissive: colors[node.kind] || 0x000000,
+      emissive: emissiveForNode(node),
       emissiveIntensity: node.kind === "swiftui_view" ? 0.08 : 0.02
     });
     const geometry = makeNodeGeometry(node.kind, node.width, node.height, node.depth);
@@ -376,7 +380,7 @@ function buildScene() {
 
     if (node.kind === "file") {
       const fileMarker = makeFileMarker(node);
-      fileMarker.position.set(node.x, (node.y || 0) + node.height + 2.2, node.z);
+      fileMarker.position.set(node.x, (node.y || 0) + node.height + 0.6, node.z);
       fileMarker.userData = {
         nodeId: node.id,
         role: "file-marker",
@@ -389,10 +393,10 @@ function buildScene() {
       const label = makeLabel(
         node.name,
         node.kind === "swiftui_view" ? "#dfffee" : node.kind === "function" || node.kind === "property" ? "#f2f6f8" : "#d9e7ee",
-        node.kind === "function" || node.kind === "property" ? 66 : 92,
-        node.kind === "function" || node.kind === "property" ? 14 : 18
+        node.kind === "function" || node.kind === "property" ? 48 : 68,
+        node.kind === "function" || node.kind === "property" ? 10 : 13
       );
-      label.position.set(node.x, (node.y || 0) + node.height + 24, node.z);
+      label.position.set(node.x, (node.y || 0) + node.height + 18, node.z);
       label.userData = {
         nodeId: node.id,
         defaultPosition: label.position.clone()
@@ -404,7 +408,7 @@ function buildScene() {
   }
 
   for (const edge of state.graph.edges) {
-    if (!["uses", "imports", "conforms_to"].includes(edge.kind)) continue;
+    if (!isMainEdgeRenderable(edge)) continue;
     if (!isEdgeVisible(edge)) continue;
     const from = state.layout.find((node) => node.id === edge.from);
     const to = state.layout.find((node) => node.id === edge.to);
@@ -441,6 +445,16 @@ function applyKindRotation(mesh, kind) {
   } else if (kind === "protocol") {
     mesh.rotation.y = Math.PI / 4;
   }
+}
+
+function colorForNode(node) {
+  if (node.kind === "file") return 0x252b31;
+  return colors[node.kind] || 0x95a4ad;
+}
+
+function emissiveForNode(node) {
+  if (node.kind === "file") return 0x05080a;
+  return colors[node.kind] || 0x000000;
 }
 
 function draw() {
@@ -575,8 +589,12 @@ function bindEvents() {
     syncButtons();
   });
 
+  shareMapButton.addEventListener("click", async () => {
+    await shareMapScreenshot();
+  });
+
   parserSelect.addEventListener("change", async () => {
-    state.parserMode = ["xcode-index", "merged", "swiftsyntax", "heuristic"].includes(parserSelect.value) ? parserSelect.value : "xcode-index";
+    state.parserMode = ["xcode-index", "merged", "swiftsyntax", "heuristic"].includes(parserSelect.value) ? parserSelect.value : "merged";
     localStorage.setItem(parserModeKey, state.parserMode);
     const lastProjectPath = localStorage.getItem(lastProjectPathKey);
     if (!lastProjectPath || state.graph?.project?.sourceRoot === "examples/SampleSwiftApp") {
@@ -619,6 +637,12 @@ function bindEvents() {
   performanceModeToggle.addEventListener("change", () => {
     state.performanceMode = performanceModeToggle.checked;
     renderer.setPixelRatio(state.performanceMode ? 1 : Math.min(window.devicePixelRatio, 2));
+    buildScene();
+    buildMemberPopup();
+  });
+
+  edgeDensitySelect.addEventListener("change", () => {
+    state.edgeDensity = edgeDensitySelect.value;
     buildScene();
     buildMemberPopup();
   });
@@ -696,6 +720,9 @@ function formatScanSummary(diagnostics) {
   ];
   if (diagnostics.heuristicHintEdges !== undefined) {
     parts.push(`${diagnostics.heuristicHintEdges} inferred hint edges`);
+  }
+  if (diagnostics.swiftSyntaxMessage) {
+    parts.push(diagnostics.swiftSyntaxMessage);
   }
   if (diagnostics.xcodeIndexEdges !== undefined) {
     parts.push(`${diagnostics.xcodeIndexEdges} Xcode index edges`);
@@ -1047,9 +1074,30 @@ function isNodeVisible(node, neighborhood) {
 }
 
 function isEdgeVisible(edge) {
+  if (!passesEdgeDensity(edge)) return false;
   if (edge.inferred && !state.edgeFilters.inferred) return false;
   if (edge.source === "xcode-index" && !state.edgeFilters["xcode-index"]) return false;
   return isEdgeKindEnabled(edge.kind);
+}
+
+function isMainEdgeRenderable(edge) {
+  if (state.edgeDensity === "everything") {
+    return ["uses", "imports", "conforms_to", "defines", "owns_state", "uses_member"].includes(edge.kind);
+  }
+  return ["uses", "imports", "conforms_to"].includes(edge.kind);
+}
+
+function passesEdgeDensity(edge) {
+  if (state.edgeDensity === "everything") return true;
+  if (state.edgeDensity === "clean") {
+    if (edge.source === "xcode-index") return true;
+    if (edge.kind === "conforms_to" && !edge.inferred) return true;
+    if (state.selectedId && (edge.from === state.selectedId || edge.to === state.selectedId)) {
+      return !edge.inferred && edge.kind !== "imports";
+    }
+    return false;
+  }
+  return !edge.inferred || state.edgeFilters.inferred;
 }
 
 function updateStats(graph, descriptor) {
@@ -1067,12 +1115,46 @@ function syncButtons() {
   viewAllButton.classList.toggle("is-active", !state.focusMode);
 }
 
+async function shareMapScreenshot() {
+  draw();
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png", 0.95));
+  if (!blob) {
+    pickerStatus.textContent = "Screenshot could not be created.";
+    return;
+  }
+
+  const fileName = `${safeFileName(state.graph?.project?.name || "code-universe")}-map.png`;
+  const file = new File([blob], fileName, { type: "image/png" });
+
+  if (navigator.canShare?.({ files: [file] })) {
+    await navigator.share({
+      title: "Code Universe map",
+      text: state.graph?.project?.name ? `Code Universe map for ${state.graph.project.name}` : "Code Universe map",
+      files: [file]
+    });
+    pickerStatus.textContent = "Map screenshot shared.";
+    return;
+  }
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
+  pickerStatus.textContent = `Downloaded ${fileName}.`;
+}
+
+function safeFileName(value) {
+  return String(value).replace(/[^a-z0-9._-]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() || "code-universe";
+}
+
 function makeLabel(text, color, width = 92, height = 18) {
   const labelCanvas = document.createElement("canvas");
   const labelContext = labelCanvas.getContext("2d");
   labelCanvas.width = 320;
   labelCanvas.height = 64;
-  labelContext.font = "700 26px Inter, system-ui, sans-serif";
+  labelContext.font = "700 23px -apple-system, BlinkMacSystemFont, system-ui, sans-serif";
   labelContext.textAlign = "center";
   labelContext.textBaseline = "middle";
   labelContext.fillStyle = "rgba(5, 10, 14, 0.68)";
@@ -1090,12 +1172,12 @@ function makeFileMarker(node) {
   const marker = new THREE.Group();
   const width = clamp((node.width || 54) * 0.28, 14, 26);
   const depth = clamp((node.depth || 40) * 0.38, 12, 22);
-  const thickness = 1.6;
+  const thickness = 0.9;
   const baseMaterial = getStandardMaterial("file-marker-base", {
-    color: 0xd8edf7,
+    color: 0x9fb0ba,
     roughness: 0.5,
     metalness: 0.04,
-    emissive: 0x7fa3b8,
+    emissive: 0x1f3038,
     emissiveIntensity: 0.08
   });
   const foldMaterial = getStandardMaterial("file-marker-fold", {
@@ -1156,7 +1238,31 @@ function gridPosition(index, total, spacingX, spacingZ, originX = 0, originZ = 0
   };
 }
 
+function childPositionOnFilePlane(index, total, fileNode) {
+  if (!fileNode) return gridPosition(index, total, 66, 58);
+  const columns = Math.max(1, Math.ceil(Math.sqrt(total)));
+  const rows = Math.max(1, Math.ceil(total / columns));
+  const column = index % columns;
+  const row = Math.floor(index / columns);
+  const usableWidth = Math.max(42, fileNode.width * 0.72);
+  const usableDepth = Math.max(36, fileNode.depth * 0.68);
+  return {
+    x: (column - (columns - 1) / 2) * (usableWidth / columns),
+    z: (row - (rows - 1) / 2) * (usableDepth / rows)
+  };
+}
+
 function dimensionsForNode(node) {
+  if (node.kind === "file") {
+    const lines = node.metrics?.lines || 30;
+    const areaScale = clamp(Math.sqrt(lines / 60), 0.85, 3.2);
+    return {
+      width: Math.round(86 * areaScale),
+      depth: Math.round(58 * areaScale),
+      height: 3
+    };
+  }
+
   const complexity = complexityForNode(node);
   const volumeScale = Math.cbrt(complexity);
   const base = baseDimensionsForKind(node.kind);
@@ -1168,7 +1274,7 @@ function dimensionsForNode(node) {
 }
 
 function complexityForNode(node) {
-  if (node.kind === "file") return clamp((node.metrics?.lines || 30) / 35, 0.8, 5.2);
+  if (node.kind === "file") return 1;
   if (node.kind === "function") return 1.2;
   if (node.kind === "property") return 0.75;
   if (node.kind === "module") return 0.85;
@@ -1182,7 +1288,7 @@ function complexityForNode(node) {
 
 function baseDimensionsForKind(kind) {
   if (kind === "repository") return { width: 72, depth: 72, height: 34 };
-  if (kind === "file") return { width: 72, depth: 48, height: 14 };
+  if (kind === "file") return { width: 72, depth: 48, height: 3 };
   if (kind === "swiftui_view") return { width: 34, depth: 34, height: 34 };
   if (kind === "service" || kind === "class") return { width: 32, depth: 32, height: 52 };
   if (kind === "function") return { width: 10, depth: 10, height: 10 };
@@ -1425,8 +1531,8 @@ function buildMemberPopup() {
   floor.position.set(origin.x, origin.y - frameHeight / 2 + 4, origin.z);
   popupRoot.add(floor);
 
-  const title = makeLabel(`Inspecting ${shellNode.name}`, "#dff6ff", 150, 18);
-  title.position.set(origin.x, origin.y + frameHeight / 2 + 24, origin.z);
+  const title = makeLabel(`Inspecting ${shellNode.name}`, "#dff6ff", 104, 12);
+  title.position.set(origin.x, origin.y + frameHeight / 2 + 18, origin.z);
   popupRoot.add(title);
 
   const positions = new Map();
@@ -1445,8 +1551,8 @@ function buildMemberPopup() {
   parentMesh.userData.nodeId = shellNode.id;
   popupRoot.add(parentMesh);
   positions.set(shellNode.id, parentPosition.clone());
-  const parentLabel = makeLabel(shellNode.name, "#e6fbff", 88, 14);
-  parentLabel.position.set(parentPosition.x, parentPosition.y + Math.max(18, shellNode.height * 0.2 + 18), parentPosition.z);
+  const parentLabel = makeLabel(shellNode.name, "#e6fbff", 66, 10);
+  parentLabel.position.set(parentPosition.x, parentPosition.y + Math.max(14, shellNode.height * 0.2 + 14), parentPosition.z);
   popupRoot.add(parentLabel);
 
   placePopupMembers(visibleMemberIds, origin, columns, frameHeight, positions);
@@ -1484,8 +1590,8 @@ function placePopupMembers(memberIds, origin, columns, frameHeight, positions) {
     popupRoot.add(mesh);
     positions.set(memberId, position.clone());
 
-    const label = makeLabel(node.name, node.kind === "property" ? "#d7e3ea" : "#ffffff", 74, 14);
-    label.position.set(position.x, position.y + boxHeight / 2 + 18, position.z);
+    const label = makeLabel(node.name, node.kind === "property" ? "#d7e3ea" : "#ffffff", 56, 10);
+    label.position.set(position.x, position.y + boxHeight / 2 + 13, position.z);
     popupRoot.add(label);
   });
 }
@@ -1516,8 +1622,8 @@ function placePopupDependencies(dependencyIds, origin, columns, frameHeight, pos
     popupRoot.add(mesh);
     positions.set(dependencyId, position.clone());
 
-    const label = makeLabel(node.name, "#dbeaff", 76, 14);
-    label.position.set(position.x, position.y + boxHeight / 2 + 18, position.z);
+    const label = makeLabel(node.name, "#dbeaff", 58, 10);
+    label.position.set(position.x, position.y + boxHeight / 2 + 13, position.z);
     popupRoot.add(label);
   });
 }

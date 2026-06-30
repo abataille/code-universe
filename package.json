@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node server.js",
     "scan:sample": "node scripts/scan-swift.js examples/SampleSwiftApp public/sample-graph.json",
-    "scan:sample:swiftsyntax": "node scripts/scan-swift-syntax.js examples/SampleSwiftApp public/sample-graph.json"
+    "scan:sample:swiftsyntax": "node scripts/scan-swift-syntax.js examples/SampleSwiftApp public/sample-graph.json",
+    "mac:build": "swift build --package-path mac/CodeUniverseMac",
+    "mac:run": "swift run --package-path mac/CodeUniverseMac CodeUniverseMac"
   },
   "dependencies": {
     "three": "^0.185.0"

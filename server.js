@@ -10,7 +10,8 @@ const execFileAsync = promisify(execFile);
 const port = Number(process.env.PORT || 4173);
 const host = process.env.HOST || "127.0.0.1";
 const root = join(process.cwd(), "public");
-const scannerMode = process.env.CODE_UNIVERSE_SCANNER || "xcode-index";
+const scannerMode = process.env.CODE_UNIVERSE_SCANNER || "merged";
+const swiftSyntaxTimeoutMs = Number(process.env.CODE_UNIVERSE_SWIFTSYNTAX_TIMEOUT_MS || 12000);
 
 const contentTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -191,7 +192,19 @@ function resolveScannerMode(scanner) {
 
 async function scanSwiftFolderWithXcodeIndex(projectRoot) {
   const mergedScan = await scanSwiftFolderMerged(projectRoot);
-  const indexScan = await enrichGraphWithXcodeIndex(mergedScan.graph, projectRoot);
+  const indexScan = await withTimeout(
+    enrichGraphWithXcodeIndex(mergedScan.graph, projectRoot),
+    5000,
+    {
+      graph: mergedScan.graph,
+      diagnostics: {
+        xcodeIndexAvailable: false,
+        xcodeIndexMessage: "Xcode index scan timed out. Showing merged graph without index links.",
+        xcodeIndexEdges: 0,
+        xcodeIndexRecords: 0
+      }
+    }
+  );
   return {
     graph: indexScan.graph,
     diagnostics: {
@@ -205,16 +218,32 @@ async function scanSwiftFolderWithXcodeIndex(projectRoot) {
   };
 }
 
-async function scanSwiftFolderMerged(projectRoot) {
-  const [heuristicScan, swiftSyntaxScan] = await Promise.all([
-    scanSwiftFolder(projectRoot),
-    scanSwiftFolderWithSwiftSyntax(projectRoot)
+function withTimeout(promise, timeoutMs, fallback) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(fallback), timeoutMs))
   ]);
+}
+
+async function scanSwiftFolderMerged(projectRoot) {
+  const heuristicScan = await scanSwiftFolder(projectRoot);
+  const swiftSyntaxScan = await scanSwiftFolderWithSwiftSyntax(projectRoot).catch((error) => ({
+    graph: heuristicScan.graph,
+    diagnostics: {
+      swiftSyntaxAvailable: false,
+      swiftSyntaxMessage: `SwiftSyntax scan skipped: ${error.message}`,
+      swiftFileCount: heuristicScan.diagnostics.swiftFileCount,
+      typeCount: heuristicScan.diagnostics.typeCount,
+      functionCount: heuristicScan.diagnostics.functionCount,
+      propertyCount: heuristicScan.diagnostics.propertyCount
+    }
+  }));
   const graph = mergeGraphs(swiftSyntaxScan.graph, heuristicScan.graph);
 
   return {
     graph,
     diagnostics: {
+      ...swiftSyntaxScan.diagnostics,
       swiftFileCount: graph.nodes.filter((node) => node.kind === "file").length,
       typeCount: graph.nodes.filter((node) => node.id.startsWith("type:")).length,
       functionCount: graph.nodes.filter((node) => node.kind === "function").length,
@@ -410,10 +439,17 @@ async function scanSwiftFolderWithSwiftSyntax(projectRoot) {
   const outputPath = join(outputDir, "graph.json");
   await mkdir(outputDir, { recursive: true });
   await execFileAsync("node", ["scripts/scan-swift-syntax.js", projectRoot, outputPath], {
+    timeout: swiftSyntaxTimeoutMs,
+    maxBuffer: 1024 * 1024 * 12,
     env: {
       ...process.env,
       CLANG_MODULE_CACHE_PATH: resolve(".swift-cache/clang-module-cache")
     }
+  }).catch((error) => {
+    if (error.killed || error.signal === "SIGTERM" || error.code === "ETIMEDOUT") {
+      throw new Error(`timed out after ${Math.round(swiftSyntaxTimeoutMs / 1000)}s`);
+    }
+    throw error;
   });
 
   const graph = JSON.parse(await readFile(outputPath, "utf8"));

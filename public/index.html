@@ -50,6 +50,7 @@
           <button id="viewAllButton" class="button is-active" type="button">Map</button>
           <button id="focusButton" class="button" type="button">Focus</button>
           <button id="edgesButton" class="button" type="button">Edges</button>
+          <button id="shareMapButton" class="button" type="button">Share PNG</button>
         </div>
 
         <section class="panel">
@@ -81,6 +82,12 @@
         <section class="panel">
           <h2>Edge Filters</h2>
           <div class="stack">
+            <label class="field-label" for="edgeDensitySelect">Density</label>
+            <select id="edgeDensitySelect" class="search selection-field">
+              <option value="clean">Clean</option>
+              <option value="normal" selected>Normal</option>
+              <option value="everything">Everything</option>
+            </select>
             <label class="toggle-row">
               <input id="edgeUsesToggle" type="checkbox" checked />
               <span>Uses</span>
@@ -160,7 +167,7 @@
           <span><i class="edge-index"></i>Xcode index</span>
         </div>
         <div class="shape-legend">
-          <span><i class="shape-file"></i>File slab</span>
+          <span><i class="shape-file"></i>File plane</span>
           <span><i class="shape-view"></i>View panel</span>
           <span><i class="shape-service"></i>Service tower</span>
           <span><i class="shape-module"></i>Module ring</span>

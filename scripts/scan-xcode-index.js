@@ -4,6 +4,11 @@ import { homedir } from "node:os";
 
 const printablePattern = /[\x20-\x7E]{4,}/g;
 const swiftRecordPattern = /[A-Za-z0-9_+.-]+\.swift-[A-Z0-9]+/g;
+const maxStoresToScore = 10;
+const maxUnitsPerStoreScore = 220;
+const maxUnitsForProject = 900;
+const maxRecordsToIndex = 1200;
+const maxRecordBytes = 1_500_000;
 
 export async function enrichGraphWithXcodeIndex(graph, projectRoot) {
   const resolvedRoot = resolve(projectRoot);
@@ -43,11 +48,18 @@ async function findCandidateDataStores(projectRoot) {
   const derivedDataRoot = process.env.CODE_UNIVERSE_DERIVED_DATA
     ? resolve(process.env.CODE_UNIVERSE_DERIVED_DATA)
     : join(homedir(), "Library/Developer/Xcode/DerivedData");
-  const entries = await safeReaddir(derivedDataRoot, { withFileTypes: true });
+  const projectName = basename(projectRoot).toLowerCase();
+  const entries = (await safeReaddir(derivedDataRoot, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .sort((left, right) => {
+      const leftMatch = left.name.toLowerCase().includes(projectName) ? 0 : 1;
+      const rightMatch = right.name.toLowerCase().includes(projectName) ? 0 : 1;
+      return leftMatch - rightMatch || left.name.localeCompare(right.name);
+    })
+    .slice(0, maxStoresToScore);
   const candidates = [];
 
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
     const dataStore = join(derivedDataRoot, entry.name, "Index.noindex/DataStore");
     if (!await exists(dataStore)) continue;
     const score = await scoreDataStore(dataStore, projectRoot);
@@ -67,7 +79,7 @@ async function scoreDataStore(dataStore, projectRoot) {
   const unitFiles = await listFiles(unitsDir, 1);
   let score = 0;
 
-  for (const unitFile of unitFiles.slice(0, 800)) {
+  for (const unitFile of unitFiles.slice(0, maxUnitsPerStoreScore)) {
     const text = await readPrintableText(unitFile);
     if (text.includes(projectRoot)) score += 8;
     if (text.includes(projectName)) score += 1;
@@ -84,7 +96,7 @@ async function recordsForProject(dataStore, recordFiles, projectRoot, graph) {
     .filter((node) => node.kind === "file" && node.file)
     .map((node) => [node.file, node]));
   const fileBasenames = new Map([...graphFiles.keys()].map((file) => [basename(file), file]));
-  const unitFiles = await listFiles(unitsDir, 1);
+  const unitFiles = (await listFiles(unitsDir, 1)).slice(0, maxUnitsForProject);
   const records = new Map();
 
   for (const unitFile of unitFiles) {
@@ -100,7 +112,9 @@ async function recordsForProject(dataStore, recordFiles, projectRoot, graph) {
       const graphFile = resolveGraphFileForRecord(recordName, graphFiles, fileBasenames);
       if (!graphFile) continue;
       records.set(recordPath, { path: recordPath, file: graphFile });
+      if (records.size >= maxRecordsToIndex) break;
     }
+    if (records.size >= maxRecordsToIndex) break;
   }
 
   const indexedRecords = [];
@@ -193,7 +207,7 @@ async function indexRecordFiles(dataStore) {
   const records = new Map();
   if (!recordsDir) return records;
 
-  for (const file of await listFiles(recordsDir, 2)) {
+  for (const file of (await listFiles(recordsDir, 2)).slice(0, maxRecordsToIndex * 4)) {
     records.set(basename(file), file);
   }
 
@@ -232,7 +246,7 @@ async function listFiles(root, maxDepth = Infinity, depth = 0) {
 }
 
 async function readPrintableText(file) {
-  const buffer = await readFile(file);
+  const buffer = (await readFile(file)).subarray(0, maxRecordBytes);
   return (buffer.toString("utf8").match(printablePattern) || []).join("\n");
 }
 

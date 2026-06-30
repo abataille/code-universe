@@ -37,6 +37,13 @@ const child = spawn(
   }
 );
 
+["SIGTERM", "SIGINT"].forEach((signal) => {
+  process.on(signal, () => {
+    child.kill(signal);
+    setTimeout(() => process.exit(1), 250).unref();
+  });
+});
+
 child.on("exit", async (code, signal) => {
   if (signal) {
     console.error(`SwiftSyntax scanner stopped by signal ${signal}`);
