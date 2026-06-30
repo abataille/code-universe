@@ -36,9 +36,16 @@ Inside the app, click `Choose Xcode Project`, then select the `.xcodeproj` in th
 
 Use `Load Sample Universe` any time to return to the bundled demo graph.
 
-## SwiftSyntax Scanner
+## Parser Modes
 
-The default app view is `Merged layered`: SwiftSyntax supplies the structural nodes, then the JavaScript heuristic scanner overlays lower-confidence inferred hints.
+The default app view is `Xcode Index layered`: SwiftSyntax supplies the structural nodes, the JavaScript heuristic scanner overlays lower-confidence inferred hints, and Xcode DerivedData index records add higher-confidence semantic links when the project has been built or indexed by Xcode.
+
+Available modes:
+
+- `Xcode Index layered`: best local view when Xcode has indexed the project.
+- `Merged layered`: SwiftSyntax structure plus heuristic dependency hints.
+- `SwiftSyntax accurate`: syntax-accurate declarations and structural relationships.
+- `Fast heuristic`: rough fallback scanner for quick sketches and debugging.
 
 ```sh
 npm run scan:sample:swiftsyntax
@@ -52,7 +59,9 @@ To force one scanner mode from the running app:
 CODE_UNIVERSE_SCANNER=swiftsyntax npm start
 ```
 
-Supported values are `merged`, `swiftsyntax`, and `heuristic`. Use the parser selector in the Project panel to switch between `Merged layered`, `Fast heuristic`, and `SwiftSyntax accurate` per scan. The environment variable only sets the server default.
+Supported values are `xcode-index`, `merged`, `swiftsyntax`, and `heuristic`. Use the parser selector in the Project panel to switch modes per scan. The environment variable only sets the server default.
+
+The Xcode index mode reads local `~/Library/Developer/Xcode/DerivedData/*/Index.noindex/DataStore` records. If no matching index store exists, build the app in Xcode once and scan again.
 
 ## Prototype Notes
 

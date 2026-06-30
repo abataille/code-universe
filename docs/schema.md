@@ -63,9 +63,10 @@ Supported prototype edge kinds:
 
 Merged parser output may add optional provenance fields:
 
-- `source`: `swiftsyntax` or `heuristic`
+- `source`: `swiftsyntax`, `heuristic`, or `xcode-index`
 - `confidence`: approximate scanner confidence
 - `inferred`: `true` for heuristic-only hints layered onto SwiftSyntax output
+- `indexResolved`: `true` for links added from Xcode index records
 
 ## Next Schema Steps
 

@@ -23,6 +23,7 @@ const edgeDefinesToggle = document.querySelector("#edgeDefinesToggle");
 const edgeStateToggle = document.querySelector("#edgeStateToggle");
 const edgeMembersToggle = document.querySelector("#edgeMembersToggle");
 const edgeInferredToggle = document.querySelector("#edgeInferredToggle");
+const edgeIndexToggle = document.querySelector("#edgeIndexToggle");
 const projectName = document.querySelector("#projectName");
 const projectMeta = document.querySelector("#projectMeta");
 const pickerStatus = document.querySelector("#pickerStatus");
@@ -74,7 +75,8 @@ const state = {
     defines: true,
     owns_state: true,
     uses_member: true,
-    inferred: true
+    inferred: true,
+    "xcode-index": true
   },
   pressedKeys: new Set(),
   pointer: new THREE.Vector2(),
@@ -156,7 +158,7 @@ async function bootstrap() {
 
 function initializeParserMode() {
   const savedMode = localStorage.getItem(parserModeKey);
-  state.parserMode = ["merged", "swiftsyntax", "heuristic"].includes(savedMode) ? savedMode : "merged";
+  state.parserMode = ["xcode-index", "merged", "swiftsyntax", "heuristic"].includes(savedMode) ? savedMode : "xcode-index";
   parserSelect.value = state.parserMode;
 }
 
@@ -346,6 +348,7 @@ function buildScene() {
     const geometry = makeNodeGeometry(node.kind, node.width, node.height, node.depth);
     const mesh = new THREE.Mesh(geometry, material);
     mesh.position.set(node.x, (node.y || 0) + node.height / 2, node.z);
+    applyKindRotation(mesh, node.kind);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     mesh.userData = {
@@ -359,6 +362,28 @@ function buildScene() {
     }
     root.add(mesh);
     state.meshById.set(node.id, mesh);
+
+    if (shouldCreateSearchHalo(node)) {
+      const halo = makeSearchHalo(node);
+      halo.position.set(node.x, (node.y || 0) + node.height + 12, node.z);
+      halo.userData = {
+        nodeId: node.id,
+        role: "search-halo"
+      };
+      halo.visible = false;
+      root.add(halo);
+    }
+
+    if (node.kind === "file") {
+      const fileMarker = makeFileMarker(node);
+      fileMarker.position.set(node.x, (node.y || 0) + node.height + 2.2, node.z);
+      fileMarker.userData = {
+        nodeId: node.id,
+        role: "file-marker",
+        defaultPosition: fileMarker.position.clone()
+      };
+      root.add(fileMarker);
+    }
 
     if (importantKinds.has(node.kind) || node.kind === "function" || node.kind === "property") {
       const label = makeLabel(
@@ -389,7 +414,7 @@ function buildScene() {
       new THREE.Vector3((from.x + to.x) / 2, Math.max(from.height, to.height) + 92, (from.z + to.z) / 2),
       new THREE.Vector3(to.x, (to.y || 0) + to.height + 10, to.z)
     );
-    const color = edgeColor(edge.kind);
+    const color = edgeRenderColor(edge);
     const points = curve.getPoints(24);
     const geometry = new THREE.BufferGeometry().setFromPoints(points);
     const material = new THREE.LineBasicMaterial({
@@ -407,6 +432,14 @@ function buildScene() {
     group.userData.lineMaterial = material;
     group.userData.arrowMaterial = arrow.material;
     edgeRoot.add(group);
+  }
+}
+
+function applyKindRotation(mesh, kind) {
+  if (kind === "service" || kind === "class") {
+    mesh.rotation.y = Math.PI / 6;
+  } else if (kind === "protocol") {
+    mesh.rotation.y = Math.PI / 4;
   }
 }
 
@@ -432,8 +465,12 @@ function applyFilters() {
     const nodeId = object.userData.nodeId;
     if (!nodeId) return;
     const node = state.layout.find((candidate) => candidate.id === nodeId);
-    const matched = state.query && node?.name.toLowerCase().includes(state.query.toLowerCase());
+    const matched = isSearchMatch(node);
     const visible = isNodeVisible(node, neighborhood);
+    if (object.userData.role === "search-halo") {
+      object.visible = visible && matched;
+      return;
+    }
     if (object.type === "Sprite") {
       object.visible = visible && shouldShowLabel(nodeId);
       return;
@@ -511,9 +548,16 @@ function bindEvents() {
     if (selectedNodeId) selectNode(selectedNodeId);
   });
 
-  searchInput.addEventListener("input", () => {
+  searchInput.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      state.query = "";
+      searchInput.value = "";
+      return;
+    }
+    if (event.key !== "Enter") return;
+    event.preventDefault();
     state.query = searchInput.value.trim();
-    const match = state.layout.find((node) => state.query && node.name.toLowerCase().includes(state.query.toLowerCase()));
+    const match = state.layout.find((node) => isSearchMatch(node));
     if (match) selectNode(match.id);
   });
 
@@ -532,7 +576,7 @@ function bindEvents() {
   });
 
   parserSelect.addEventListener("change", async () => {
-    state.parserMode = ["merged", "swiftsyntax", "heuristic"].includes(parserSelect.value) ? parserSelect.value : "merged";
+    state.parserMode = ["xcode-index", "merged", "swiftsyntax", "heuristic"].includes(parserSelect.value) ? parserSelect.value : "xcode-index";
     localStorage.setItem(parserModeKey, state.parserMode);
     const lastProjectPath = localStorage.getItem(lastProjectPathKey);
     if (!lastProjectPath || state.graph?.project?.sourceRoot === "examples/SampleSwiftApp") {
@@ -586,6 +630,7 @@ function bindEvents() {
   bindEdgeFilter(edgeStateToggle, "owns_state");
   bindEdgeFilter(edgeMembersToggle, "uses_member");
   bindEdgeFilter(edgeInferredToggle, "inferred");
+  bindEdgeFilter(edgeIndexToggle, "xcode-index");
 
   selectedDetails.addEventListener("click", async (event) => {
     const sourceButton = event.target.closest("[data-source-node-id]");
@@ -639,6 +684,7 @@ function bindEdgeFilter(toggle, kind) {
 }
 
 function describeParser(mode) {
+  if (mode === "xcode-index") return "Xcode Index layered";
   if (mode === "merged") return "merged layered";
   return mode === "swiftsyntax" ? "SwiftSyntax" : "fast heuristic";
 }
@@ -651,6 +697,12 @@ function formatScanSummary(diagnostics) {
   if (diagnostics.heuristicHintEdges !== undefined) {
     parts.push(`${diagnostics.heuristicHintEdges} inferred hint edges`);
   }
+  if (diagnostics.xcodeIndexEdges !== undefined) {
+    parts.push(`${diagnostics.xcodeIndexEdges} Xcode index edges`);
+  }
+  if (diagnostics.xcodeIndexMessage) {
+    parts.push(diagnostics.xcodeIndexMessage);
+  }
   parts.push(`source root ${diagnostics.sourceRoot}`);
   return parts.join(" · ");
 }
@@ -658,17 +710,30 @@ function formatScanSummary(diagnostics) {
 function renderParserComparison(comparison) {
   const heuristicOnly = comparison.nodes.onlyHeuristic;
   const swiftSyntaxOnly = comparison.nodes.onlySwiftSyntax;
-  const nodeDelta = comparison.heuristic.nodeCount - comparison.swiftsyntax.nodeCount;
+  const mergedOnly = comparison.nodes.onlyMerged || [];
+  const xcodeIndexOnly = comparison.nodes.onlyXcodeIndex || [];
+  const xcodeOnlyEdges = comparison.edges.xcodeIndexOnlyDetails || [];
+  const indexDiagnostics = comparison.xcodeIndexDiagnostics || {};
 
   return `
     <div class="diff-summary">
-      <div><strong>${comparison.heuristic.nodeCount}</strong><span>Fast heuristic nodes</span></div>
-      <div><strong>${comparison.swiftsyntax.nodeCount}</strong><span>SwiftSyntax nodes</span></div>
-      <div><strong>${formatSigned(nodeDelta)}</strong><span>Node delta</span></div>
+      <div><span>Heuristic</span><strong>${comparison.heuristic.nodeCount}</strong></div>
+      <div><span>SwiftSyntax</span><strong>${comparison.swiftsyntax.nodeCount}</strong></div>
+      <div><span>Merged</span><strong>${comparison.merged.nodeCount}</strong></div>
+      <div><span>Xcode</span><strong>${comparison.xcodeIndex.nodeCount}</strong></div>
     </div>
-    <p>${comparison.nodes.shared} shared symbols · ${comparison.edges.shared} shared edges.</p>
+    <p class="diff-compact-line">${comparison.nodes.shared} shared symbols · ${comparison.edges.shared} shared edges · ${comparison.edges.mergedOnly || 0} merged-only · ${comparison.edges.xcodeIndexOnly || 0} index-only</p>
+    <details class="diff-group diff-meta">
+      <summary>Xcode index status</summary>
+      ${indexDiagnostics.xcodeIndexAvailable
+        ? `<p><code>${escapeHtml(indexDiagnostics.xcodeIndexStore || "")}</code></p>`
+        : `<p>${escapeHtml(indexDiagnostics.xcodeIndexMessage || "No Xcode index details available.")}</p>`}
+    </details>
     ${renderKindDelta("Fast heuristic only", heuristicOnly, comparison.nodes.onlyHeuristicByKind, "heuristic")}
     ${renderKindDelta("SwiftSyntax only", swiftSyntaxOnly, comparison.nodes.onlySwiftSyntaxByKind, "swiftsyntax")}
+    ${renderKindDelta("Merged layered only", mergedOnly, comparison.nodes.onlyMergedByKind || {}, "merged")}
+    ${renderKindDelta("Xcode Index nodes only", xcodeIndexOnly, comparison.nodes.onlyXcodeIndexByKind || {}, "xcode-index")}
+    ${renderEdgeDelta("Xcode Index edges only", xcodeOnlyEdges)}
   `;
 }
 
@@ -681,7 +746,7 @@ function renderKindDelta(title, nodes, byKind, parserName) {
   const truncated = nodes.length > 40 ? `<p class="status-copy">Showing first 40 of ${nodes.length} parser-only symbols.</p>` : "";
 
   return `
-    <details class="diff-group" open>
+    <details class="diff-group">
       <summary>${escapeHtml(title)} <span>${nodes.length}</span></summary>
       <div class="diff-kinds">${kindSummary || "<span>No parser-only symbols.</span>"}</div>
       <div class="diff-list">${items || "<p>No differences in this direction.</p>"}</div>
@@ -705,12 +770,36 @@ function renderDiffNode(node, parserName) {
   `;
 }
 
+function renderEdgeDelta(title, edges) {
+  const items = edges.slice(0, 40).map((edge) => `
+    <article class="diff-item">
+      <div>
+        <strong>${escapeHtml(edge.fromName)} → ${escapeHtml(edge.toName)}</strong>
+        <span><code>${escapeHtml(edge.kind)}</code> ${edge.source ? `from <code>${escapeHtml(edge.source)}</code>` : ""}${edge.confidence ? ` · confidence <code>${escapeHtml(edge.confidence)}</code>` : ""}</span>
+      </div>
+    </article>
+  `).join("");
+  const truncated = edges.length > 40 ? `<p class="status-copy">Showing first 40 of ${edges.length} index-only edges.</p>` : "";
+
+  return `
+    <details class="diff-group">
+      <summary>${escapeHtml(title)} <span>${edges.length}</span></summary>
+      <div class="diff-list">${items || "<p>No index-only edges.</p>"}</div>
+      ${truncated}
+    </details>
+  `;
+}
+
 function findComparisonNode(sourceKey) {
   const [parserName, ...idParts] = sourceKey.split(":");
   const id = idParts.join(":");
-  const nodes = parserName === "swiftsyntax"
-    ? state.parserComparison.nodes.onlySwiftSyntax
-    : state.parserComparison.nodes.onlyHeuristic;
+  const nodesByParser = {
+    heuristic: state.parserComparison.nodes.onlyHeuristic,
+    swiftsyntax: state.parserComparison.nodes.onlySwiftSyntax,
+    merged: state.parserComparison.nodes.onlyMerged || [],
+    "xcode-index": state.parserComparison.nodes.onlyXcodeIndex || []
+  };
+  const nodes = nodesByParser[parserName] || [];
   return nodes.find((node) => node.id === id);
 }
 
@@ -853,7 +942,7 @@ function renderDetails(node) {
 
   return `
     <p><strong>${escapeHtml(node.name)}</strong><br>${escapeHtml(node.kind)} · ${escapeHtml(kindMeaning)} ${node.file ? `in <code>${escapeHtml(node.file)}:${node.line}</code>` : ""}</p>
-    ${node.source ? `<p>Source: <code>${escapeHtml(node.source)}</code>${node.inferred ? " · inferred hint" : ""}${node.confidence ? ` · confidence <code>${escapeHtml(node.confidence)}</code>` : ""}</p>` : ""}
+    ${node.source ? `<p>Source: <code>${escapeHtml(node.source)}</code>${node.inferred ? " · inferred hint" : ""}${node.indexResolved ? " · Xcode index resolved" : ""}${node.confidence ? ` · confidence <code>${escapeHtml(node.confidence)}</code>` : ""}</p>` : ""}
     ${node.file ? `<div class="source-actions"><button class="button" type="button" data-source-node-id="${escapeHtml(node.id)}">Source</button><button class="button" type="button" data-xcode-node-id="${escapeHtml(node.id)}">Open in Xcode</button></div><div id="sourcePreview" class="source-preview"></div>` : ""}
     <p>Metrics: <code>${escapeHtml(JSON.stringify(node.metrics || {}))}</code></p>
     <p><strong>Members</strong><br>${memberIds.length > 0 ? `${memberIds.length} functions / properties shown in the 3D inspector popup.` : "No inspectable members."}</p>
@@ -959,6 +1048,7 @@ function isNodeVisible(node, neighborhood) {
 
 function isEdgeVisible(edge) {
   if (edge.inferred && !state.edgeFilters.inferred) return false;
+  if (edge.source === "xcode-index" && !state.edgeFilters["xcode-index"]) return false;
   return isEdgeKindEnabled(edge.kind);
 }
 
@@ -994,6 +1084,65 @@ function makeLabel(text, color, width = 92, height = 18) {
   const sprite = new THREE.Sprite(material);
   sprite.scale.set(width, height, 1);
   return sprite;
+}
+
+function makeFileMarker(node) {
+  const marker = new THREE.Group();
+  const width = clamp((node.width || 54) * 0.28, 14, 26);
+  const depth = clamp((node.depth || 40) * 0.38, 12, 22);
+  const thickness = 1.6;
+  const baseMaterial = getStandardMaterial("file-marker-base", {
+    color: 0xd8edf7,
+    roughness: 0.5,
+    metalness: 0.04,
+    emissive: 0x7fa3b8,
+    emissiveIntensity: 0.08
+  });
+  const foldMaterial = getStandardMaterial("file-marker-fold", {
+    color: 0x8fb8ca,
+    roughness: 0.55,
+    metalness: 0.04
+  });
+  const lineMaterial = getStandardMaterial("file-marker-lines", {
+    color: 0x20323c,
+    roughness: 0.7,
+    metalness: 0.02
+  });
+
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(width, thickness, depth), baseMaterial);
+  plate.position.y = thickness / 2;
+  marker.add(plate);
+
+  const fold = new THREE.Mesh(new THREE.BoxGeometry(width * 0.28, thickness + 0.2, depth * 0.28), foldMaterial);
+  fold.position.set(width * 0.29, thickness + 0.08, -depth * 0.29);
+  marker.add(fold);
+
+  [-0.18, 0.08, 0.34].forEach((offset) => {
+    const line = new THREE.Mesh(new THREE.BoxGeometry(width * 0.58, thickness + 0.35, 0.7), lineMaterial);
+    line.position.set(-width * 0.04, thickness + 0.18, depth * offset);
+    marker.add(line);
+  });
+
+  return marker;
+}
+
+function makeSearchHalo(node) {
+  const radius = Math.max(18, Math.max(node.width || 24, node.depth || 24) * 0.62);
+  const tube = Math.max(1.6, radius * 0.055);
+  const key = `search-halo:${Math.round(radius)}:${Math.round(tube * 10)}`;
+  let geometry = geometryCache.get(key);
+  if (!geometry) {
+    geometry = new THREE.TorusGeometry(radius, tube, 8, 40);
+    geometry.rotateX(Math.PI / 2);
+    geometryCache.set(key, geometry);
+  }
+  const material = getBasicMaterial("search-halo", {
+    color: 0xfff07a,
+    transparent: true,
+    opacity: 0.82,
+    depthWrite: false
+  });
+  return new THREE.Mesh(geometry, material);
 }
 
 function gridPosition(index, total, spacingX, spacingZ, originX = 0, originZ = 0) {
@@ -1033,11 +1182,13 @@ function complexityForNode(node) {
 
 function baseDimensionsForKind(kind) {
   if (kind === "repository") return { width: 72, depth: 72, height: 34 };
-  if (kind === "file") return { width: 54, depth: 54, height: 34 };
+  if (kind === "file") return { width: 72, depth: 48, height: 14 };
   if (kind === "swiftui_view") return { width: 34, depth: 34, height: 34 };
+  if (kind === "service" || kind === "class") return { width: 32, depth: 32, height: 52 };
   if (kind === "function") return { width: 10, depth: 10, height: 10 };
   if (kind === "property") return { width: 8, depth: 8, height: 8 };
-  if (kind === "module") return { width: 34, depth: 34, height: 22 };
+  if (kind === "module") return { width: 38, depth: 38, height: 10 };
+  if (kind === "protocol") return { width: 26, depth: 26, height: 40 };
   return { width: 30, depth: 30, height: 30 };
 }
 
@@ -1050,9 +1201,18 @@ function makeNodeGeometry(kind, width, height, depth) {
   if (cached) return cached;
 
   let geometry;
-  if (kind === "function" || kind === "protocol") {
+  if (kind === "module") {
+    const radius = Math.max(7, Math.min(roundedWidth, roundedDepth) / 2);
+    geometry = new THREE.TorusGeometry(radius, Math.max(2, roundedHeight / 3), 8, 20);
+    geometry.rotateX(Math.PI / 2);
+  } else if (kind === "service" || kind === "class") {
+    const radius = Math.max(8, Math.min(roundedWidth, roundedDepth) / 2);
+    geometry = new THREE.CylinderGeometry(radius * 0.74, radius, roundedHeight, 6);
+  } else if (kind === "file") {
+    geometry = new THREE.BoxGeometry(roundedWidth, roundedHeight, roundedDepth);
+  } else if (kind === "function" || kind === "protocol") {
     const radius = Math.max(4, Math.min(roundedWidth, roundedDepth) / 2);
-    geometry = new THREE.CylinderGeometry(radius, radius, roundedHeight, 14);
+    geometry = new THREE.CylinderGeometry(radius, radius, roundedHeight, kind === "protocol" ? 8 : 14);
   } else if (kind === "property") {
     const radius = Math.max(4, Math.cbrt(roundedWidth * roundedHeight * roundedDepth) / 2);
     geometry = new THREE.SphereGeometry(radius, 14, 10);
@@ -1091,7 +1251,13 @@ function edgeColor(kind) {
   return 0xffffff;
 }
 
+function edgeRenderColor(edge) {
+  if (edge.source === "xcode-index") return 0xffd166;
+  return edgeColor(edge.kind);
+}
+
 function edgeOpacity(edge) {
+  if (edge.source === "xcode-index") return 0.72;
   return edge.inferred ? 0.28 : 0.58;
 }
 
@@ -1167,10 +1333,19 @@ function nodeIdFromObject(object) {
 function shouldShowLabel(nodeId) {
   const node = state.graph?.nodes.find((candidate) => candidate.id === nodeId);
   if (!node) return false;
+  if (isSearchMatch(node)) return true;
   if (state.performanceMode && node.id !== state.selectedId && node.id !== state.openShellId) return false;
   if (importantKinds.has(node.kind)) return true;
   if (node.kind === "function" || node.kind === "property") return false;
   return false;
+}
+
+function shouldCreateSearchHalo(node) {
+  return node.kind !== "function" && node.kind !== "property";
+}
+
+function isSearchMatch(node) {
+  return Boolean(state.query && node?.name?.toLowerCase().includes(state.query.toLowerCase()));
 }
 
 function shouldShowMesh(nodeId) {

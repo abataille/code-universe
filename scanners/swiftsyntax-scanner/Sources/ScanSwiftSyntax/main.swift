@@ -129,7 +129,7 @@ final class Collector: SyntaxVisitor {
     )
     edges.append(GraphEdge(from: currentType.id, to: id, kind: "defines"))
     currentType.methods += 1
-    functionSources.append((id: id, parentType: currentType.name, source: node.trimmedDescription))
+    functionSources.append((id: id, parentType: currentType.name, source: stripSwiftComments(node.trimmedDescription)))
     typeStack.append(currentType)
     return .skipChildren
   }
@@ -173,7 +173,8 @@ final class Collector: SyntaxVisitor {
   private func enterType(kind declarationKind: String, name: String, inheritance: String?, syntax: Syntax) {
     let inheritanceText = inheritance ?? ""
     let conformances = inheritanceConformances(inheritanceText)
-    let kind = classifyType(declarationKind: declarationKind, name: name, conformances: conformances, source: syntax.trimmedDescription)
+    let source = stripSwiftComments(syntax.trimmedDescription)
+    let kind = classifyType(declarationKind: declarationKind, name: name, conformances: conformances, source: source)
     let id = "type:\(name)"
     let node = GraphNode(
       id: id,
@@ -186,7 +187,7 @@ final class Collector: SyntaxVisitor {
     )
     nodes[id] = node
     typeNames.insert(name)
-    typeSources[id] = syntax.trimmedDescription
+    typeSources[id] = source
     typeStack.append(TypeContext(id: id, name: name, file: file, methods: 0, properties: 0))
 
     conformances
@@ -409,6 +410,107 @@ func referencesType(source: String, typeName: String) -> Bool {
 
 func referencesMember(source: String, memberName: String) -> Bool {
   source.range(of: "\\b\(NSRegularExpression.escapedPattern(for: memberName))\\b", options: .regularExpression) != nil
+}
+
+func stripSwiftComments(_ source: String) -> String {
+  var output = ""
+  var index = source.startIndex
+  var blockDepth = 0
+  var inLineComment = false
+  var inString = false
+  var stringDelimiter = ""
+
+  func hasPrefix(_ value: String, at index: String.Index) -> Bool {
+    source[index...].hasPrefix(value)
+  }
+
+  while index < source.endIndex {
+    let character = source[index]
+    let nextIndex = source.index(after: index)
+    let nextCharacter = nextIndex < source.endIndex ? source[nextIndex] : nil
+
+    if inLineComment {
+      if character == "\n" {
+        inLineComment = false
+        output.append("\n")
+      } else {
+        output.append(" ")
+      }
+      index = nextIndex
+      continue
+    }
+
+    if blockDepth > 0 {
+      if character == "/" && nextCharacter == "*" {
+        blockDepth += 1
+        output.append("  ")
+        index = source.index(index, offsetBy: 2)
+        continue
+      }
+      if character == "*" && nextCharacter == "/" {
+        blockDepth -= 1
+        output.append("  ")
+        index = source.index(index, offsetBy: 2)
+        continue
+      }
+      output.append(character == "\n" ? "\n" : " ")
+      index = nextIndex
+      continue
+    }
+
+    if inString {
+      output.append(character)
+      if character == "\\" && stringDelimiter == "\"" && nextCharacter != nil {
+        output.append(nextCharacter!)
+        index = source.index(index, offsetBy: 2)
+        continue
+      }
+      if hasPrefix(stringDelimiter, at: index) {
+        output.append(String(stringDelimiter.dropFirst()))
+        index = source.index(index, offsetBy: stringDelimiter.count)
+        inString = false
+        stringDelimiter = ""
+        continue
+      }
+      index = nextIndex
+      continue
+    }
+
+    if hasPrefix("\"\"\"", at: index) {
+      inString = true
+      stringDelimiter = "\"\"\""
+      output.append("\"\"\"")
+      index = source.index(index, offsetBy: 3)
+      continue
+    }
+
+    if character == "\"" {
+      inString = true
+      stringDelimiter = "\""
+      output.append(character)
+      index = nextIndex
+      continue
+    }
+
+    if character == "/" && nextCharacter == "/" {
+      inLineComment = true
+      output.append("  ")
+      index = source.index(index, offsetBy: 2)
+      continue
+    }
+
+    if character == "/" && nextCharacter == "*" {
+      blockDepth = 1
+      output.append("  ")
+      index = source.index(index, offsetBy: 2)
+      continue
+    }
+
+    output.append(character)
+    index = nextIndex
+  }
+
+  return output
 }
 
 func uniqueEdges(_ edges: [GraphEdge]) -> [GraphEdge] {

@@ -4,12 +4,13 @@ import { extname, dirname, join, normalize, relative, resolve } from "node:path"
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { scanSwiftFolder } from "./scripts/scan-swift-core.js";
+import { enrichGraphWithXcodeIndex } from "./scripts/scan-xcode-index.js";
 
 const execFileAsync = promisify(execFile);
 const port = Number(process.env.PORT || 4173);
 const host = process.env.HOST || "127.0.0.1";
 const root = join(process.cwd(), "public");
-const scannerMode = process.env.CODE_UNIVERSE_SCANNER || "merged";
+const scannerMode = process.env.CODE_UNIVERSE_SCANNER || "xcode-index";
 
 const contentTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -104,11 +105,13 @@ async function scanResolvedPath(inputPath, scanner) {
   const resolvedInput = resolve(inputPath);
   const projectRoot = await resolveProjectRoot(resolvedInput);
   const resolvedScanner = resolveScannerMode(scanner);
-  const { graph, diagnostics } = resolvedScanner === "merged"
-    ? await scanSwiftFolderMerged(projectRoot)
-    : resolvedScanner === "swiftsyntax"
-      ? await scanSwiftFolderWithSwiftSyntax(projectRoot)
-      : await scanSwiftFolder(projectRoot);
+  const { graph, diagnostics } = resolvedScanner === "xcode-index"
+    ? await scanSwiftFolderWithXcodeIndex(projectRoot)
+    : resolvedScanner === "merged"
+      ? await scanSwiftFolderMerged(projectRoot)
+      : resolvedScanner === "swiftsyntax"
+        ? await scanSwiftFolderWithSwiftSyntax(projectRoot)
+        : await scanSwiftFolder(projectRoot);
 
   return {
     graph: {
@@ -139,6 +142,14 @@ async function compareParsers(inputPath) {
     scanSwiftFolder(projectRoot),
     scanSwiftFolderWithSwiftSyntax(projectRoot)
   ]);
+  const mergedGraph = mergeGraphs(swiftSyntaxScan.graph, heuristicScan.graph);
+  const xcodeIndexScan = await enrichGraphWithXcodeIndex(mergedGraph, projectRoot);
+  const heuristicVsSwiftNodes = compareNodes(heuristicScan.graph.nodes, swiftSyntaxScan.graph.nodes);
+  const swiftVsMergedNodes = compareNodeSets(swiftSyntaxScan.graph.nodes, mergedGraph.nodes);
+  const mergedVsIndexNodes = compareNodeSets(mergedGraph.nodes, xcodeIndexScan.graph.nodes);
+  const heuristicVsSwiftEdges = compareEdges(heuristicScan.graph.edges, swiftSyntaxScan.graph.edges, swiftSyntaxScan.graph.nodes);
+  const swiftVsMergedEdges = compareEdges(swiftSyntaxScan.graph.edges, mergedGraph.edges, mergedGraph.nodes);
+  const mergedVsIndexEdges = compareEdges(mergedGraph.edges, xcodeIndexScan.graph.edges, xcodeIndexScan.graph.nodes);
 
   return {
     project: {
@@ -149,19 +160,49 @@ async function compareParsers(inputPath) {
     comparedAt: new Date().toISOString(),
     heuristic: summarizeGraph(heuristicScan.graph),
     swiftsyntax: summarizeGraph(swiftSyntaxScan.graph),
-    nodes: compareNodes(heuristicScan.graph.nodes, swiftSyntaxScan.graph.nodes),
-    edges: compareEdges(heuristicScan.graph.edges, swiftSyntaxScan.graph.edges)
+    merged: summarizeGraph(mergedGraph),
+    xcodeIndex: summarizeGraph(xcodeIndexScan.graph),
+    xcodeIndexDiagnostics: xcodeIndexScan.diagnostics,
+    nodes: {
+      ...heuristicVsSwiftNodes,
+      onlyMerged: swiftVsMergedNodes.onlyRight,
+      onlyMergedByKind: swiftVsMergedNodes.onlyRightByKind,
+      onlyXcodeIndex: mergedVsIndexNodes.onlyRight,
+      onlyXcodeIndexByKind: mergedVsIndexNodes.onlyRightByKind
+    },
+    edges: {
+      ...heuristicVsSwiftEdges,
+      mergedOnly: swiftVsMergedEdges.onlyRight,
+      xcodeIndexOnly: mergedVsIndexEdges.onlyRight,
+      xcodeIndexOnlyDetails: mergedVsIndexEdges.onlyRightDetails
+    }
   };
 }
 
 function resolveScannerMode(scanner) {
-  if (scanner === "merged" || scanner === "swiftsyntax" || scanner === "heuristic") {
+  if (scanner === "xcode-index" || scanner === "merged" || scanner === "swiftsyntax" || scanner === "heuristic") {
     return scanner;
   }
-  if (scannerMode === "merged" || scannerMode === "swiftsyntax" || scannerMode === "heuristic") {
+  if (scannerMode === "xcode-index" || scannerMode === "merged" || scannerMode === "swiftsyntax" || scannerMode === "heuristic") {
     return scannerMode;
   }
   return "merged";
+}
+
+async function scanSwiftFolderWithXcodeIndex(projectRoot) {
+  const mergedScan = await scanSwiftFolderMerged(projectRoot);
+  const indexScan = await enrichGraphWithXcodeIndex(mergedScan.graph, projectRoot);
+  return {
+    graph: indexScan.graph,
+    diagnostics: {
+      ...mergedScan.diagnostics,
+      ...indexScan.diagnostics,
+      swiftFileCount: indexScan.graph.nodes.filter((node) => node.kind === "file").length,
+      typeCount: indexScan.graph.nodes.filter((node) => node.id.startsWith("type:")).length,
+      functionCount: indexScan.graph.nodes.filter((node) => node.kind === "function").length,
+      propertyCount: indexScan.graph.nodes.filter((node) => node.kind === "property").length
+    }
+  };
 }
 
 async function scanSwiftFolderMerged(projectRoot) {
@@ -241,42 +282,77 @@ function summarizeGraph(graph) {
 }
 
 function compareNodes(heuristicNodes, swiftSyntaxNodes) {
-  const heuristicMap = mapByKey(heuristicNodes, nodeComparisonKey);
-  const swiftSyntaxMap = mapByKey(swiftSyntaxNodes, nodeComparisonKey);
-  const shared = [];
-  const onlyHeuristic = [];
-  const onlySwiftSyntax = [];
+  const comparison = compareNodeSets(heuristicNodes, swiftSyntaxNodes);
+  return {
+    shared: comparison.shared,
+    onlyHeuristic: comparison.onlyLeft,
+    onlySwiftSyntax: comparison.onlyRight,
+    onlyHeuristicByKind: comparison.onlyLeftByKind,
+    onlySwiftSyntaxByKind: comparison.onlyRightByKind
+  };
+}
 
-  for (const [key, node] of heuristicMap) {
-    if (swiftSyntaxMap.has(key)) {
+function compareNodeSets(leftNodes, rightNodes) {
+  const leftMap = mapByKey(leftNodes, nodeComparisonKey);
+  const rightMap = mapByKey(rightNodes, nodeComparisonKey);
+  const shared = [];
+  const onlyLeft = [];
+  const onlyRight = [];
+
+  for (const [key, node] of leftMap) {
+    if (rightMap.has(key)) {
       shared.push(toComparableNode(node));
     } else {
-      onlyHeuristic.push(toComparableNode(node));
+      onlyLeft.push(toComparableNode(node));
     }
   }
 
-  for (const [key, node] of swiftSyntaxMap) {
-    if (!heuristicMap.has(key)) {
-      onlySwiftSyntax.push(toComparableNode(node));
+  for (const [key, node] of rightMap) {
+    if (!leftMap.has(key)) {
+      onlyRight.push(toComparableNode(node));
     }
   }
 
   return {
     shared: shared.length,
-    onlyHeuristic: sortComparableNodes(onlyHeuristic),
-    onlySwiftSyntax: sortComparableNodes(onlySwiftSyntax),
-    onlyHeuristicByKind: countBy(onlyHeuristic, (node) => node.kind),
-    onlySwiftSyntaxByKind: countBy(onlySwiftSyntax, (node) => node.kind)
+    onlyLeft: sortComparableNodes(onlyLeft),
+    onlyRight: sortComparableNodes(onlyRight),
+    onlyLeftByKind: countBy(onlyLeft, (node) => node.kind),
+    onlyRightByKind: countBy(onlyRight, (node) => node.kind)
   };
 }
 
-function compareEdges(heuristicEdges, swiftSyntaxEdges) {
-  const heuristicKeys = new Set(heuristicEdges.map(edgeComparisonKey));
-  const swiftSyntaxKeys = new Set(swiftSyntaxEdges.map(edgeComparisonKey));
+function compareEdges(leftEdges, rightEdges, nodes = []) {
+  const leftByKey = new Map(leftEdges.map((edge) => [edgeComparisonKey(edge), edge]));
+  const rightByKey = new Map(rightEdges.map((edge) => [edgeComparisonKey(edge), edge]));
+  const leftKeys = new Set(leftByKey.keys());
+  const rightKeys = new Set(rightByKey.keys());
+  const onlyLeftKeys = [...leftKeys].filter((key) => !rightKeys.has(key));
+  const onlyRightKeys = [...rightKeys].filter((key) => !leftKeys.has(key));
+
   return {
-    shared: [...heuristicKeys].filter((key) => swiftSyntaxKeys.has(key)).length,
-    onlyHeuristic: [...heuristicKeys].filter((key) => !swiftSyntaxKeys.has(key)).length,
-    onlySwiftSyntax: [...swiftSyntaxKeys].filter((key) => !heuristicKeys.has(key)).length
+    shared: [...leftKeys].filter((key) => rightKeys.has(key)).length,
+    onlyLeft: onlyLeftKeys.length,
+    onlyRight: onlyRightKeys.length,
+    onlyLeftDetails: onlyLeftKeys.map((key) => toComparableEdge(leftByKey.get(key), nodes)),
+    onlyRightDetails: onlyRightKeys.map((key) => toComparableEdge(rightByKey.get(key), nodes))
+  };
+}
+
+function toComparableEdge(edge, nodes) {
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+  const from = nodeMap.get(edge.from);
+  const to = nodeMap.get(edge.to);
+  return {
+    from: edge.from,
+    fromName: from?.name || edge.from,
+    to: edge.to,
+    toName: to?.name || edge.to,
+    kind: edge.kind,
+    source: edge.source || null,
+    confidence: edge.confidence || null,
+    inferred: edge.inferred === true,
+    indexResolved: edge.indexResolved === true
   };
 }
 

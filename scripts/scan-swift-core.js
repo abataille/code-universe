@@ -26,9 +26,11 @@ export async function scanSwiftFolder(inputRoot) {
 
   for (const file of files) {
     const source = await readFile(file, "utf8");
+    const code = stripSwiftComments(source);
     const fileName = relative(inputRoot, file);
     const fileId = `file:${fileName}`;
     const lines = source.split(/\r?\n/);
+    const codeLines = code.split(/\r?\n/);
 
     addNode(nodes, {
       id: fileId,
@@ -43,7 +45,7 @@ export async function scanSwiftFolder(inputRoot) {
     const imports = [];
     let currentType = null;
 
-    lines.forEach((line, index) => {
+    codeLines.forEach((line, index) => {
       const lineNumber = index + 1;
       const importMatch = line.match(importPattern);
       if (importMatch) imports.push(importMatch[1]);
@@ -51,7 +53,7 @@ export async function scanSwiftFolder(inputRoot) {
       const declarationMatch = line.match(declarationPattern);
       if (declarationMatch) {
         const [, declarationKind, name, inheritance = ""] = declarationMatch;
-        const nodeKind = classifyType(declarationKind, name, inheritance, source);
+        const nodeKind = classifyType(declarationKind, name, inheritance, code);
         const node = {
           id: `type:${name}`,
           kind: nodeKind,
@@ -65,7 +67,7 @@ export async function scanSwiftFolder(inputRoot) {
         addNode(nodes, node);
         addEdge(edges, fileId, node.id, "defines");
         typeNames.add(name);
-        declarations.push({ ...node, inheritance, source });
+        declarations.push({ ...node, inheritance, source: code });
         currentType = nodes.get(node.id);
 
         inheritance
@@ -95,7 +97,7 @@ export async function scanSwiftFolder(inputRoot) {
         functions.push({
           id: functionId,
           parentTypeName: currentType.name,
-          source: extractFunctionBody(lines, index)
+          source: extractFunctionBody(codeLines, index)
         });
         return;
       }
@@ -245,6 +247,102 @@ function extractFunctionBody(lines, startIndex) {
   }
 
   return collected.join("\n");
+}
+
+function stripSwiftComments(source) {
+  let output = "";
+  let index = 0;
+  let blockDepth = 0;
+  let inLineComment = false;
+  let inString = false;
+  let stringDelimiter = "";
+
+  while (index < source.length) {
+    const character = source[index];
+    const next = source[index + 1];
+
+    if (inLineComment) {
+      if (character === "\n") {
+        inLineComment = false;
+        output += "\n";
+      } else {
+        output += " ";
+      }
+      index += 1;
+      continue;
+    }
+
+    if (blockDepth > 0) {
+      if (character === "/" && next === "*") {
+        blockDepth += 1;
+        output += "  ";
+        index += 2;
+        continue;
+      }
+      if (character === "*" && next === "/") {
+        blockDepth -= 1;
+        output += "  ";
+        index += 2;
+        continue;
+      }
+      output += character === "\n" ? "\n" : " ";
+      index += 1;
+      continue;
+    }
+
+    if (inString) {
+      output += character;
+      if (character === "\\" && stringDelimiter === "\"") {
+        output += next || "";
+        index += 2;
+        continue;
+      }
+      if (source.startsWith(stringDelimiter, index)) {
+        output += stringDelimiter.slice(1);
+        index += stringDelimiter.length;
+        inString = false;
+        stringDelimiter = "";
+        continue;
+      }
+      index += 1;
+      continue;
+    }
+
+    if (source.startsWith("\"\"\"", index)) {
+      inString = true;
+      stringDelimiter = "\"\"\"";
+      output += "\"\"\"";
+      index += 3;
+      continue;
+    }
+
+    if (character === "\"") {
+      inString = true;
+      stringDelimiter = "\"";
+      output += character;
+      index += 1;
+      continue;
+    }
+
+    if (character === "/" && next === "/") {
+      inLineComment = true;
+      output += "  ";
+      index += 2;
+      continue;
+    }
+
+    if (character === "/" && next === "*") {
+      blockDepth = 1;
+      output += "  ";
+      index += 2;
+      continue;
+    }
+
+    output += character;
+    index += 1;
+  }
+
+  return output;
 }
 
 function addNode(nodes, node) {

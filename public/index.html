@@ -22,7 +22,8 @@
           <p class="panel-copy">Choose the folder that contains your `.xcodeproj`. The scan runs locally in the browser.</p>
           <div class="stack">
             <label class="field-label" for="parserSelect">Parser</label>
-            <select id="parserSelect" class="search">
+            <select id="parserSelect" class="search selection-field">
+              <option value="xcode-index">Xcode Index layered</option>
               <option value="merged">Merged layered</option>
               <option value="heuristic">Fast heuristic</option>
               <option value="swiftsyntax">SwiftSyntax accurate</option>
@@ -43,7 +44,7 @@
         </section>
 
         <label class="field-label" for="searchInput">Search symbol</label>
-        <input id="searchInput" class="search" type="search" placeholder="ContentView, AuthService..." />
+        <input id="searchInput" class="search selection-field" type="search" placeholder="ContentView, AuthService..." />
 
         <div class="control-row">
           <button id="viewAllButton" class="button is-active" type="button">Map</button>
@@ -108,6 +109,10 @@
               <input id="edgeInferredToggle" type="checkbox" checked />
               <span>Inferred hints</span>
             </label>
+            <label class="toggle-row">
+              <input id="edgeIndexToggle" type="checkbox" checked />
+              <span>Xcode index links</span>
+            </label>
           </div>
         </section>
 
@@ -152,11 +157,15 @@
           <span><i class="edge-imports"></i>Imports</span>
           <span><i class="edge-conforms"></i>Conforms to</span>
           <span><i class="edge-inferred"></i>Inferred hint</span>
+          <span><i class="edge-index"></i>Xcode index</span>
         </div>
         <div class="shape-legend">
-          <span><i class="shape-cuboid"></i>Cuboid structure</span>
-          <span><i class="shape-cylinder"></i>Cylinder function/protocol</span>
-          <span><i class="shape-sphere"></i>Sphere property/state</span>
+          <span><i class="shape-file"></i>File slab</span>
+          <span><i class="shape-view"></i>View panel</span>
+          <span><i class="shape-service"></i>Service tower</span>
+          <span><i class="shape-module"></i>Module ring</span>
+          <span><i class="shape-cylinder"></i>Function/protocol</span>
+          <span><i class="shape-sphere"></i>Property/state</span>
         </div>
       </section>
     </main>
