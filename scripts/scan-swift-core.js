@@ -84,20 +84,21 @@ export async function scanSwiftFolder(inputRoot) {
       if (functionMatch && currentType) {
         const name = functionMatch[1];
         const functionId = `function:${currentType.name}.${name}`;
+        const source = extractFunctionBody(codeLines, index);
         addNode(nodes, {
           id: functionId,
           kind: "function",
           name,
           file: fileName,
           line: lineNumber,
-          metrics: {}
+          metrics: metricsForFunctionSource(source)
         });
         addEdge(edges, currentType.id, functionId, "defines");
         currentType.metrics.methods += 1;
         functions.push({
           id: functionId,
           parentTypeName: currentType.name,
-          source: extractFunctionBody(codeLines, index)
+          source
         });
         return;
       }
@@ -247,6 +248,20 @@ function extractFunctionBody(lines, startIndex) {
   }
 
   return collected.join("\n");
+}
+
+function metricsForFunctionSource(source) {
+  const lines = source
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("//"));
+  const branchMatches = source.match(/\b(if|else if|switch|case|for|while|guard|catch|async let|Task)\b|\?\s*[^:]+:/g) || [];
+  const callMatches = source.match(/\b[A-Za-z_][A-Za-z0-9_]*\s*\(/g) || [];
+  return {
+    lines: Math.max(1, lines.length),
+    branches: branchMatches.length,
+    calls: callMatches.length
+  };
 }
 
 function stripSwiftComments(source) {

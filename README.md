@@ -51,6 +51,20 @@ npm run mac:build
 npm run mac:run
 ```
 
+For URL-scheme integration with Xcode, build the bundled app once:
+
+```sh
+npm run mac:bundle
+```
+
+In Xcode, add it under `Xcode > Settings > Behaviors` as a custom script and choose:
+
+```text
+scripts/open-code-universe-from-xcode.sh
+```
+
+The script first uses Xcode's active workspace/project document. If Xcode does not expose one, it falls back to `$PROJECT_DIR`, `$SRCROOT`, then a folder picker. It opens the bundled app directly with `--scan-path`, so it does not depend on LaunchServices choosing the right URL-scheme handler.
+
 The shell opens `http://127.0.0.1:4174` and tries to start the local Node server from the repo root. You can override the URL:
 
 ```sh

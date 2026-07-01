@@ -3,3 +3,5 @@ node_modules/
 .swift-cache/
 .build/
 **/.build/
+dist/
+.tmp-code-universe*

@@ -268,7 +268,16 @@ function mergeGraphs(swiftSyntaxGraph, heuristicGraph) {
   }]));
 
   for (const node of heuristicGraph.nodes) {
-    if (!nodes.has(node.id)) {
+    if (nodes.has(node.id)) {
+      const existing = nodes.get(node.id);
+      nodes.set(node.id, {
+        ...existing,
+        metrics: {
+          ...(node.metrics || {}),
+          ...(existing.metrics || {})
+        }
+      });
+    } else {
       nodes.set(node.id, {
         ...node,
         source: "heuristic",

@@ -170,6 +170,17 @@ function initializeParserMode() {
 }
 
 async function loadInitialUniverse() {
+  const requestedScanPath = new URLSearchParams(window.location.search).get("scanPath");
+  if (requestedScanPath) {
+    await loadSampleUniverse();
+    try {
+      await scanPath(requestedScanPath, "Xcode handoff scan");
+    } catch (error) {
+      showStartupError(error);
+    }
+    return;
+  }
+
   const lastProjectPath = localStorage.getItem(lastProjectPathKey);
   await loadSampleUniverse();
   if (lastProjectPath) {
@@ -284,6 +295,7 @@ function buildLayout(graph) {
   const functions = graph.nodes.filter((node) => node.kind === "function" || node.kind === "property");
   const modules = graph.nodes.filter((node) => node.kind === "module");
   const layout = [];
+  const fileSpacing = spacingForNodes(files, 260, 225, 28);
 
   layout.push({
     ...graph.nodes.find((node) => node.kind === "repository"),
@@ -295,47 +307,65 @@ function buildLayout(graph) {
   files.forEach((file, index) => {
     layout.push({
       ...file,
-      ...gridPosition(index, Math.max(1, files.length), 260, 225, 0, 20),
+      ...gridPosition(index, Math.max(1, files.length), fileSpacing.x, fileSpacing.z, 0, 20),
       y: 0,
       ...dimensionsForNode(file)
     });
   });
 
-  types.forEach((type) => {
-    const fileEdge = graph.edges.find((edge) => edge.kind === "defines" && edge.to === type.id);
-    const parent = layout.find((item) => item.id === fileEdge?.from);
-    const siblings = types.filter((candidate) => graph.edges.some((edge) => edge.kind === "defines" && edge.from === fileEdge?.from && edge.to === candidate.id));
-    const siblingIndex = siblings.findIndex((candidate) => candidate.id === type.id);
-    const offset = childPositionOnFilePlane(siblingIndex, Math.max(1, siblings.length), parent);
-    layout.push({
-      ...type,
-      x: (parent?.x || 0) + offset.x,
-      z: (parent?.z || 0) + offset.z,
-      y: (parent?.y || 0) + (parent?.height || 0) + 22,
-      ...dimensionsForNode(type)
+  files.forEach((file) => {
+    const parent = layout.find((item) => item.id === file.id);
+    const childTypes = types.filter((candidate) => graph.edges.some((edge) => edge.kind === "defines" && edge.from === file.id && edge.to === candidate.id));
+    childTypes.forEach((type, siblingIndex) => {
+      const offset = childPositionOnFilePlane(siblingIndex, Math.max(1, childTypes.length), parent, childTypes);
+      layout.push({
+        ...type,
+        x: (parent?.x || 0) + offset.x,
+        z: (parent?.z || 0) + offset.z,
+        y: (parent?.y || 0) + (parent?.height || 0) + 22,
+        ...dimensionsForNode(type)
+      });
     });
   });
 
+  types
+    .filter((type) => !layout.some((item) => item.id === type.id))
+    .forEach((type, index, orphanTypes) => {
+      const spacing = spacingForNodes(orphanTypes, 78, 68, 24);
+      const position = gridPosition(index, Math.max(1, orphanTypes.length), spacing.x, spacing.z, 0, 210);
+      layout.push({
+        ...type,
+        ...position,
+        y: 48,
+        ...dimensionsForNode(type)
+      });
+    });
+
+  const fileBounds = boundsForLayout(layout.filter((item) => item.kind === "file"));
+  const moduleOriginZ = fileBounds.minZ - 180;
   modules.forEach((moduleNode, index) => {
     layout.push({
       ...moduleNode,
-      ...gridPosition(index, Math.max(1, modules.length), 125, 105, 0, -390),
+      ...gridPosition(index, Math.max(1, modules.length), 125, 105, 0, moduleOriginZ),
       y: 72,
       ...dimensionsForNode(moduleNode)
     });
   });
 
-  functions.forEach((node, index) => {
-    const edge = graph.edges.find((candidate) => candidate.kind === "defines" && candidate.to === node.id);
-    const parent = layout.find((item) => item.id === edge?.from);
+  types.forEach((type) => {
+    const parent = layout.find((item) => item.id === type.id);
     if (!parent) return;
-    const position = gridPosition(index, Math.max(1, functions.length), 18, 18);
-    layout.push({
-      ...node,
-      x: parent.x + position.x,
-      z: parent.z + position.z,
-      y: (parent.y || 0) + parent.height + 18,
-      ...dimensionsForNode(node)
+    const members = functions.filter((candidate) => graph.edges.some((edge) => edge.kind === "defines" && edge.from === type.id && edge.to === candidate.id));
+    const spacing = spacingForNodes(members, 24, 24, 12);
+    members.forEach((node, index) => {
+      const position = gridPosition(index, Math.max(1, members.length), spacing.x, spacing.z);
+      layout.push({
+        ...node,
+        x: parent.x + position.x,
+        z: parent.z + position.z,
+        y: (parent.y || 0) + parent.height + 20,
+        ...dimensionsForNode(node)
+      });
     });
   });
 
@@ -1375,18 +1405,45 @@ function gridPosition(index, total, spacingX, spacingZ, originX = 0, originZ = 0
   };
 }
 
-function childPositionOnFilePlane(index, total, fileNode) {
+function childPositionOnFilePlane(index, total, fileNode, childNodes = []) {
   if (!fileNode) return gridPosition(index, total, 66, 58);
   const columns = Math.max(1, Math.ceil(Math.sqrt(total)));
   const rows = Math.max(1, Math.ceil(total / columns));
   const column = index % columns;
   const row = Math.floor(index / columns);
-  const usableWidth = Math.max(42, fileNode.width * 0.72);
-  const usableDepth = Math.max(36, fileNode.depth * 0.68);
+  const spacing = spacingForNodes(childNodes, 48, 44, 16);
+  const usableWidth = Math.max(fileNode.width * 0.78, spacing.x * Math.max(1, columns - 1));
+  const usableDepth = Math.max(fileNode.depth * 0.72, spacing.z * Math.max(1, rows - 1));
   return {
-    x: (column - (columns - 1) / 2) * (usableWidth / columns),
-    z: (row - (rows - 1) / 2) * (usableDepth / rows)
+    x: (column - (columns - 1) / 2) * Math.max(spacing.x, usableWidth / Math.max(1, columns)),
+    z: (row - (rows - 1) / 2) * Math.max(spacing.z, usableDepth / Math.max(1, rows))
   };
+}
+
+function spacingForNodes(nodes, minimumX, minimumZ, padding = 18) {
+  const dimensions = nodes.map((node) => dimensionsForNode(node));
+  const maxWidth = dimensions.reduce((value, item) => Math.max(value, item.width || 0), 0);
+  const maxDepth = dimensions.reduce((value, item) => Math.max(value, item.depth || 0), 0);
+  return {
+    x: Math.max(minimumX, maxWidth + padding),
+    z: Math.max(minimumZ, maxDepth + padding)
+  };
+}
+
+function boundsForLayout(items) {
+  if (items.length === 0) {
+    return { minX: 0, maxX: 0, minZ: 0, maxZ: 0 };
+  }
+  return items.reduce((bounds, item) => {
+    const halfWidth = (item.width || 0) / 2;
+    const halfDepth = (item.depth || 0) / 2;
+    return {
+      minX: Math.min(bounds.minX, (item.x || 0) - halfWidth),
+      maxX: Math.max(bounds.maxX, (item.x || 0) + halfWidth),
+      minZ: Math.min(bounds.minZ, (item.z || 0) - halfDepth),
+      maxZ: Math.max(bounds.maxZ, (item.z || 0) + halfDepth)
+    };
+  }, { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity });
 }
 
 function dimensionsForNode(node) {
@@ -1403,6 +1460,20 @@ function dimensionsForNode(node) {
   const complexity = complexityForNode(node);
   const volumeScale = Math.cbrt(complexity);
   const base = baseDimensionsForKind(node.kind);
+  if (node.kind === "function") {
+    return {
+      width: Math.round(base.width * clamp(volumeScale * 0.95, 0.85, 2.2)),
+      depth: Math.round(base.depth * clamp(volumeScale * 0.95, 0.85, 2.2)),
+      height: Math.round(base.height * clamp(volumeScale * 1.18, 0.9, 2.6))
+    };
+  }
+  if (node.kind === "property") {
+    return {
+      width: Math.round(base.width * clamp(volumeScale, 0.85, 1.7)),
+      depth: Math.round(base.depth * clamp(volumeScale, 0.85, 1.7)),
+      height: Math.round(base.height * clamp(volumeScale, 0.85, 1.7))
+    };
+  }
   return {
     width: Math.round(base.width * volumeScale),
     depth: Math.round(base.depth * volumeScale),
@@ -1412,15 +1483,39 @@ function dimensionsForNode(node) {
 
 function complexityForNode(node) {
   if (node.kind === "file") return 1;
-  if (node.kind === "function") return 1.2;
-  if (node.kind === "property") return 0.75;
+  const edgeCounts = graphEdgeCountsForNode(node.id);
+  if (node.kind === "function") {
+    const lineWeight = Math.sqrt(node.metrics?.lines || 2) * 0.42;
+    const branchWeight = (node.metrics?.branches || 0) * 0.95;
+    const callWeight = Math.sqrt(node.metrics?.calls || 0) * 0.5;
+    const dependencyWeight = edgeCounts.outgoingUses * 0.8 + edgeCounts.memberUses * 0.65 + edgeCounts.incoming * 0.25;
+    return clamp(0.9 + lineWeight + branchWeight + callWeight + dependencyWeight, 0.85, 18);
+  }
+  if (node.kind === "property") {
+    return clamp(0.72 + edgeCounts.incoming * 0.45 + edgeCounts.outgoingUses * 0.35, 0.65, 5);
+  }
   if (node.kind === "module") return 0.85;
   if (node.kind === "repository") return 2.2;
 
-  const methodWeight = (node.metrics?.methods || 0) * 0.8;
-  const propertyWeight = (node.metrics?.properties || 0) * 0.45;
+  const methodWeight = (node.metrics?.methods || 0) * 1.05;
+  const propertyWeight = (node.metrics?.properties || 0) * 0.6;
+  const structuralWeight = edgeCounts.definedMembers * 0.35 + edgeCounts.outgoingUses * 0.5 + edgeCounts.incoming * 0.2;
   const kindWeight = node.kind === "swiftui_view" ? 1.35 : 1;
-  return clamp((1 + methodWeight + propertyWeight) * kindWeight, 0.9, 6);
+  return clamp((1 + methodWeight + propertyWeight + structuralWeight) * kindWeight, 0.9, 14);
+}
+
+function graphEdgeCountsForNode(nodeId) {
+  if (!state.graph) {
+    return { incoming: 0, outgoingUses: 0, memberUses: 0, definedMembers: 0 };
+  }
+  return state.graph.edges.reduce((counts, edge) => {
+    if (edge.to === nodeId) counts.incoming += 1;
+    if (edge.from !== nodeId) return counts;
+    if (["uses", "imports", "conforms_to"].includes(edge.kind)) counts.outgoingUses += 1;
+    if (edge.kind === "uses_member" || edge.kind === "owns_state") counts.memberUses += 1;
+    if (edge.kind === "defines") counts.definedMembers += 1;
+    return counts;
+  }, { incoming: 0, outgoingUses: 0, memberUses: 0, definedMembers: 0 });
 }
 
 function baseDimensionsForKind(kind) {
@@ -1428,7 +1523,7 @@ function baseDimensionsForKind(kind) {
   if (kind === "file") return { width: 72, depth: 48, height: 3 };
   if (kind === "swiftui_view") return { width: 34, depth: 34, height: 34 };
   if (kind === "service" || kind === "class") return { width: 32, depth: 32, height: 52 };
-  if (kind === "function") return { width: 10, depth: 10, height: 10 };
+  if (kind === "function") return { width: 10, depth: 10, height: 12 };
   if (kind === "property") return { width: 8, depth: 8, height: 8 };
   if (kind === "module") return { width: 38, depth: 38, height: 10 };
   if (kind === "protocol") return { width: 26, depth: 26, height: 40 };
@@ -1645,12 +1740,17 @@ function buildMemberPopup() {
   const shellTop = (shellNode.y || 0) + shellNode.height;
   const origin = new THREE.Vector3(shellNode.x + 160 + shellNode.width, shellTop + 210, shellNode.z);
   const dependencyIds = getPopupDependencyIds(shellNode.id, visibleMemberIds);
-  const popupNodeCount = visibleMemberIds.length + dependencyIds.length + 1;
-  const columns = Math.max(2, Math.ceil(Math.sqrt(popupNodeCount)));
-  const rows = Math.max(1, Math.ceil(popupNodeCount / columns));
-  const frameWidth = Math.max(210, columns * 74);
-  const frameHeight = 170;
-  const frameDepth = Math.max(160, rows * 72);
+  const memberNodes = visibleMemberIds.map((memberId) => state.layout.find((candidate) => candidate.id === memberId)).filter(Boolean);
+  const dependencyNodes = dependencyIds
+    .map((dependencyId) => state.layout.find((candidate) => candidate.id === dependencyId) || state.graph.nodes.find((candidate) => candidate.id === dependencyId))
+    .filter(Boolean);
+  const memberLayout = popupGridLayout(memberNodes, popupDimensionsForMember);
+  const dependencyLayout = popupGridLayout(dependencyNodes, popupDimensionsForDependency);
+  const contentWidth = Math.max(memberLayout.width, dependencyLayout.width, Math.max(44, shellNode.width * 0.42));
+  const contentDepth = Math.max(memberLayout.depth + dependencyLayout.depth + 96, 180);
+  const frameWidth = Math.max(230, contentWidth + 80);
+  const frameHeight = 190;
+  const frameDepth = Math.max(190, contentDepth + 42);
   state.popupFocusTarget = {
     nodeId: shellNode.id,
     target: new THREE.Vector3(origin.x, origin.y + 10, origin.z),
@@ -1679,7 +1779,7 @@ function buildMemberPopup() {
   floorPlate.position.set(origin.x, origin.y - frameHeight / 2 + 2, origin.z);
   popupRoot.add(floorPlate);
 
-  const floor = new THREE.GridHelper(floorSize, Math.max(columns, rows) * 2, 0x2a6074, 0x15303b);
+  const floor = new THREE.GridHelper(floorSize, Math.max(4, Math.ceil(floorSize / 42)), 0x2a6074, 0x15303b);
   floor.position.set(origin.x, origin.y - frameHeight / 2 + 4, origin.z);
   popupRoot.add(floor);
 
@@ -1707,22 +1807,23 @@ function buildMemberPopup() {
   parentLabel.position.set(parentPosition.x, parentPosition.y + Math.max(14, shellNode.height * 0.2 + 14), parentPosition.z);
   popupRoot.add(parentLabel);
 
-  placePopupMembers(visibleMemberIds, origin, columns, frameHeight, positions);
-  placePopupDependencies(dependencyIds, origin, columns, frameHeight, positions);
+  placePopupMembers(visibleMemberIds, origin, frameHeight, positions, memberLayout);
+  placePopupDependencies(dependencyIds, origin, frameHeight, positions, dependencyLayout);
 
   getPopupEdges(shellNode.id, visibleMemberIds, dependencyIds).forEach((edge) => drawPopupEdge(edge, positions));
 }
 
-function placePopupMembers(memberIds, origin, columns, frameHeight, positions) {
+function placePopupMembers(memberIds, origin, frameHeight, positions, layoutInfo) {
   memberIds.forEach((memberId, index) => {
     const node = state.layout.find((candidate) => candidate.id === memberId);
     if (!node) return;
-    const base = gridPosition(index, Math.max(1, memberIds.length), 70, 64);
+    const base = layoutInfo.positions[index] || { x: 0, z: 0 };
     const layerY = node.kind === "function" ? 42 : 12;
+    const dimensions = popupDimensionsForMember(node);
     const position = new THREE.Vector3(
       origin.x + base.x,
-      origin.y - frameHeight / 2 + layerY + node.height,
-      origin.z + base.z
+      origin.y - frameHeight / 2 + layerY + dimensions.height / 2,
+      origin.z + base.z + layoutInfo.depth * 0.22
     );
     const material = getNodeMaterial(node.kind, "popup-member", {
       color: colors[node.kind] || 0x95a4ad,
@@ -1731,10 +1832,9 @@ function placePopupMembers(memberIds, origin, columns, frameHeight, positions) {
       emissive: colors[node.kind] || 0x000000,
       emissiveIntensity: 0.08
     });
-    const sizeBoost = node.kind === "function" ? 1.9 : 1.55;
-    const boxWidth = Math.max(12, node.width * sizeBoost);
-    const boxHeight = Math.max(10, node.height * sizeBoost);
-    const boxDepth = Math.max(12, node.depth * sizeBoost);
+    const boxWidth = dimensions.width;
+    const boxHeight = dimensions.height;
+    const boxDepth = dimensions.depth;
     const mesh = new THREE.Mesh(makeNodeGeometry(node.kind, boxWidth, boxHeight, boxDepth), material);
     mesh.position.copy(position);
     mesh.userData.nodeId = memberId;
@@ -1748,15 +1848,16 @@ function placePopupMembers(memberIds, origin, columns, frameHeight, positions) {
   });
 }
 
-function placePopupDependencies(dependencyIds, origin, columns, frameHeight, positions) {
+function placePopupDependencies(dependencyIds, origin, frameHeight, positions, layoutInfo) {
   dependencyIds.forEach((dependencyId, index) => {
     const node = state.layout.find((candidate) => candidate.id === dependencyId) || state.graph.nodes.find((candidate) => candidate.id === dependencyId);
     if (!node) return;
-    const base = gridPosition(index, Math.max(1, dependencyIds.length), 74, 68, 0, -28);
+    const base = layoutInfo.positions[index] || { x: 0, z: 0 };
+    const dimensions = popupDimensionsForDependency(node);
     const position = new THREE.Vector3(
       origin.x + base.x,
-      origin.y - frameHeight / 2 + 92 + (index % 2) * 18,
-      origin.z + base.z
+      origin.y - frameHeight / 2 + 104 + dimensions.height / 2,
+      origin.z + base.z - layoutInfo.depth * 0.42 - 48
     );
     const material = getNodeMaterial(node.kind, "popup-dependency", {
       color: colors[node.kind] || 0xa7c4ff,
@@ -1765,9 +1866,9 @@ function placePopupDependencies(dependencyIds, origin, columns, frameHeight, pos
       emissive: colors[node.kind] || 0xa7c4ff,
       emissiveIntensity: 0.06
     });
-    const boxWidth = Math.max(16, (node.width || 24) * 0.85);
-    const boxHeight = Math.max(12, (node.height || 18) * 0.85);
-    const boxDepth = Math.max(16, (node.depth || 24) * 0.85);
+    const boxWidth = dimensions.width;
+    const boxHeight = dimensions.height;
+    const boxDepth = dimensions.depth;
     const mesh = new THREE.Mesh(makeNodeGeometry(node.kind, boxWidth, boxHeight, boxDepth), material);
     mesh.position.copy(position);
     mesh.userData.nodeId = dependencyId;
@@ -1778,6 +1879,45 @@ function placePopupDependencies(dependencyIds, origin, columns, frameHeight, pos
     label.position.set(position.x, position.y + boxHeight / 2 + 13, position.z);
     popupRoot.add(label);
   });
+}
+
+function popupGridLayout(nodes, dimensionsForPopupNode) {
+  if (nodes.length === 0) {
+    return { columns: 1, rows: 0, width: 0, depth: 0, cellWidth: 0, cellDepth: 0, positions: [] };
+  }
+  const dimensions = nodes.map((node) => dimensionsForPopupNode(node));
+  const maxWidth = dimensions.reduce((value, item) => Math.max(value, item.width), 0);
+  const maxDepth = dimensions.reduce((value, item) => Math.max(value, item.depth), 0);
+  const columns = Math.max(1, Math.ceil(Math.sqrt(nodes.length)));
+  const rows = Math.max(1, Math.ceil(nodes.length / columns));
+  const cellWidth = Math.max(76, maxWidth + 34);
+  const cellDepth = Math.max(68, maxDepth + 34);
+  return {
+    columns,
+    rows,
+    width: Math.max(cellWidth, columns * cellWidth),
+    depth: Math.max(cellDepth, rows * cellDepth),
+    cellWidth,
+    cellDepth,
+    positions: nodes.map((_, index) => gridPosition(index, nodes.length, cellWidth, cellDepth))
+  };
+}
+
+function popupDimensionsForMember(node) {
+  const sizeBoost = node.kind === "function" ? 1.65 : 1.38;
+  return {
+    width: Math.max(12, node.width * sizeBoost),
+    height: Math.max(10, node.height * sizeBoost),
+    depth: Math.max(12, node.depth * sizeBoost)
+  };
+}
+
+function popupDimensionsForDependency(node) {
+  return {
+    width: Math.max(18, (node.width || 24) * 0.9),
+    height: Math.max(12, (node.height || 18) * 0.9),
+    depth: Math.max(18, (node.depth || 24) * 0.9)
+  };
 }
 
 function getPopupDependencyIds(parentId, memberIds) {

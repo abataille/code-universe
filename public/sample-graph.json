@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "project": {
     "name": "SampleSwiftApp",
-    "scannedAt": "2026-06-29T09:21:20.080Z",
+    "scannedAt": "2026-07-01T09:30:56.934Z",
     "sourceRoot": "examples/SampleSwiftApp"
   },
   "nodes": [
@@ -274,7 +274,11 @@
       "name": "currentUser",
       "file": "Services.swift",
       "line": 4,
-      "metrics": {}
+      "metrics": {
+        "lines": 3,
+        "branches": 0,
+        "calls": 2
+      }
     },
     {
       "id": "function:AuthenticationService.signOut",
@@ -282,7 +286,11 @@
       "name": "signOut",
       "file": "Services.swift",
       "line": 8,
-      "metrics": {}
+      "metrics": {
+        "lines": 2,
+        "branches": 0,
+        "calls": 1
+      }
     },
     {
       "id": "type:AnalyticsService",
@@ -302,7 +310,11 @@
       "name": "recentEvents",
       "file": "Services.swift",
       "line": 13,
-      "metrics": {}
+      "metrics": {
+        "lines": 6,
+        "branches": 0,
+        "calls": 3
+      }
     },
     {
       "id": "file:SessionStore.swift",
@@ -340,7 +352,11 @@
       "name": "refresh",
       "file": "SessionStore.swift",
       "line": 7,
-      "metrics": {}
+      "metrics": {
+        "lines": 3,
+        "branches": 0,
+        "calls": 2
+      }
     },
     {
       "id": "function:SessionStore.signOut",
@@ -348,7 +364,11 @@
       "name": "signOut",
       "file": "SessionStore.swift",
       "line": 11,
-      "metrics": {}
+      "metrics": {
+        "lines": 3,
+        "branches": 0,
+        "calls": 2
+      }
     },
     {
       "id": "file:SettingsView.swift",
