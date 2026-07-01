@@ -1,6 +1,6 @@
-# Code Universe 
+# Code Universe
 
-A first view for exploring a Swift macOS/iOS codebase as a 3D software universe.
+A 3D architecture map for exploring Swift macOS and iOS codebases alongside Xcode.
 
 ## What It Does
 
@@ -34,7 +34,7 @@ PORT=4174 npm start
 
 Inside the app, click `Choose Xcode Project`, then select the `.xcodeproj` in the native macOS picker. The local server resolves the project root and scans the Swift source files on disk.
 
-Use `Load Sample Universe` any time to return to the bundled demo graph.
+Use `Load Sample Universe` any time to return to the bundled sample graph.
 
 ## Map Controls
 
@@ -77,7 +77,7 @@ The default app view is `Fast heuristic` so larger projects open quickly. Switch
 
 Available modes:
 
-- `Fast heuristic`: rough scanner for quick sketches and debugging.
+- `Fast heuristic`: fast scanner for quick architecture overviews.
 - `Best combined view`: SwiftSyntax structure plus heuristic dependency hints.
 - `SwiftSyntax accurate`: syntax-accurate declarations and structural relationships.
 - `Xcode Index map`: best local semantic links when Xcode has indexed the project.
@@ -86,7 +86,7 @@ Available modes:
 npm run scan:sample:swiftsyntax
 ```
 
-The first run resolves the `swift-syntax` Swift package dependency, so it needs network access. After that, it emits the same graph JSON shape as the prototype scanner.
+The first run resolves the `swift-syntax` Swift package dependency, so it needs network access. After that, it emits the same graph JSON shape as the app scanner.
 
 To force one scanner mode from the running app:
 
@@ -98,8 +98,8 @@ Supported values are `xcode-index`, `merged`, `swiftsyntax`, and `heuristic`. Us
 
 The Xcode index mode reads local `~/Library/Developer/Xcode/DerivedData/*/Index.noindex/DataStore` records. If no matching index store exists, build the app in Xcode once and scan again.
 
-## Prototype Notes
+## Analysis Notes
 
-The scanner is intentionally heuristic. It validates the product idea and data flow, but production analysis should move to `SwiftSyntax`, SourceKit-LSP, and Xcode index data.
+Code Universe starts with a fast heuristic scan so large projects open quickly. Use `Best combined view`, `Accurate Swift parse`, or `Xcode Index map` when you need stronger structural or semantic evidence.
 
-The viewer is intentionally shell-independent. A future Tauri, Electron, SwiftUI, or web app can reuse the same graph JSON contract.
+The viewer is shell-independent. The browser view, macOS shell, scanners, and future storage layers all use the same graph JSON contract.

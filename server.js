@@ -64,7 +64,7 @@ createServer(async (request, response) => {
     sendJson(response, 500, { error: error.message });
   }
 }).listen(port, host, () => {
-  console.log(`Code Universe prototype: http://${host}:${port}`);
+  console.log(`Code Universe: http://${host}:${port}`);
 });
 
 async function serveStatic(url, response) {

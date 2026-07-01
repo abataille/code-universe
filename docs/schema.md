@@ -1,6 +1,6 @@
 # Code Universe Graph Schema
 
-This prototype uses a small JSON graph that can later move to SQLite without changing the viewer contract.
+Code Universe uses a small JSON graph that can later move to SQLite without changing the viewer contract.
 
 ## Nodes
 
@@ -20,7 +20,7 @@ Each node describes a source-code object.
 }
 ```
 
-Supported prototype node kinds:
+Supported node kinds:
 
 - `repository`
 - `directory`
@@ -50,7 +50,7 @@ Edges describe relationships between nodes.
 }
 ```
 
-Supported prototype edge kinds:
+Supported edge kinds:
 
 - `contains`
 - `defines`
