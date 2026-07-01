@@ -3,30 +3,36 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Code Universe Prototype</title>
+    <title>Code Universe</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <main class="app-shell">
       <aside class="sidebar">
         <div class="brand">
-          <div class="brand-mark">CU</div>
+          <div class="brand-mark" aria-hidden="true">⌘</div>
           <div>
             <h1>Code Universe</h1>
-            <p>Swift app architecture explorer</p>
+            <p>Explore your Swift app as a living map</p>
           </div>
         </div>
 
+        <section class="welcome-card" aria-label="Getting started">
+          <span class="eyebrow">Start here</span>
+          <h2>Pick a project, then follow the bright paths.</h2>
+          <p>Use the map for structure, search for symbols, and click any object to see source, dependencies, and Xcode actions.</p>
+        </section>
+
         <section class="panel panel-accent">
           <h2>Project</h2>
-          <p class="panel-copy">Choose the folder that contains your `.xcodeproj`. The scan runs locally in the browser.</p>
+          <p class="panel-copy">Choose the folder that contains your `.xcodeproj`. Scanning stays on this Mac.</p>
           <div class="stack">
-            <label class="field-label" for="parserSelect">Parser</label>
+            <label class="field-label" for="parserSelect">Analysis style</label>
             <select id="parserSelect" class="search selection-field">
-              <option value="xcode-index">Xcode Index layered</option>
-              <option value="merged">Merged layered</option>
-              <option value="heuristic">Fast heuristic</option>
-              <option value="swiftsyntax">SwiftSyntax accurate</option>
+              <option value="heuristic">Fast overview</option>
+              <option value="merged">Best combined view</option>
+              <option value="swiftsyntax">Accurate Swift parse</option>
+              <option value="xcode-index">Xcode Index map</option>
             </select>
             <button id="pickProjectButton" class="button button-primary" type="button">Choose Xcode Project</button>
             <button id="compareParsersButton" class="button" type="button">Compare Parsers</button>
@@ -37,24 +43,27 @@
         </section>
 
         <section class="panel">
-          <h2>Parser Diff</h2>
+          <h2>Parser differences</h2>
           <div id="parserDiff" class="parser-diff">
-            <p>Run both parsers on the current project to see which symbols only one parser finds.</p>
+            <p>Compare analysis styles to see symbols that only one method finds.</p>
           </div>
         </section>
 
-        <label class="field-label" for="searchInput">Search symbol</label>
-        <input id="searchInput" class="search selection-field" type="search" placeholder="ContentView, AuthService..." />
+        <section class="panel panel-search">
+          <label class="field-label" for="searchInput">Find code object</label>
+          <input id="searchInput" class="search selection-field" type="search" placeholder="ContentView, AuthService..." />
+          <p class="status-copy">Press Enter to highlight the first match. Escape clears the search.</p>
+        </section>
 
         <div class="control-row">
-          <button id="viewAllButton" class="button is-active" type="button">Map</button>
+          <button id="viewAllButton" class="button is-active" type="button">Home</button>
           <button id="focusButton" class="button" type="button">Focus</button>
-          <button id="edgesButton" class="button" type="button">Edges</button>
+          <button id="edgesButton" class="button" type="button">Paths</button>
           <button id="shareMapButton" class="button" type="button">Share PNG</button>
         </div>
 
         <section class="panel">
-          <h2>Visibility</h2>
+          <h2>Map layers</h2>
           <div class="stack">
             <label class="toggle-row">
               <input id="showFilesToggle" type="checkbox" checked />
@@ -80,13 +89,13 @@
         </section>
 
         <section class="panel">
-          <h2>Edge Filters</h2>
+          <h2>Connection detail</h2>
           <div class="stack">
-            <label class="field-label" for="edgeDensitySelect">Density</label>
+            <label class="field-label" for="edgeDensitySelect">Amount of paths</label>
             <select id="edgeDensitySelect" class="search selection-field">
-              <option value="clean">Clean</option>
-              <option value="normal" selected>Normal</option>
-              <option value="everything">Everything</option>
+              <option value="clean">Quiet map</option>
+              <option value="normal" selected>Useful detail</option>
+              <option value="everything">Show everything</option>
             </select>
             <label class="toggle-row">
               <input id="edgeUsesToggle" type="checkbox" checked />
@@ -124,14 +133,14 @@
         </section>
 
         <section class="panel">
-          <h2>Selected</h2>
+          <h2>Inspector</h2>
           <div id="selectedDetails" class="details">
-            <p>Select a tower, building, or road to inspect the code graph.</p>
+            <p>Click any object in the map to inspect what it is, what it uses, and where it lives in source.</p>
           </div>
         </section>
 
         <section class="panel">
-          <h2>Graph Stats</h2>
+          <h2>Map stats</h2>
           <dl class="stats">
             <div><dt>Nodes</dt><dd id="nodeCount">0</dd></div>
             <div><dt>Edges</dt><dd id="edgeCount">0</dd></div>
@@ -158,7 +167,14 @@
           </div>
         </header>
         <canvas id="worldCanvas" aria-label="3D code universe canvas"></canvas>
-        <div class="hint">Drag to orbit. Scroll to zoom. W/A/S/D moves, Q/E lowers/raises. Click objects to inspect.</div>
+        <div id="hoverTooltip" class="hover-tooltip" hidden></div>
+        <div class="map-presets" aria-label="Map view presets">
+          <button class="preset-button is-active" type="button" data-view-preset="overview">Overview</button>
+          <button class="preset-button" type="button" data-view-preset="files">Files</button>
+          <button class="preset-button" type="button" data-view-preset="architecture">Architecture</button>
+          <button class="preset-button" type="button" data-view-preset="quiet">Quiet</button>
+        </div>
+        <div class="hint">Drag to orbit · Scroll to zoom · W/A/S/D moves · Click objects to inspect</div>
         <div class="edge-legend">
           <span><i class="edge-uses"></i>Uses</span>
           <span><i class="edge-imports"></i>Imports</span>

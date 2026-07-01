@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 const canvas = document.querySelector("#worldCanvas");
+const hoverTooltip = document.querySelector("#hoverTooltip");
 const searchInput = document.querySelector("#searchInput");
 const selectedDetails = document.querySelector("#selectedDetails");
 const viewAllButton = document.querySelector("#viewAllButton");
@@ -31,6 +32,7 @@ const projectMeta = document.querySelector("#projectMeta");
 const pickerStatus = document.querySelector("#pickerStatus");
 const scanSummary = document.querySelector("#scanSummary");
 const parserDiff = document.querySelector("#parserDiff");
+const mapPresetButtons = document.querySelectorAll("[data-view-preset]");
 
 const colors = {
   repository: 0x63d2ff,
@@ -68,7 +70,7 @@ const state = {
   showFiles: true,
   showModules: true,
   showProperties: true,
-  parserMode: "merged",
+  parserMode: "heuristic",
   parserComparison: null,
   performanceMode: false,
   edgeFilters: {
@@ -88,14 +90,16 @@ const state = {
   meshById: new Map(),
   labelById: new Map(),
   cameraAnimation: null,
-  popupFocusTarget: null
+  popupFocusTarget: null,
+  hoveredId: null,
+  mapRadius: 900
 };
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0a1218);
 scene.fog = new THREE.Fog(0x0a1218, 2600, 6200);
 
-const camera = new THREE.PerspectiveCamera(48, 1, 0.1, 3000);
+const camera = new THREE.PerspectiveCamera(48, 1, 0.1, 12000);
 const defaultCameraPosition = new THREE.Vector3(0, 530, 760);
 const defaultControlsTarget = new THREE.Vector3(0, 120, 0);
 camera.position.copy(defaultCameraPosition);
@@ -116,7 +120,7 @@ controls.zoomSpeed = 0.9;
 controls.panSpeed = 0.85;
 controls.screenSpacePanning = true;
 controls.minDistance = 180;
-controls.maxDistance = 1800;
+controls.maxDistance = 6000;
 controls.target.copy(defaultControlsTarget);
 controls.update();
 
@@ -155,29 +159,22 @@ async function bootstrap() {
   initializeParserMode();
   bindEvents();
   resize();
-  await loadInitialUniverse();
   renderer.setAnimationLoop(draw);
+  await loadInitialUniverse();
 }
 
 function initializeParserMode() {
-  const savedMode = localStorage.getItem(parserModeKey);
-  state.parserMode = ["xcode-index", "merged", "swiftsyntax", "heuristic"].includes(savedMode) ? savedMode : "merged";
+  state.parserMode = "heuristic";
+  localStorage.setItem(parserModeKey, state.parserMode);
   parserSelect.value = state.parserMode;
 }
 
 async function loadInitialUniverse() {
   const lastProjectPath = localStorage.getItem(lastProjectPathKey);
-  if (!lastProjectPath) {
-    await loadSampleUniverse();
-    return;
-  }
-
-  try {
-    await scanPath(lastProjectPath, "Last Xcode scan");
-  } catch (error) {
-    console.warn(error);
-    await loadSampleUniverse();
-    pickerStatus.textContent = "Last project could not be loaded.";
+  await loadSampleUniverse();
+  if (lastProjectPath) {
+    pickerStatus.textContent = "Ready. Your last project is remembered; choose it again when you want a fresh scan.";
+    scanSummary.textContent = `Last project: ${lastProjectPath}`;
   }
 }
 
@@ -261,12 +258,24 @@ function loadGraph(graph, descriptor) {
   state.selectedId = null;
   state.openShellId = null;
   state.query = "";
+  state.hoveredId = null;
+  state.showEdges = true;
+  state.edgeDensity = "normal";
   state.meshById = new Map();
   state.labelById = new Map();
   searchInput.value = "";
+  edgeDensitySelect.value = state.edgeDensity;
+  mapPresetButtons.forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.viewPreset === "overview");
+  });
+  updateNavigationBounds();
+  camera.position.copy(homeCameraPosition());
+  controls.target.copy(defaultControlsTarget);
+  controls.update();
   updateStats(graph, descriptor);
   buildScene();
   selectNode(state.layout.find((item) => item.kind === "repository")?.id || state.layout[0]?.id);
+  syncButtons();
 }
 
 function buildLayout(graph) {
@@ -420,14 +429,14 @@ function buildScene() {
     );
     const color = edgeRenderColor(edge);
     const points = curve.getPoints(24);
-    const geometry = new THREE.BufferGeometry().setFromPoints(points);
-    const material = new THREE.LineBasicMaterial({
+    const geometry = new THREE.TubeGeometry(curve, 24, edgeTubeRadius(edge), 6, false);
+    const material = new THREE.MeshBasicMaterial({
       color,
       transparent: true,
       opacity: edgeOpacity(edge),
-      linewidth: edge.inferred ? 1 : 1.5
+      depthWrite: false
     });
-    const line = new THREE.Line(geometry, material);
+    const line = new THREE.Mesh(geometry, material);
     const arrow = makeArrowHead(points, color);
     arrow.material.opacity = edgeOpacity(edge);
     const group = new THREE.Group();
@@ -493,10 +502,11 @@ function applyFilters() {
     const dim = state.query && !matched && nodeId !== state.selectedId;
     if (object.material) {
       const isOpenShell = isOpenedShell(nodeId);
+      const hovered = nodeId === state.hoveredId;
       object.material.wireframe = isOpenShell;
       object.material.opacity = dim ? 0.24 : 1;
       object.material.transparent = Boolean(dim);
-      object.material.emissiveIntensity = nodeId === state.selectedId ? 0.45 : matched ? 0.28 : node?.kind === "swiftui_view" ? 0.08 : 0.02;
+      object.material.emissiveIntensity = nodeId === state.selectedId ? 0.45 : hovered ? 0.34 : matched ? 0.28 : node?.kind === "swiftui_view" ? 0.08 : 0.02;
     }
   });
 
@@ -525,10 +535,15 @@ function bindEvents() {
   });
 
   canvas.addEventListener("pointermove", (event) => {
+    updateHoverFromPointer(event);
     if (!state.pointerDown) return;
     const deltaX = event.clientX - state.pointerDown.x;
     const deltaY = event.clientY - state.pointerDown.y;
     state.dragDistance = Math.max(state.dragDistance, Math.hypot(deltaX, deltaY));
+  });
+
+  canvas.addEventListener("pointerleave", () => {
+    clearHover();
   });
 
   window.addEventListener("pointerup", () => {
@@ -591,6 +606,10 @@ function bindEvents() {
 
   shareMapButton.addEventListener("click", async () => {
     await shareMapScreenshot();
+  });
+
+  mapPresetButtons.forEach((button) => {
+    button.addEventListener("click", () => applyMapPreset(button.dataset.viewPreset));
   });
 
   parserSelect.addEventListener("change", async () => {
@@ -708,9 +727,9 @@ function bindEdgeFilter(toggle, kind) {
 }
 
 function describeParser(mode) {
-  if (mode === "xcode-index") return "Xcode Index layered";
-  if (mode === "merged") return "merged layered";
-  return mode === "swiftsyntax" ? "SwiftSyntax" : "fast heuristic";
+  if (mode === "xcode-index") return "Xcode Index map";
+  if (mode === "merged") return "best combined view";
+  return mode === "swiftsyntax" ? "accurate Swift parse" : "fast overview";
 }
 
 function formatScanSummary(diagnostics) {
@@ -864,6 +883,34 @@ function resize() {
   controls.update();
 }
 
+function updateNavigationBounds() {
+  const radius = computeLayoutRadius();
+  state.mapRadius = radius;
+  controls.maxDistance = Math.max(6000, radius * 2.8);
+  camera.far = Math.max(12000, controls.maxDistance * 2.2);
+  scene.fog.near = Math.max(2600, radius * 0.9);
+  scene.fog.far = Math.max(6200, controls.maxDistance * 1.65);
+  camera.updateProjectionMatrix();
+}
+
+function computeLayoutRadius() {
+  if (state.layout.length === 0) return 900;
+  return state.layout.reduce((radius, node) => {
+    const distance = Math.hypot(node.x || 0, node.z || 0);
+    const footprint = Math.max(node.width || 0, node.depth || 0);
+    return Math.max(radius, distance + footprint);
+  }, 900);
+}
+
+function homeCameraPosition() {
+  const radius = state.mapRadius || 900;
+  return new THREE.Vector3(
+    0,
+    Math.max(defaultCameraPosition.y, radius * 0.55),
+    Math.max(defaultCameraPosition.z, radius * 0.95)
+  );
+}
+
 function applyKeyboardNavigation() {
   if (state.pressedKeys.size === 0) return;
 
@@ -896,15 +943,94 @@ function resetMapView() {
   state.selectedId = null;
   state.openShellId = null;
   state.query = "";
+  state.hoveredId = null;
   state.pressedKeys.clear();
   searchInput.value = "";
+  clearHover();
   popupRoot.clear();
   state.cameraAnimation = null;
   state.popupFocusTarget = null;
-  camera.position.copy(defaultCameraPosition);
+  camera.position.copy(homeCameraPosition());
   controls.target.copy(defaultControlsTarget);
   controls.update();
-  selectedDetails.innerHTML = `<p>Select a tower, building, or road to inspect the code graph.</p>`;
+  selectedDetails.innerHTML = `<p>Click any object in the map to inspect what it is, what it uses, and where it lives in source.</p>`;
+  syncButtons();
+}
+
+function updateHoverFromPointer(event) {
+  if (!state.graph || state.dragDistance > 6) return;
+  const rect = canvas.getBoundingClientRect();
+  state.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  state.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(state.pointer, camera);
+  const intersections = raycaster.intersectObjects([...root.children, ...popupRoot.children], true)
+    .filter((item) => nodeIdFromObject(item.object));
+  const hoveredId = pickNodeIdFromIntersections(intersections);
+  state.hoveredId = hoveredId;
+  canvas.style.cursor = hoveredId ? "pointer" : "grab";
+
+  if (!hoveredId) {
+    clearHover();
+    return;
+  }
+
+  const node = state.graph.nodes.find((candidate) => candidate.id === hoveredId);
+  if (!node) {
+    clearHover();
+    return;
+  }
+
+  hoverTooltip.hidden = false;
+  hoverTooltip.style.left = `${event.clientX - rect.left}px`;
+  hoverTooltip.style.top = `${event.clientY - rect.top}px`;
+  hoverTooltip.innerHTML = `
+    <strong>${escapeHtml(node.name)}</strong>
+    <span>${escapeHtml(friendlyKind(node.kind))}${node.file ? ` · ${escapeHtml(node.file)}:${node.line}` : ""}</span>
+  `;
+}
+
+function clearHover() {
+  state.hoveredId = null;
+  canvas.style.cursor = "grab";
+  hoverTooltip.hidden = true;
+}
+
+function applyMapPreset(preset) {
+  state.focusMode = false;
+  state.showEdges = true;
+  state.selectedEdgesOnly = false;
+  selectedEdgesOnlyToggle.checked = false;
+
+  if (preset === "files") {
+    state.showFiles = true;
+    state.showModules = false;
+    state.showProperties = false;
+    state.edgeDensity = "clean";
+  } else if (preset === "architecture") {
+    state.showFiles = true;
+    state.showModules = true;
+    state.showProperties = true;
+    state.edgeDensity = "normal";
+  } else if (preset === "quiet") {
+    state.showEdges = false;
+    state.edgeDensity = "clean";
+  } else {
+    state.showFiles = true;
+    state.showModules = true;
+    state.showProperties = true;
+    state.edgeDensity = "normal";
+  }
+
+  showFilesToggle.checked = state.showFiles;
+  showModulesToggle.checked = state.showModules;
+  showPropertiesToggle.checked = state.showProperties;
+  edgeDensitySelect.value = state.edgeDensity;
+  mapPresetButtons.forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.viewPreset === preset);
+  });
+
+  buildScene();
+  buildMemberPopup();
   syncButtons();
 }
 
@@ -968,15 +1094,23 @@ function renderDetails(node) {
     .join("<br>");
 
   return `
-    <p><strong>${escapeHtml(node.name)}</strong><br>${escapeHtml(node.kind)} · ${escapeHtml(kindMeaning)} ${node.file ? `in <code>${escapeHtml(node.file)}:${node.line}</code>` : ""}</p>
-    ${node.source ? `<p>Source: <code>${escapeHtml(node.source)}</code>${node.inferred ? " · inferred hint" : ""}${node.indexResolved ? " · Xcode index resolved" : ""}${node.confidence ? ` · confidence <code>${escapeHtml(node.confidence)}</code>` : ""}</p>` : ""}
+    <div class="detail-card">
+      <div class="detail-title">
+        <h3>${escapeHtml(node.name)}</h3>
+        <span class="detail-badge">${escapeHtml(friendlyKind(node.kind))}</span>
+      </div>
+      <p>${escapeHtml(kindMeaning)}${node.file ? ` · <code>${escapeHtml(node.file)}:${node.line}</code>` : ""}</p>
+    </div>
+    ${node.source ? `<p>Found by <code>${escapeHtml(node.source)}</code>${node.inferred ? " · inferred hint" : ""}${node.indexResolved ? " · Xcode index resolved" : ""}${node.confidence ? ` · confidence <code>${escapeHtml(node.confidence)}</code>` : ""}</p>` : ""}
     ${node.file ? `<div class="source-actions"><button class="button" type="button" data-source-node-id="${escapeHtml(node.id)}">Source</button><button class="button" type="button" data-xcode-node-id="${escapeHtml(node.id)}">Open in Xcode</button></div><div id="sourcePreview" class="source-preview"></div>` : ""}
-    <p>Metrics: <code>${escapeHtml(JSON.stringify(node.metrics || {}))}</code></p>
-    <p><strong>Members</strong><br>${memberIds.length > 0 ? `${memberIds.length} functions / properties shown in the 3D inspector popup.` : "No inspectable members."}</p>
-    ${ownedState.length > 0 ? `<p><strong>State properties</strong><br>${names(ownedState, "out")}</p>` : ""}
-    ${node.kind === "function" ? `<p><strong>Outside parent</strong><br>${names(externalUses, "out") || "No external type usage detected."}</p>` : ""}
-    <p><strong>Uses</strong><br>${names(outgoing.filter((edge) => edge.kind !== "owns_state"), "out") || "No outgoing relationships yet."}</p>
-    <p><strong>Used by</strong><br>${names(incoming, "in") || "No incoming relationships yet."}</p>
+    <div class="detail-grid">
+      <p><strong>Complexity</strong><br><code>${escapeHtml(JSON.stringify(node.metrics || {}))}</code></p>
+      <p><strong>Inside this object</strong><br>${memberIds.length > 0 ? `${memberIds.length} functions / properties in the 3D popup.` : "No inspectable members yet."}</p>
+      ${ownedState.length > 0 ? `<p><strong>State it owns</strong><br>${names(ownedState, "out")}</p>` : ""}
+      ${node.kind === "function" ? `<p><strong>Uses outside parent</strong><br>${names(externalUses, "out") || "No external type usage detected."}</p>` : ""}
+      <p><strong>Uses</strong><br>${names(outgoing.filter((edge) => edge.kind !== "owns_state"), "out") || "No outgoing relationships yet."}</p>
+      <p><strong>Used by</strong><br>${names(incoming, "in") || "No incoming relationships yet."}</p>
+    </div>
   `;
 }
 
@@ -1102,7 +1236,7 @@ function passesEdgeDensity(edge) {
 
 function updateStats(graph, descriptor) {
   projectName.textContent = graph.project.name;
-  projectMeta.textContent = `${descriptor} · ${new Date(graph.project.scannedAt).toLocaleString()} · ${graph.nodes.length} nodes`;
+  projectMeta.textContent = `${descriptor} · ${new Date(graph.project.scannedAt).toLocaleString()} · ${graph.nodes.length} items`;
   document.querySelector("#nodeCount").textContent = graph.nodes.length;
   document.querySelector("#edgeCount").textContent = graph.edges.length;
   document.querySelector("#viewCount").textContent = graph.nodes.filter((node) => node.kind === "swiftui_view").length;
@@ -1113,6 +1247,9 @@ function syncButtons() {
   focusButton.classList.toggle("is-active", state.focusMode);
   edgesButton.classList.toggle("is-active", state.showEdges);
   viewAllButton.classList.toggle("is-active", !state.focusMode);
+  if (!state.showEdges) {
+    mapPresetButtons.forEach((button) => button.classList.toggle("is-active", button.dataset.viewPreset === "quiet"));
+  }
 }
 
 async function shareMapScreenshot() {
@@ -1351,7 +1488,7 @@ function getBasicMaterial(key, options) {
 }
 
 function edgeColor(kind) {
-  if (kind === "uses") return 0x7cf1b8;
+  if (kind === "uses") return 0xff4f5f;
   if (kind === "imports") return 0x63d2ff;
   if (kind === "owns_state") return 0xff6b78;
   return 0xffffff;
@@ -1363,8 +1500,13 @@ function edgeRenderColor(edge) {
 }
 
 function edgeOpacity(edge) {
-  if (edge.source === "xcode-index") return 0.72;
-  return edge.inferred ? 0.28 : 0.58;
+  if (edge.source === "xcode-index") return 0.82;
+  return edge.inferred ? 0.38 : 0.72;
+}
+
+function edgeTubeRadius(edge) {
+  if (edge.source === "xcode-index") return 1.45;
+  return edge.inferred ? 0.8 : 1.15;
 }
 
 function makeArrowHead(points, color) {
@@ -1391,6 +1533,16 @@ function describeKind(kind) {
   if (kind === "function") return "method or function";
   if (kind === "property") return "stored or computed property";
   return "code structure";
+}
+
+function friendlyKind(kind) {
+  if (kind === "swiftui_view") return "View";
+  if (kind === "repository") return "App";
+  if (kind === "module") return "Module";
+  if (kind === "service") return "Service";
+  if (kind === "function") return "Function";
+  if (kind === "property") return "State";
+  return kind.replaceAll("_", " ");
 }
 
 function getInspectableMemberIds(nodeId) {

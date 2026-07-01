@@ -59,14 +59,14 @@ CODE_UNIVERSE_URL=http://127.0.0.1:4174 npm run mac:run
 
 ## Parser Modes
 
-The default app view is `Merged layered`: SwiftSyntax supplies the structural nodes, and the JavaScript heuristic scanner overlays lower-confidence inferred hints. `Xcode Index layered` can add higher-confidence semantic links when the project has been built or indexed by Xcode.
+The default app view is `Fast heuristic` so larger projects open quickly. Switch to `Best combined view`, `Accurate Swift parse`, or `Xcode Index map` when you want deeper analysis.
 
 Available modes:
 
-- `Xcode Index layered`: best local view when Xcode has indexed the project.
-- `Merged layered`: SwiftSyntax structure plus heuristic dependency hints.
+- `Fast heuristic`: rough scanner for quick sketches and debugging.
+- `Best combined view`: SwiftSyntax structure plus heuristic dependency hints.
 - `SwiftSyntax accurate`: syntax-accurate declarations and structural relationships.
-- `Fast heuristic`: rough fallback scanner for quick sketches and debugging.
+- `Xcode Index map`: best local semantic links when Xcode has indexed the project.
 
 ```sh
 npm run scan:sample:swiftsyntax
