@@ -32,7 +32,7 @@ If the port is occupied:
 PORT=4174 npm start
 ```
 
-Inside the app, click `Choose Xcode Project`, then select the `.xcodeproj` in the native macOS picker. The local server resolves the project root and scans the Swift source files on disk.
+Inside the app, click `Choose Project or File`, then select an `.xcodeproj`, `project.pbxproj`, folder, or `.swift` file in the native macOS picker. The local server resolves the scan root and scans the Swift source files on disk.
 
 Use `Load Sample Universe` any time to return to the bundled sample graph.
 
@@ -41,6 +41,7 @@ Use `Load Sample Universe` any time to return to the bundled sample graph.
 - `Density`: switch edges between `Clean`, `Normal`, and `Everything`.
 - `Share PNG`: exports the current 3D map as a screenshot. Browsers with Web Share support open the native share sheet; others download a PNG.
 - `Search`: type a symbol and press `Enter`; matching objects are highlighted.
+- `W/A/S/D` or arrow keys: move across the map. `PageUp/PageDown` or `E/Q` move vertically.
 
 ## Mac App Shell
 

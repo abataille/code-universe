@@ -590,14 +590,24 @@ h1 {
 
 .hint {
   position: absolute;
+  left: 18px;
   right: 18px;
-  bottom: 18px;
+  bottom: 106px;
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
   padding: 10px 12px;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: 14px;
   background: rgba(10, 14, 16, 0.74);
+  color: var(--muted);
   font-size: 12px;
   backdrop-filter: blur(14px);
+}
+
+.hint span {
+  white-space: nowrap;
 }
 
 .hover-tooltip {

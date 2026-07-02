@@ -25,7 +25,7 @@
 
         <section class="panel panel-accent">
           <h2>Project</h2>
-          <p class="panel-copy">Choose the folder that contains your `.xcodeproj`. Scanning stays on this Mac.</p>
+          <p class="panel-copy">Choose an Xcode project or a single Swift file. Scanning stays on this Mac.</p>
           <div class="stack">
             <label class="field-label" for="parserSelect">Analysis style</label>
             <select id="parserSelect" class="search selection-field">
@@ -34,7 +34,7 @@
               <option value="swiftsyntax">Accurate Swift parse</option>
               <option value="xcode-index">Xcode Index map</option>
             </select>
-            <button id="pickProjectButton" class="button button-primary" type="button">Choose Xcode Project</button>
+            <button id="pickProjectButton" class="button button-primary" type="button">Choose Project or File</button>
             <button id="compareParsersButton" class="button" type="button">Compare Parsers</button>
             <button id="loadSampleButton" class="button" type="button">Load Sample Universe</button>
             <p id="pickerStatus" class="status-copy">No project chosen yet.</p>
@@ -174,7 +174,13 @@
           <button class="preset-button" type="button" data-view-preset="architecture">Architecture</button>
           <button class="preset-button" type="button" data-view-preset="quiet">Quiet</button>
         </div>
-        <div class="hint">Drag to orbit · Scroll to zoom · W/A/S/D moves · Click objects to inspect</div>
+        <div class="hint control-legend" aria-label="Camera controls">
+          <span>Drag: orbit</span>
+          <span>Scroll: zoom</span>
+          <span>W/A/S/D or arrows: move</span>
+          <span>PageUp/PageDown or E/Q: lift</span>
+          <span>Click: inspect</span>
+        </div>
         <div class="edge-legend">
           <span><i class="edge-uses"></i>Uses</span>
           <span><i class="edge-imports"></i>Imports</span>

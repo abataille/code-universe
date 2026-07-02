@@ -212,10 +212,14 @@ async function pickAndScanProject() {
   }
 
   loadGraph(payload.graph, "Native Xcode scan");
-  if (payload.diagnostics.sourceRoot) {
-    localStorage.setItem(lastProjectPathKey, payload.diagnostics.sourceRoot);
+  focusSelectedFile(payload.diagnostics);
+  const rememberedPath = payload.diagnostics.selectedFile ? payload.diagnostics.pickedPath : payload.diagnostics.sourceRoot;
+  if (rememberedPath) {
+    localStorage.setItem(lastProjectPathKey, rememberedPath);
   }
-  pickerStatus.textContent = `Loaded ${payload.graph.project.name} with ${describeParser(payload.diagnostics.scanner)}.`;
+  pickerStatus.textContent = payload.diagnostics.selectedFile
+    ? `Showing only ${payload.diagnostics.selectedFile} with ${describeParser(payload.diagnostics.scanner)}.`
+    : `Loaded ${payload.graph.project.name} with ${describeParser(payload.diagnostics.scanner)}.`;
   scanSummary.textContent = formatScanSummary(payload.diagnostics);
 }
 
@@ -235,8 +239,12 @@ async function scanPath(path, descriptor) {
   }
 
   loadGraph(payload.graph, descriptor);
-  localStorage.setItem(lastProjectPathKey, payload.diagnostics.sourceRoot);
-  pickerStatus.textContent = `Loaded ${payload.graph.project.name} with ${describeParser(payload.diagnostics.scanner)}.`;
+  focusSelectedFile(payload.diagnostics);
+  const rememberedPath = payload.diagnostics.selectedFile ? payload.diagnostics.pickedPath : payload.diagnostics.sourceRoot;
+  localStorage.setItem(lastProjectPathKey, rememberedPath);
+  pickerStatus.textContent = payload.diagnostics.selectedFile
+    ? `Showing only ${payload.diagnostics.selectedFile} with ${describeParser(payload.diagnostics.scanner)}.`
+    : `Loaded ${payload.graph.project.name} with ${describeParser(payload.diagnostics.scanner)}.`;
   scanSummary.textContent = formatScanSummary(payload.diagnostics);
 }
 
@@ -287,6 +295,18 @@ function loadGraph(graph, descriptor) {
   buildScene();
   selectNode(state.layout.find((item) => item.kind === "repository")?.id || state.layout[0]?.id);
   syncButtons();
+}
+
+function focusSelectedFile(diagnostics) {
+  const selectedFile = diagnostics?.selectedFile;
+  if (!selectedFile) return;
+  const fileNode = state.graph?.nodes.find((node) => node.kind === "file" && node.file === selectedFile);
+  if (!fileNode) {
+    pickerStatus.textContent = `Scanned folder, but could not find ${selectedFile} in the map.`;
+    return;
+  }
+  selectNode(fileNode.id);
+  pickerStatus.textContent = `Showing only ${selectedFile}.`;
 }
 
 function buildLayout(graph) {
@@ -583,7 +603,7 @@ function bindEvents() {
   window.addEventListener("keydown", (event) => {
     if (event.target instanceof HTMLInputElement) return;
     const key = event.key.toLowerCase();
-    if (!["w", "a", "s", "d", "q", "e", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(key)) return;
+    if (!["w", "a", "s", "d", "q", "e", "pageup", "pagedown", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(key)) return;
     event.preventDefault();
     state.pressedKeys.add(key);
   });
@@ -767,6 +787,9 @@ function formatScanSummary(diagnostics) {
     `${diagnostics.swiftFileCount} Swift files`,
     `${diagnostics.typeCount} types`
   ];
+  if (diagnostics.focusedFile) {
+    parts.unshift(`Focused file: ${diagnostics.focusedFile}`);
+  }
   if (diagnostics.heuristicHintEdges !== undefined) {
     parts.push(`${diagnostics.heuristicHintEdges} inferred hint edges`);
   }
@@ -956,8 +979,8 @@ function applyKeyboardNavigation() {
   if (state.pressedKeys.has("s") || state.pressedKeys.has("arrowdown")) movement.sub(forward);
   if (state.pressedKeys.has("d") || state.pressedKeys.has("arrowright")) movement.add(right);
   if (state.pressedKeys.has("a") || state.pressedKeys.has("arrowleft")) movement.sub(right);
-  if (state.pressedKeys.has("e")) movement.y += 1;
-  if (state.pressedKeys.has("q")) movement.y -= 1;
+  if (state.pressedKeys.has("e") || state.pressedKeys.has("pageup")) movement.y += 1;
+  if (state.pressedKeys.has("q") || state.pressedKeys.has("pagedown")) movement.y -= 1;
   if (movement.lengthSq() === 0) return;
 
   const distance = camera.position.distanceTo(controls.target);
@@ -1114,6 +1137,7 @@ function renderDetails(node) {
   const memberIds = getInspectableMemberIds(node.id);
   const externalUses = getExternalUses(node);
   const ownedState = getOwnedState(node);
+  const volumeDetails = describeVolumeDrivers(node);
   const names = (edges, direction) => edges
     .slice(0, 6)
     .map((edge) => {
@@ -1134,7 +1158,7 @@ function renderDetails(node) {
     ${node.source ? `<p>Found by <code>${escapeHtml(node.source)}</code>${node.inferred ? " · inferred hint" : ""}${node.indexResolved ? " · Xcode index resolved" : ""}${node.confidence ? ` · confidence <code>${escapeHtml(node.confidence)}</code>` : ""}</p>` : ""}
     ${node.file ? `<div class="source-actions"><button class="button" type="button" data-source-node-id="${escapeHtml(node.id)}">Source</button><button class="button" type="button" data-xcode-node-id="${escapeHtml(node.id)}">Open in Xcode</button></div><div id="sourcePreview" class="source-preview"></div>` : ""}
     <div class="detail-grid">
-      <p><strong>Complexity</strong><br><code>${escapeHtml(JSON.stringify(node.metrics || {}))}</code></p>
+      <p><strong>Volume drivers</strong><br>${volumeDetails}</p>
       <p><strong>Inside this object</strong><br>${memberIds.length > 0 ? `${memberIds.length} functions / properties in the 3D popup.` : "No inspectable members yet."}</p>
       ${ownedState.length > 0 ? `<p><strong>State it owns</strong><br>${names(ownedState, "out")}</p>` : ""}
       ${node.kind === "function" ? `<p><strong>Uses outside parent</strong><br>${names(externalUses, "out") || "No external type usage detected."}</p>` : ""}
@@ -1212,6 +1236,70 @@ function getExternalUses(node) {
 
 function getOwnedState(node) {
   return state.graph.edges.filter((edge) => edge.kind === "owns_state" && edge.from === node.id);
+}
+
+function describeVolumeDrivers(node) {
+  const dimensions = dimensionsForNode(node);
+  const volume = dimensions.width * dimensions.height * dimensions.depth;
+  if (node.kind === "file") {
+    const lines = node.metrics?.lines || 30;
+    return [
+      `size <code>${dimensions.width}×${dimensions.depth}×${dimensions.height}</code>`,
+      `volume <code>${formatNumber(volume)}</code>`,
+      `lines <code>${formatNumber(lines)}</code>`
+    ].join("<br>");
+  }
+
+  const complexity = complexityForNode(node);
+  const normalized = normalizedComplexityForNode(node, complexity);
+  const edgeCounts = graphEdgeCountsForNode(node.id);
+  const rawMetrics = node.metrics || {};
+  const factors = [
+    `score <code>${formatNumber(complexity)}</code>`,
+    `${escapeHtml(normalized.label)} among ${escapeHtml(normalized.kindLabel)} <code>${normalized.percentile}%</code>`,
+    `scale <code>${formatNumber(Math.cbrt(complexity))}</code>`,
+    `size <code>${dimensions.width}×${dimensions.depth}×${dimensions.height}</code>`,
+    `volume <code>${formatNumber(volume)}</code>`
+  ];
+
+  if (node.kind === "function") {
+    factors.push(
+      `lines <code>${formatNumber(rawMetrics.lines || 0)}</code> · branches <code>${formatNumber(rawMetrics.branches || 0)}</code> · calls <code>${formatNumber(rawMetrics.calls || 0)}</code>`,
+      `uses <code>${edgeCounts.outgoingUses}</code> · member uses <code>${edgeCounts.memberUses}</code> · used by <code>${edgeCounts.incoming}</code>`
+    );
+  } else if (node.kind === "property") {
+    factors.push(`used by <code>${edgeCounts.incoming}</code> · uses <code>${edgeCounts.outgoingUses}</code>`);
+  } else if (node.kind === "module" || node.kind === "repository") {
+    factors.push("fixed baseline object");
+  } else {
+    factors.push(
+      `methods <code>${formatNumber(rawMetrics.methods || 0)}</code> · properties <code>${formatNumber(rawMetrics.properties || 0)}</code>`,
+      `members <code>${edgeCounts.definedMembers}</code> · uses <code>${edgeCounts.outgoingUses}</code> · used by <code>${edgeCounts.incoming}</code>`
+    );
+  }
+
+  return factors.join("<br>");
+}
+
+function normalizedComplexityForNode(node, complexity = complexityForNode(node)) {
+  const peers = (state.graph?.nodes || []).filter((candidate) => candidate.kind === node.kind);
+  if (peers.length <= 1) {
+    return { percentile: 100, label: "only object", kindLabel: friendlyKind(node.kind).toLowerCase() };
+  }
+
+  const peerScores = peers.map((candidate) => complexityForNode(candidate)).sort((left, right) => left - right);
+  const lowerOrEqual = peerScores.filter((score) => score <= complexity).length;
+  const percentile = Math.round((lowerOrEqual / peerScores.length) * 100);
+  const label = percentile >= 85 ? "hotspot" : percentile >= 60 ? "above average" : percentile >= 35 ? "typical" : "small";
+  return {
+    percentile,
+    label,
+    kindLabel: `${friendlyKind(node.kind).toLowerCase()} objects`
+  };
+}
+
+function formatNumber(value) {
+  return Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
 function focusedNeighborhood() {

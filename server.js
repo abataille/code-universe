@@ -104,7 +104,11 @@ async function scanExplicitPath(inputPath, scanner) {
 
 async function scanResolvedPath(inputPath, scanner) {
   const resolvedInput = resolve(inputPath);
+  const inputEntry = await stat(resolvedInput);
   const projectRoot = await resolveProjectRoot(resolvedInput);
+  const selectedSwiftFile = !inputEntry.isDirectory() && resolvedInput.endsWith(".swift")
+    ? relative(projectRoot, resolvedInput)
+    : null;
   const resolvedScanner = resolveScannerMode(scanner);
   const { graph, diagnostics } = resolvedScanner === "xcode-index"
     ? await scanSwiftFolderWithXcodeIndex(projectRoot)
@@ -114,21 +118,73 @@ async function scanResolvedPath(inputPath, scanner) {
         ? await scanSwiftFolderWithSwiftSyntax(projectRoot)
         : await scanSwiftFolder(projectRoot);
 
+  const displayedGraph = selectedSwiftFile
+    ? graphForSelectedSwiftFile(graph, selectedSwiftFile)
+    : graph;
+  const displayedDiagnostics = selectedSwiftFile
+    ? diagnosticsForGraph(diagnostics, displayedGraph, selectedSwiftFile)
+    : diagnostics;
+
   return {
     graph: {
-      ...graph,
+      ...displayedGraph,
       project: {
-        ...graph.project,
+        ...displayedGraph.project,
         pickedPath: resolvedInput,
-        sourceRoot: projectRoot
+        sourceRoot: projectRoot,
+        selectedFile: selectedSwiftFile
       }
     },
     diagnostics: {
-      ...diagnostics,
+      ...displayedDiagnostics,
       scanner: resolvedScanner,
       pickedPath: resolvedInput,
-      sourceRoot: projectRoot
+      sourceRoot: projectRoot,
+      selectedFile: selectedSwiftFile
     }
+  };
+}
+
+function graphForSelectedSwiftFile(graph, selectedFile) {
+  const fileNode = graph.nodes.find((node) => node.kind === "file" && node.file === selectedFile);
+  if (!fileNode) return graph;
+
+  const importedModuleIds = new Set(graph.edges
+    .filter((edge) => edge.from === fileNode.id && edge.kind === "imports")
+    .map((edge) => edge.to));
+  const visibleNodes = graph.nodes.filter((node) =>
+    node.id === "repo:root"
+    || node.id === fileNode.id
+    || node.file === selectedFile
+    || importedModuleIds.has(node.id)
+  );
+  const visibleIds = new Set(visibleNodes.map((node) => node.id));
+  const visibleEdges = graph.edges.filter((edge) => visibleIds.has(edge.from) && visibleIds.has(edge.to));
+
+  return {
+    ...graph,
+    project: {
+      ...graph.project,
+      name: selectedFile,
+      focusedFile: selectedFile
+    },
+    nodes: visibleNodes,
+    edges: visibleEdges
+  };
+}
+
+function diagnosticsForGraph(diagnostics, graph, selectedFile) {
+  return {
+    ...diagnostics,
+    focusedFile: selectedFile,
+    fullSwiftFileCount: diagnostics.swiftFileCount,
+    fullTypeCount: diagnostics.typeCount,
+    fullFunctionCount: diagnostics.functionCount,
+    fullPropertyCount: diagnostics.propertyCount,
+    swiftFileCount: graph.nodes.filter((node) => node.kind === "file").length,
+    typeCount: graph.nodes.filter((node) => node.id.startsWith("type:")).length,
+    functionCount: graph.nodes.filter((node) => node.kind === "function").length,
+    propertyCount: graph.nodes.filter((node) => node.kind === "property").length
   };
 }
 
@@ -543,7 +599,7 @@ async function resolveProjectRoot(inputPath) {
 
 async function showNativeProjectPicker() {
   const script = `
-set chosenItem to choose file with prompt "Choose an .xcodeproj or project.pbxproj file"
+set chosenItem to choose file with prompt "Choose an .xcodeproj, project.pbxproj, or Swift file"
 POSIX path of chosenItem
 `;
 
