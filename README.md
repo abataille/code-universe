@@ -2,13 +2,33 @@
 
 A 3D architecture map for exploring Swift macOS and iOS codebases alongside Xcode.
 
+Code Universe turns a Swift project into an interactive spatial map: files become planes, SwiftUI views and services get distinct shapes, functions and properties sit inside their owning types, and dependency paths show how objects relate. It is built for fast orientation when a codebase feels too large to hold in your head.
+
+It runs locally. Your source stays on your Mac.
+
+## Who It Is For
+
+- Swift developers who want a quick architecture overview before editing.
+- Teams onboarding to an unfamiliar iOS or macOS codebase.
+- Solo builders who want to spot dense files, services, and dependency hotspots.
+- Xcode users who want a visual companion, not a replacement IDE.
+
 ## What It Does
 
-- Scans a folder of `.swift` files.
+- Scans `.xcodeproj`, `project.pbxproj`, folders, or single `.swift` files.
 - Extracts files, types, functions, properties, imports, and basic relationships.
 - Detects SwiftUI `View` types, services, stores, and simple models.
-- Writes a portable graph JSON file.
 - Displays the graph as an interactive 3D map in the browser.
+- Opens selected source locations back in Xcode.
+- Offers parser modes from fast heuristic scanning to SwiftSyntax and Xcode index-assisted maps.
+
+## Repository Topics
+
+Suggested GitHub topics:
+
+```text
+swift xcode ios macos architecture visualization threejs swiftsyntax code-analysis developer-tools
+```
 
 ## Screenshot
 
