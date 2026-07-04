@@ -781,6 +781,40 @@ h1 {
   background: var(--muted);
 }
 
+.axis-legend {
+  position: absolute;
+  left: 18px;
+  bottom: 116px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(99, 210, 255, 0.24);
+  border-radius: 12px;
+  background: rgba(7, 13, 16, 0.76);
+  color: var(--muted);
+  font-size: 12px;
+  backdrop-filter: blur(14px);
+}
+
+.axis-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.axis-legend b {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  background: rgba(99, 210, 255, 0.16);
+  color: var(--accent);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 @media (max-width: 860px) {
   body {
     overflow: auto;
@@ -813,6 +847,11 @@ h1 {
 
   .shape-legend {
     right: 18px;
+  }
+
+  .axis-legend {
+    right: 18px;
+    bottom: 128px;
   }
 
   .map-presets {

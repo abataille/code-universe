@@ -11,7 +11,10 @@ const port = Number(process.env.PORT || 4173);
 const host = process.env.HOST || "127.0.0.1";
 const root = join(process.cwd(), "public");
 const scannerMode = process.env.CODE_UNIVERSE_SCANNER || "merged";
-const swiftSyntaxTimeoutMs = Number(process.env.CODE_UNIVERSE_SWIFTSYNTAX_TIMEOUT_MS || 12000);
+const swiftSyntaxTimeoutMs = Number(process.env.CODE_UNIVERSE_SWIFTSYNTAX_TIMEOUT_MS || 45000);
+const activeClients = new Map();
+let shutdownTimer = null;
+let pruneTimer = null;
 
 const contentTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -20,10 +23,31 @@ const contentTypes = new Map([
   [".json", "application/json; charset=utf-8"]
 ]);
 
-createServer(async (request, response) => {
+const server = createServer(async (request, response) => {
   const url = new URL(request.url || "/", `http://${host}:${port}`);
 
   try {
+    if (url.pathname === "/api/client-open" && request.method === "POST") {
+      const clientId = await readClientId(request);
+      registerClient(clientId);
+      sendJson(response, 200, { ok: true });
+      return;
+    }
+
+    if (url.pathname === "/api/client-heartbeat" && request.method === "POST") {
+      const clientId = await readClientId(request);
+      registerClient(clientId);
+      sendJson(response, 200, { ok: true });
+      return;
+    }
+
+    if (url.pathname === "/api/client-close" && request.method === "POST") {
+      const clientId = await readClientId(request);
+      unregisterClient(clientId);
+      sendJson(response, 200, { ok: true });
+      return;
+    }
+
     if (url.pathname === "/api/pick-project" && request.method === "POST") {
       const body = await readJsonBody(request);
       const payload = await pickAndScanProject(body?.scanner);
@@ -63,7 +87,9 @@ createServer(async (request, response) => {
   } catch (error) {
     sendJson(response, 500, { error: error.message });
   }
-}).listen(port, host, () => {
+});
+
+server.listen(port, host, () => {
   console.log(`Code Universe: http://${host}:${port}`);
 });
 
@@ -618,6 +644,66 @@ async function readJsonBody(request) {
   }
   if (chunks.length === 0) return null;
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+async function readClientId(request) {
+  const chunks = [];
+  for await (const chunk of request) {
+    chunks.push(chunk);
+  }
+  if (chunks.length === 0) return null;
+
+  const text = Buffer.concat(chunks).toString("utf8").trim();
+  if (!text) return null;
+
+  try {
+    const body = JSON.parse(text);
+    return typeof body?.clientId === "string" ? body.clientId : null;
+  } catch {
+    return text;
+  }
+}
+
+function registerClient(clientId) {
+  if (!clientId) return;
+  activeClients.set(clientId, Date.now());
+  if (shutdownTimer) {
+    clearTimeout(shutdownTimer);
+    shutdownTimer = null;
+  }
+  scheduleClientPrune();
+}
+
+function unregisterClient(clientId) {
+  if (clientId) {
+    activeClients.delete(clientId);
+  }
+  scheduleShutdownIfIdle();
+}
+
+function scheduleClientPrune() {
+  if (pruneTimer) return;
+  pruneTimer = setInterval(() => {
+    const staleBefore = Date.now() - 45000;
+    for (const [clientId, lastSeen] of activeClients) {
+      if (lastSeen < staleBefore) {
+        activeClients.delete(clientId);
+      }
+    }
+    scheduleShutdownIfIdle();
+  }, 15000);
+  pruneTimer.unref?.();
+}
+
+function scheduleShutdownIfIdle() {
+  if (activeClients.size > 0 || shutdownTimer) return;
+  shutdownTimer = setTimeout(() => {
+    if (activeClients.size > 0) return;
+    console.log("Code Universe: web app closed, shutting down server.");
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 1200).unref?.();
+  }, 3500);
+  shutdownTimer.unref?.();
 }
 
 function sendJson(response, statusCode, payload) {

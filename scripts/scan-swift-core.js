@@ -54,6 +54,7 @@ export async function scanSwiftFolder(inputRoot) {
       if (declarationMatch) {
         const [, declarationKind, name, inheritance = ""] = declarationMatch;
         const nodeKind = classifyType(declarationKind, name, inheritance, code);
+        const declarationSource = extractDeclarationBody(codeLines, index);
         const node = {
           id: `type:${name}`,
           kind: nodeKind,
@@ -61,7 +62,7 @@ export async function scanSwiftFolder(inputRoot) {
           name,
           file: fileName,
           line: lineNumber,
-          metrics: { methods: 0, properties: 0 }
+          metrics: { lines: countSourceLines(declarationSource), methods: 0, properties: 0 }
         };
 
         addNode(nodes, node);
@@ -227,22 +228,22 @@ function referencesMember(source, memberName) {
 }
 
 function extractFunctionBody(lines, startIndex) {
+  return extractDeclarationBody(lines, startIndex);
+}
+
+function extractDeclarationBody(lines, startIndex) {
   const collected = [];
   let depth = 0;
   let foundOpeningBrace = false;
+  const braceScan = createBraceScanState();
 
   for (let index = startIndex; index < lines.length; index += 1) {
     const line = lines[index];
     collected.push(line);
 
-    for (const character of line) {
-      if (character === "{") {
-        depth += 1;
-        foundOpeningBrace = true;
-      } else if (character === "}") {
-        depth -= 1;
-      }
-    }
+    const braceDelta = braceDeltaOutsideStrings(line, braceScan);
+    if (braceDelta > 0) foundOpeningBrace = true;
+    depth += braceDelta;
 
     if (foundOpeningBrace && depth <= 0) break;
   }
@@ -250,18 +251,76 @@ function extractFunctionBody(lines, startIndex) {
   return collected.join("\n");
 }
 
+function createBraceScanState() {
+  return {
+    inString: false,
+    stringDelimiter: ""
+  };
+}
+
+function braceDeltaOutsideStrings(line, state) {
+  let delta = 0;
+  let index = 0;
+
+  while (index < line.length) {
+    const character = line[index];
+
+    if (state.inString) {
+      if (character === "\\" && state.stringDelimiter === "\"") {
+        index += 2;
+        continue;
+      }
+      if (line.startsWith(state.stringDelimiter, index)) {
+        index += state.stringDelimiter.length;
+        state.inString = false;
+        state.stringDelimiter = "";
+        continue;
+      }
+      index += 1;
+      continue;
+    }
+
+    if (line.startsWith("\"\"\"", index)) {
+      state.inString = true;
+      state.stringDelimiter = "\"\"\"";
+      index += 3;
+      continue;
+    }
+
+    if (character === "\"") {
+      state.inString = true;
+      state.stringDelimiter = "\"";
+      index += 1;
+      continue;
+    }
+
+    if (character === "{") {
+      delta += 1;
+    } else if (character === "}") {
+      delta -= 1;
+    }
+    index += 1;
+  }
+
+  return delta;
+}
+
 function metricsForFunctionSource(source) {
+  const branchMatches = source.match(/\b(if|else if|switch|case|for|while|guard|catch|async let|Task)\b|\?\s*[^:]+:/g) || [];
+  const callMatches = source.match(/\b[A-Za-z_][A-Za-z0-9_]*\s*\(/g) || [];
+  return {
+    lines: countSourceLines(source),
+    branches: branchMatches.length,
+    calls: callMatches.length
+  };
+}
+
+function countSourceLines(source) {
   const lines = source
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line && !line.startsWith("//"));
-  const branchMatches = source.match(/\b(if|else if|switch|case|for|while|guard|catch|async let|Task)\b|\?\s*[^:]+:/g) || [];
-  const callMatches = source.match(/\b[A-Za-z_][A-Za-z0-9_]*\s*\(/g) || [];
-  return {
-    lines: Math.max(1, lines.length),
-    branches: branchMatches.length,
-    calls: callMatches.length
-  };
+  return Math.max(1, lines.length);
 }
 
 function stripSwiftComments(source) {

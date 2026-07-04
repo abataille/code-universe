@@ -118,6 +118,7 @@ final class Collector: SyntaxVisitor {
 
     let name = node.name.text
     let id = "function:\(currentType.name).\(name)"
+    let functionSource = stripSwiftComments(node.trimmedDescription)
     nodes[id] = GraphNode(
       id: id,
       kind: "function",
@@ -125,11 +126,11 @@ final class Collector: SyntaxVisitor {
       name: name,
       file: file,
       line: lineNumber(for: Syntax(node)),
-      metrics: [:]
+      metrics: metricsForFunctionSource(functionSource)
     )
     edges.append(GraphEdge(from: currentType.id, to: id, kind: "defines"))
     currentType.methods += 1
-    functionSources.append((id: id, parentType: currentType.name, source: stripSwiftComments(node.trimmedDescription)))
+    functionSources.append((id: id, parentType: currentType.name, source: functionSource))
     typeStack.append(currentType)
     return .skipChildren
   }
@@ -183,7 +184,7 @@ final class Collector: SyntaxVisitor {
       name: name,
       file: file,
       line: lineNumber(for: syntax),
-      metrics: ["methods": 0, "properties": 0]
+      metrics: ["lines": countSourceLines(source), "methods": 0, "properties": 0]
     )
     nodes[id] = node
     typeNames.insert(name)
@@ -208,7 +209,11 @@ final class Collector: SyntaxVisitor {
       name: node.name,
       file: node.file,
       line: node.line,
-      metrics: ["methods": context.methods, "properties": context.properties]
+      metrics: [
+        "lines": node.metrics["lines"] ?? 1,
+        "methods": context.methods,
+        "properties": context.properties
+      ]
     )
     nodes[context.id] = node
   }
@@ -410,6 +415,35 @@ func referencesType(source: String, typeName: String) -> Bool {
 
 func referencesMember(source: String, memberName: String) -> Bool {
   source.range(of: "\\b\(NSRegularExpression.escapedPattern(for: memberName))\\b", options: .regularExpression) != nil
+}
+
+func countSourceLines(_ source: String) -> Int {
+  let lines = source
+    .split(whereSeparator: \.isNewline)
+    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    .filter { !$0.isEmpty && !$0.hasPrefix("//") }
+  return max(1, lines.count)
+}
+
+func metricsForFunctionSource(_ source: String) -> [String: Int] {
+  [
+    "lines": countSourceLines(source),
+    "branches": matchCount(
+      in: source,
+      pattern: "\\b(if|else\\s+if|switch|case|for|while|guard|catch|async\\s+let|Task)\\b|\\?\\s*[^:]+:"
+    ),
+    "calls": matchCount(in: source, pattern: "\\b[A-Za-z_][A-Za-z0-9_]*\\s*\\(")
+  ]
+}
+
+func matchCount(in source: String, pattern: String) -> Int {
+  (try? NSRegularExpression(pattern: pattern))
+    .map { expression in
+      expression.numberOfMatches(
+        in: source,
+        range: NSRange(source.startIndex..<source.endIndex, in: source)
+      )
+    } ?? 0
 }
 
 func stripSwiftComments(_ source: String) -> String {

@@ -54,6 +54,7 @@ const materialCache = new Map();
 const arrowHeadGeometry = new THREE.ConeGeometry(4.5, 11, 14);
 const lastProjectPathKey = "codeUniverse.lastProjectPath";
 const parserModeKey = "codeUniverse.parserMode";
+const clientIdKey = "codeUniverse.clientId";
 
 const importantKinds = new Set(["file", "swiftui_view", "service", "class", "model", "struct", "enum", "protocol"]);
 
@@ -92,6 +93,8 @@ const state = {
   cameraAnimation: null,
   popupFocusTarget: null,
   hoveredId: null,
+  filtersDirty: true,
+  renderRequested: false,
   mapRadius: 900
 };
 
@@ -123,6 +126,7 @@ controls.minDistance = 180;
 controls.maxDistance = 6000;
 controls.target.copy(defaultControlsTarget);
 controls.update();
+controls.addEventListener("change", requestRender);
 
 const universe = new THREE.Group();
 const root = new THREE.Group();
@@ -146,21 +150,55 @@ const ground = new THREE.Mesh(
   getStandardMaterial("ground", { color: 0x081018, roughness: 0.92, metalness: 0.05 })
 );
 ground.rotation.x = -Math.PI / 2;
+ground.position.y = -4;
 ground.receiveShadow = true;
 scene.add(ground);
 
 const grid = new THREE.GridHelper(5000, 100, 0x263946, 0x14212a);
-grid.position.y = 1;
+grid.position.y = -3.5;
 scene.add(grid);
 
 bootstrap().catch(showStartupError);
 
 async function bootstrap() {
+  registerWebClientLifecycle();
   initializeParserMode();
   bindEvents();
   resize();
-  renderer.setAnimationLoop(draw);
   await loadInitialUniverse();
+  requestRender();
+}
+
+function registerWebClientLifecycle() {
+  const clientId = getClientId();
+  const payload = () => JSON.stringify({ clientId });
+  const postLifecycleEvent = (path, keepalive = false) => fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: payload(),
+    keepalive
+  }).catch(() => {});
+
+  postLifecycleEvent("/api/client-open");
+  const heartbeat = window.setInterval(() => {
+    postLifecycleEvent("/api/client-heartbeat", true);
+  }, 15000);
+
+  window.addEventListener("pagehide", () => {
+    window.clearInterval(heartbeat);
+    const body = new Blob([payload()], { type: "application/json" });
+    if (!navigator.sendBeacon?.("/api/client-close", body)) {
+      postLifecycleEvent("/api/client-close", true);
+    }
+  });
+}
+
+function getClientId() {
+  const existing = sessionStorage.getItem(clientIdKey);
+  if (existing) return existing;
+  const generated = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  sessionStorage.setItem(clientIdKey, generated);
+  return generated;
 }
 
 function initializeParserMode() {
@@ -293,6 +331,7 @@ function loadGraph(graph, descriptor) {
   controls.update();
   updateStats(graph, descriptor);
   buildScene();
+  markFiltersDirty();
   selectNode(state.layout.find((item) => item.kind === "repository")?.id || state.layout[0]?.id);
   syncButtons();
 }
@@ -408,6 +447,11 @@ function buildScene() {
       emissive: emissiveForNode(node),
       emissiveIntensity: node.kind === "swiftui_view" ? 0.08 : 0.02
     });
+    if (node.kind === "file") {
+      material.polygonOffset = true;
+      material.polygonOffsetFactor = -1;
+      material.polygonOffsetUnits = -1;
+    }
     const geometry = makeNodeGeometry(node.kind, node.width, node.height, node.depth);
     const mesh = new THREE.Mesh(geometry, material);
     mesh.position.set(node.x, (node.y || 0) + node.height / 2, node.z);
@@ -507,27 +551,63 @@ function applyKindRotation(mesh, kind) {
 }
 
 function colorForNode(node) {
-  if (node.kind === "file") return 0x252b31;
-  return colors[node.kind] || 0x95a4ad;
+  const base = new THREE.Color(node.kind === "file" ? 0x252b31 : colors[node.kind] || 0x95a4ad);
+  const complexityTint = complexityTintForNode(node);
+  return base.lerp(new THREE.Color(0xffd166), complexityTint * 0.55).getHex();
 }
 
 function emissiveForNode(node) {
-  if (node.kind === "file") return 0x05080a;
-  return colors[node.kind] || 0x000000;
+  const base = new THREE.Color(node.kind === "file" ? 0x05080a : colors[node.kind] || 0x000000);
+  const complexityTint = complexityTintForNode(node);
+  return base.lerp(new THREE.Color(0xff7a3d), complexityTint * 0.42).getHex();
+}
+
+function complexityTintForNode(node) {
+  if (!node || node.kind === "repository" || node.kind === "module") return 0;
+  const axis = axisMetricsForNode(node);
+  const score = Math.log1p(axis.lines) * 0.42
+    + Math.sqrt(axis.variables) * 0.72
+    + Math.sqrt(axis.functions) * 0.86
+    + (node.metrics?.branches || 0) * 0.18
+    + Math.sqrt(node.metrics?.calls || 0) * 0.12;
+  return clamp(score / 8.5, 0, 1);
 }
 
 function draw() {
+  state.renderRequested = false;
   applyCameraAnimation();
   if (!state.graph || state.layout.length === 0) {
     applyKeyboardNavigation();
     controls.update();
     renderer.render(scene, camera);
+    scheduleRenderIfAnimating();
     return;
   }
   applyKeyboardNavigation();
-  applyFilters();
+  if (state.filtersDirty) {
+    applyFilters();
+    state.filtersDirty = false;
+  }
   controls.update();
   renderer.render(scene, camera);
+  scheduleRenderIfAnimating();
+}
+
+function markFiltersDirty() {
+  state.filtersDirty = true;
+  requestRender();
+}
+
+function requestRender() {
+  if (state.renderRequested) return;
+  state.renderRequested = true;
+  requestAnimationFrame(draw);
+}
+
+function scheduleRenderIfAnimating() {
+  if (state.cameraAnimation || state.pressedKeys.size > 0) {
+    requestRender();
+  }
 }
 
 function applyFilters() {
@@ -577,19 +657,29 @@ function applyFilters() {
 }
 
 function bindEvents() {
-  window.addEventListener("resize", resize);
+  window.addEventListener("resize", () => {
+    resize();
+    requestRender();
+  });
 
   canvas.addEventListener("pointerdown", (event) => {
     state.pointerDown = { x: event.clientX, y: event.clientY };
     state.dragDistance = 0;
+    requestRender();
   });
 
   canvas.addEventListener("pointermove", (event) => {
+    if (state.pointerDown) {
+      const deltaX = event.clientX - state.pointerDown.x;
+      const deltaY = event.clientY - state.pointerDown.y;
+      state.dragDistance = Math.max(state.dragDistance, Math.hypot(deltaX, deltaY));
+      if (state.dragDistance > 6) {
+        clearHover();
+        requestRender();
+        return;
+      }
+    }
     updateHoverFromPointer(event);
-    if (!state.pointerDown) return;
-    const deltaX = event.clientX - state.pointerDown.x;
-    const deltaY = event.clientY - state.pointerDown.y;
-    state.dragDistance = Math.max(state.dragDistance, Math.hypot(deltaX, deltaY));
   });
 
   canvas.addEventListener("pointerleave", () => {
@@ -598,6 +688,7 @@ function bindEvents() {
 
   window.addEventListener("pointerup", () => {
     state.pointerDown = null;
+    requestRender();
   });
 
   window.addEventListener("keydown", (event) => {
@@ -606,10 +697,12 @@ function bindEvents() {
     if (!["w", "a", "s", "d", "q", "e", "pageup", "pagedown", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(key)) return;
     event.preventDefault();
     state.pressedKeys.add(key);
+    requestRender();
   });
 
   window.addEventListener("keyup", (event) => {
     state.pressedKeys.delete(event.key.toLowerCase());
+    requestRender();
   });
 
   canvas.addEventListener("click", (event) => {
@@ -631,11 +724,13 @@ function bindEvents() {
     if (event.key === "Escape") {
       state.query = "";
       searchInput.value = "";
+      markFiltersDirty();
       return;
     }
     if (event.key !== "Enter") return;
     event.preventDefault();
     state.query = searchInput.value.trim();
+    markFiltersDirty();
     const match = state.layout.find((node) => isSearchMatch(node));
     if (match) selectNode(match.id);
   });
@@ -646,11 +741,13 @@ function bindEvents() {
 
   focusButton.addEventListener("click", () => {
     state.focusMode = !state.focusMode;
+    markFiltersDirty();
     syncButtons();
   });
 
   edgesButton.addEventListener("click", () => {
     state.showEdges = !state.showEdges;
+    markFiltersDirty();
     syncButtons();
   });
 
@@ -688,19 +785,23 @@ function bindEvents() {
 
   showFilesToggle.addEventListener("change", () => {
     state.showFiles = showFilesToggle.checked;
+    markFiltersDirty();
   });
 
   showModulesToggle.addEventListener("change", () => {
     state.showModules = showModulesToggle.checked;
+    markFiltersDirty();
   });
 
   showPropertiesToggle.addEventListener("change", () => {
     state.showProperties = showPropertiesToggle.checked;
     buildMemberPopup();
+    markFiltersDirty();
   });
 
   selectedEdgesOnlyToggle.addEventListener("change", () => {
     state.selectedEdgesOnly = selectedEdgesOnlyToggle.checked;
+    markFiltersDirty();
   });
 
   performanceModeToggle.addEventListener("change", () => {
@@ -708,12 +809,14 @@ function bindEvents() {
     renderer.setPixelRatio(state.performanceMode ? 1 : Math.min(window.devicePixelRatio, 2));
     buildScene();
     buildMemberPopup();
+    markFiltersDirty();
   });
 
   edgeDensitySelect.addEventListener("change", () => {
     state.edgeDensity = edgeDensitySelect.value;
     buildScene();
     buildMemberPopup();
+    markFiltersDirty();
   });
 
   bindEdgeFilter(edgeUsesToggle, "uses");
@@ -773,6 +876,7 @@ function bindEdgeFilter(toggle, kind) {
     state.edgeFilters[kind] = toggle.checked;
     buildScene();
     buildMemberPopup();
+    markFiltersDirty();
   });
 }
 
@@ -1007,6 +1111,7 @@ function resetMapView() {
   controls.target.copy(defaultControlsTarget);
   controls.update();
   selectedDetails.innerHTML = `<p>Click any object in the map to inspect what it is, what it uses, and where it lives in source.</p>`;
+  markFiltersDirty();
   syncButtons();
 }
 
@@ -1019,7 +1124,10 @@ function updateHoverFromPointer(event) {
   const intersections = raycaster.intersectObjects([...root.children, ...popupRoot.children], true)
     .filter((item) => nodeIdFromObject(item.object));
   const hoveredId = pickNodeIdFromIntersections(intersections);
-  state.hoveredId = hoveredId;
+  if (state.hoveredId !== hoveredId) {
+    state.hoveredId = hoveredId;
+    markFiltersDirty();
+  }
   canvas.style.cursor = hoveredId ? "pointer" : "grab";
 
   if (!hoveredId) {
@@ -1043,9 +1151,11 @@ function updateHoverFromPointer(event) {
 }
 
 function clearHover() {
+  const hadHover = Boolean(state.hoveredId);
   state.hoveredId = null;
   canvas.style.cursor = "grab";
   hoverTooltip.hidden = true;
+  if (hadHover) markFiltersDirty();
 }
 
 function applyMapPreset(preset) {
@@ -1084,6 +1194,7 @@ function applyMapPreset(preset) {
 
   buildScene();
   buildMemberPopup();
+  markFiltersDirty();
   syncButtons();
 }
 
@@ -1127,6 +1238,7 @@ function selectNode(id) {
   state.openShellId = resolveOpenShellId(id);
   selectedDetails.innerHTML = renderDetails(node);
   buildMemberPopup();
+  markFiltersDirty();
   focusCameraOnNode(node);
 }
 
@@ -1137,7 +1249,7 @@ function renderDetails(node) {
   const memberIds = getInspectableMemberIds(node.id);
   const externalUses = getExternalUses(node);
   const ownedState = getOwnedState(node);
-  const volumeDetails = describeVolumeDrivers(node);
+  const axisDetails = describeAxisDrivers(node);
   const names = (edges, direction) => edges
     .slice(0, 6)
     .map((edge) => {
@@ -1158,7 +1270,7 @@ function renderDetails(node) {
     ${node.source ? `<p>Found by <code>${escapeHtml(node.source)}</code>${node.inferred ? " · inferred hint" : ""}${node.indexResolved ? " · Xcode index resolved" : ""}${node.confidence ? ` · confidence <code>${escapeHtml(node.confidence)}</code>` : ""}</p>` : ""}
     ${node.file ? `<div class="source-actions"><button class="button" type="button" data-source-node-id="${escapeHtml(node.id)}">Source</button><button class="button" type="button" data-xcode-node-id="${escapeHtml(node.id)}">Open in Xcode</button></div><div id="sourcePreview" class="source-preview"></div>` : ""}
     <div class="detail-grid">
-      <p><strong>Volume drivers</strong><br>${volumeDetails}</p>
+      <p><strong>Axis mapping</strong><br>${axisDetails}</p>
       <p><strong>Inside this object</strong><br>${memberIds.length > 0 ? `${memberIds.length} functions / properties in the 3D popup.` : "No inspectable members yet."}</p>
       ${ownedState.length > 0 ? `<p><strong>State it owns</strong><br>${names(ownedState, "out")}</p>` : ""}
       ${node.kind === "function" ? `<p><strong>Uses outside parent</strong><br>${names(externalUses, "out") || "No external type usage detected."}</p>` : ""}
@@ -1238,33 +1350,44 @@ function getOwnedState(node) {
   return state.graph.edges.filter((edge) => edge.kind === "owns_state" && edge.from === node.id);
 }
 
-function describeVolumeDrivers(node) {
+function describeAxisDrivers(node) {
   const dimensions = dimensionsForNode(node);
   const volume = dimensions.width * dimensions.height * dimensions.depth;
-  if (node.kind === "file") {
-    const lines = node.metrics?.lines || 30;
-    return [
-      `size <code>${dimensions.width}×${dimensions.depth}×${dimensions.height}</code>`,
-      `volume <code>${formatNumber(volume)}</code>`,
-      `lines <code>${formatNumber(lines)}</code>`
-    ].join("<br>");
-  }
-
-  const complexity = complexityForNode(node);
-  const normalized = normalizedComplexityForNode(node, complexity);
+  const axis = axisMetricsForNode(node);
   const edgeCounts = graphEdgeCountsForNode(node.id);
-  const rawMetrics = node.metrics || {};
+  const tint = complexityTintForNode(node);
+  const axisDescription = node.kind === "file"
+    ? [
+        `flat file plane`,
+        `X width + Z depth = lines of code <code>${formatNumber(axis.lines)}</code>`,
+        `Y height = fixed thin floor`
+      ]
+    : node.kind === "property"
+      ? [
+          `ball diameter = vars/properties <code>${formatNumber(axis.variables)}</code>`,
+          `property/state is shown as a ball`,
+          `Z depth = same ball diameter`
+        ]
+      : node.kind === "function"
+        ? [
+            `X width = calls/branches <code>${formatNumber(axis.functions)}</code>`,
+            `Y height = lines of code <code>${formatNumber(axis.lines)}</code>`,
+            `Z depth = calls/branches <code>${formatNumber(axis.functions)}</code>`
+          ]
+      : [
+          `X width = vars/properties <code>${formatNumber(axis.variables)}</code>`,
+          `Y height = lines of code <code>${formatNumber(axis.lines)}</code>`,
+          `Z depth = functions/methods <code>${formatNumber(axis.functions)}</code>`
+        ];
   const factors = [
-    `score <code>${formatNumber(complexity)}</code>`,
-    `${escapeHtml(normalized.label)} among ${escapeHtml(normalized.kindLabel)} <code>${normalized.percentile}%</code>`,
-    `scale <code>${formatNumber(Math.cbrt(complexity))}</code>`,
-    `size <code>${dimensions.width}×${dimensions.depth}×${dimensions.height}</code>`,
+    ...axisDescription,
+    `tint = complexity <code>${formatNumber(tint * 100)}%</code>`,
+    `size <code>${dimensions.width}×${dimensions.height}×${dimensions.depth}</code>`,
     `volume <code>${formatNumber(volume)}</code>`
   ];
 
   if (node.kind === "function") {
     factors.push(
-      `lines <code>${formatNumber(rawMetrics.lines || 0)}</code> · branches <code>${formatNumber(rawMetrics.branches || 0)}</code> · calls <code>${formatNumber(rawMetrics.calls || 0)}</code>`,
       `uses <code>${edgeCounts.outgoingUses}</code> · member uses <code>${edgeCounts.memberUses}</code> · used by <code>${edgeCounts.incoming}</code>`
     );
   } else if (node.kind === "property") {
@@ -1273,7 +1396,6 @@ function describeVolumeDrivers(node) {
     factors.push("fixed baseline object");
   } else {
     factors.push(
-      `methods <code>${formatNumber(rawMetrics.methods || 0)}</code> · properties <code>${formatNumber(rawMetrics.properties || 0)}</code>`,
       `members <code>${edgeCounts.definedMembers}</code> · uses <code>${edgeCounts.outgoingUses}</code> · used by <code>${edgeCounts.incoming}</code>`
     );
   }
@@ -1535,38 +1657,75 @@ function boundsForLayout(items) {
 }
 
 function dimensionsForNode(node) {
+  const base = baseDimensionsForKind(node.kind);
+  if (node.kind === "repository" || node.kind === "module") return base;
+
+  const axis = axisMetricsForNode(node);
   if (node.kind === "file") {
-    const lines = node.metrics?.lines || 30;
-    const areaScale = clamp(Math.sqrt(lines / 60), 0.85, 3.2);
+    const footprint = axisLengthForMetric(axis.lines, 32);
     return {
-      width: Math.round(86 * areaScale),
-      depth: Math.round(58 * areaScale),
-      height: 3
+      width: Math.round(footprint),
+      height: 3,
+      depth: Math.round(Math.max(24, footprint * 0.68))
     };
   }
 
-  const complexity = complexityForNode(node);
-  const volumeScale = Math.cbrt(complexity);
-  const base = baseDimensionsForKind(node.kind);
-  if (node.kind === "function") {
-    return {
-      width: Math.round(base.width * clamp(volumeScale * 0.95, 0.85, 2.2)),
-      depth: Math.round(base.depth * clamp(volumeScale * 0.95, 0.85, 2.2)),
-      height: Math.round(base.height * clamp(volumeScale * 1.18, 0.9, 2.6))
-    };
-  }
   if (node.kind === "property") {
+    const diameter = axisLengthForMetric(axis.variables, 12);
     return {
-      width: Math.round(base.width * clamp(volumeScale, 0.85, 1.7)),
-      depth: Math.round(base.depth * clamp(volumeScale, 0.85, 1.7)),
-      height: Math.round(base.height * clamp(volumeScale, 0.85, 1.7))
+      width: Math.round(diameter),
+      height: Math.round(diameter),
+      depth: Math.round(diameter)
     };
   }
+
+  const width = axisLengthForMetric(axis.variables, node.kind === "file" ? 12 : 8);
+  const height = axisLengthForMetric(axis.lines, node.kind === "file" ? 4 : 12);
+  const depth = axisLengthForMetric(axis.functions, node.kind === "file" ? 12 : 8);
+
   return {
-    width: Math.round(base.width * volumeScale),
-    depth: Math.round(base.depth * volumeScale),
-    height: Math.round(base.height * volumeScale)
+    width: Math.round(width),
+    height: Math.round(height),
+    depth: Math.round(depth)
   };
+}
+
+function axisLengthForMetric(value, minimum) {
+  return Math.max(minimum, Math.round(8 + Math.sqrt(Math.max(0, value)) * 14));
+}
+
+function axisMetricsForNode(node) {
+  const metrics = node.metrics || {};
+  const edgeCounts = graphEdgeCountsForNode(node.id);
+  const definedMembers = getInspectableMemberIds(node.id)
+    .map((memberId) => state.graph.nodes.find((candidate) => candidate.id === memberId))
+    .filter(Boolean);
+  const definedFunctions = definedMembers.filter((member) => member.kind === "function").length;
+  const definedProperties = definedMembers.filter((member) => member.kind === "property").length;
+  const memberLines = definedMembers.reduce((sum, member) => sum + (member.metrics?.lines || 1), 0);
+  const fileLines = state.graph.nodes.find((candidate) => candidate.kind === "file" && candidate.file === node.file)?.metrics?.lines || 0;
+
+  const variables = Math.max(
+    node.kind === "property" ? 1 : 0,
+    metrics.properties || 0,
+    definedProperties,
+    edgeCounts.ownedState || 0
+  );
+  const functions = Math.max(
+    node.kind === "function" ? 1 : 0,
+    metrics.methods || 0,
+    definedFunctions,
+    node.kind === "function" ? (metrics.calls || 0) + (metrics.branches || 0) * 2 : 0
+  );
+  const hasExplicitLines = Number.isFinite(metrics.lines) && metrics.lines > 0;
+  let lines = hasExplicitLines
+    ? metrics.lines
+    : Math.max(1, memberLines || (node.kind === "file" ? fileLines || 30 : 8));
+  if (!hasExplicitLines) {
+    lines = Math.max(lines, variables, functions);
+  }
+
+  return { lines, variables, functions };
 }
 
 function complexityForNode(node) {
@@ -1594,16 +1753,17 @@ function complexityForNode(node) {
 
 function graphEdgeCountsForNode(nodeId) {
   if (!state.graph) {
-    return { incoming: 0, outgoingUses: 0, memberUses: 0, definedMembers: 0 };
+    return { incoming: 0, outgoingUses: 0, memberUses: 0, definedMembers: 0, ownedState: 0 };
   }
   return state.graph.edges.reduce((counts, edge) => {
     if (edge.to === nodeId) counts.incoming += 1;
     if (edge.from !== nodeId) return counts;
     if (["uses", "imports", "conforms_to"].includes(edge.kind)) counts.outgoingUses += 1;
     if (edge.kind === "uses_member" || edge.kind === "owns_state") counts.memberUses += 1;
+    if (edge.kind === "owns_state") counts.ownedState += 1;
     if (edge.kind === "defines") counts.definedMembers += 1;
     return counts;
-  }, { incoming: 0, outgoingUses: 0, memberUses: 0, definedMembers: 0 });
+  }, { incoming: 0, outgoingUses: 0, memberUses: 0, definedMembers: 0, ownedState: 0 });
 }
 
 function baseDimensionsForKind(kind) {
@@ -1632,16 +1792,16 @@ function makeNodeGeometry(kind, width, height, depth) {
     geometry = new THREE.TorusGeometry(radius, Math.max(2, roundedHeight / 3), 8, 20);
     geometry.rotateX(Math.PI / 2);
   } else if (kind === "service" || kind === "class") {
-    const radius = Math.max(8, Math.min(roundedWidth, roundedDepth) / 2);
-    geometry = new THREE.CylinderGeometry(radius * 0.74, radius, roundedHeight, 6);
+    geometry = new THREE.CylinderGeometry(0.37, 0.5, 1, 6);
+    geometry.scale(roundedWidth, roundedHeight, roundedDepth);
   } else if (kind === "file") {
     geometry = new THREE.BoxGeometry(roundedWidth, roundedHeight, roundedDepth);
   } else if (kind === "function" || kind === "protocol") {
-    const radius = Math.max(4, Math.min(roundedWidth, roundedDepth) / 2);
-    geometry = new THREE.CylinderGeometry(radius, radius, roundedHeight, kind === "protocol" ? 8 : 14);
+    geometry = new THREE.CylinderGeometry(0.5, 0.5, 1, kind === "protocol" ? 8 : 14);
+    geometry.scale(roundedWidth, roundedHeight, roundedDepth);
   } else if (kind === "property") {
-    const radius = Math.max(4, Math.cbrt(roundedWidth * roundedHeight * roundedDepth) / 2);
-    geometry = new THREE.SphereGeometry(radius, 14, 10);
+    geometry = new THREE.SphereGeometry(0.5, 14, 10);
+    geometry.scale(roundedWidth, roundedHeight, roundedDepth);
   } else {
     geometry = new THREE.BoxGeometry(roundedWidth, roundedHeight, roundedDepth);
   }
@@ -1834,11 +1994,19 @@ function buildMemberPopup() {
     .filter(Boolean);
   const memberLayout = popupGridLayout(memberNodes, popupDimensionsForMember);
   const dependencyLayout = popupGridLayout(dependencyNodes, popupDimensionsForDependency);
+  const parentDimensions = popupDimensionsForParent(shellNode);
+  const maxMemberHeight = memberNodes.reduce((value, node) => Math.max(value, popupDimensionsForMember(node).height), 0);
+  const maxDependencyHeight = dependencyNodes.reduce((value, node) => Math.max(value, popupDimensionsForDependency(node).height), 0);
   const contentWidth = Math.max(memberLayout.width, dependencyLayout.width, Math.max(44, shellNode.width * 0.42));
   const contentDepth = Math.max(memberLayout.depth + dependencyLayout.depth + 96, 180);
-  const frameWidth = Math.max(230, contentWidth + 80);
-  const frameHeight = 190;
-  const frameDepth = Math.max(190, contentDepth + 42);
+  const frameWidth = Math.max(260, contentWidth + parentDimensions.width + 120);
+  const frameHeight = Math.max(
+    190,
+    parentDimensions.height + 72,
+    maxMemberHeight + 92,
+    maxDependencyHeight + 154
+  );
+  const frameDepth = Math.max(230, contentDepth + parentDimensions.depth + 82);
   state.popupFocusTarget = {
     nodeId: shellNode.id,
     target: new THREE.Vector3(origin.x, origin.y + 10, origin.z),
@@ -1876,9 +2044,9 @@ function buildMemberPopup() {
   popupRoot.add(title);
 
   const positions = new Map();
-  const parentPosition = new THREE.Vector3(origin.x, origin.y - frameHeight / 2 + 24, origin.z);
+  const parentPosition = new THREE.Vector3(origin.x, origin.y - frameHeight / 2 + 18 + parentDimensions.height / 2, origin.z);
   const parentMesh = new THREE.Mesh(
-    makeNodeGeometry(shellNode.kind, Math.max(28, shellNode.width * 0.38), Math.max(18, shellNode.height * 0.38), Math.max(28, shellNode.depth * 0.38)),
+    makeNodeGeometry(shellNode.kind, parentDimensions.width, parentDimensions.height, parentDimensions.depth),
     getNodeMaterial(shellNode.kind, "popup-parent", {
       color: colors[shellNode.kind] || 0x95a4ad,
       roughness: 0.56,
@@ -1997,6 +2165,14 @@ function popupDimensionsForMember(node) {
     width: Math.max(12, node.width * sizeBoost),
     height: Math.max(10, node.height * sizeBoost),
     depth: Math.max(12, node.depth * sizeBoost)
+  };
+}
+
+function popupDimensionsForParent(node) {
+  return {
+    width: Math.max(28, node.width * 0.38),
+    height: Math.max(18, node.height * 0.38),
+    depth: Math.max(28, node.depth * 0.38)
   };
 }
 
