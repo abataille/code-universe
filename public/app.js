@@ -65,6 +65,7 @@ const state = {
   graph: null,
   layout: [],
   selectedId: null,
+  selectedEdgeKey: null,
   openShellId: null,
   query: "",
   showEdges: true,
@@ -319,6 +320,7 @@ function loadGraph(graph, descriptor) {
   state.graph = graph;
   state.layout = buildLayout(graph);
   state.selectedId = null;
+  state.selectedEdgeKey = null;
   state.openShellId = null;
   state.query = "";
   state.hoveredId = null;
@@ -434,7 +436,41 @@ function buildLayout(graph) {
     });
   });
 
+  separateLargeObjects(layout);
   return layout;
+}
+
+function separateLargeObjects(layout) {
+  const movable = layout.filter((node) => !["repository", "file"].includes(node.kind));
+  for (let iteration = 0; iteration < 5; iteration += 1) {
+    for (let leftIndex = 0; leftIndex < movable.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < movable.length; rightIndex += 1) {
+        pushApartIfOverlapping(movable[leftIndex], movable[rightIndex]);
+      }
+    }
+  }
+}
+
+function pushApartIfOverlapping(left, right) {
+  const minDistanceX = ((left.width || 0) + (right.width || 0)) / 2 + 18;
+  const minDistanceZ = ((left.depth || 0) + (right.depth || 0)) / 2 + 18;
+  const deltaX = (right.x || 0) - (left.x || 0);
+  const deltaZ = (right.z || 0) - (left.z || 0);
+  const overlapX = minDistanceX - Math.abs(deltaX);
+  const overlapZ = minDistanceZ - Math.abs(deltaZ);
+  if (overlapX <= 0 || overlapZ <= 0) return;
+
+  if (overlapX < overlapZ) {
+    const push = overlapX / 2;
+    const direction = deltaX >= 0 ? 1 : -1;
+    left.x -= push * direction;
+    right.x += push * direction;
+  } else {
+    const push = overlapZ / 2;
+    const direction = deltaZ >= 0 ? 1 : -1;
+    left.z -= push * direction;
+    right.z += push * direction;
+  }
 }
 
 function buildScene() {
@@ -525,12 +561,13 @@ function buildScene() {
     }
   }
 
-  for (const edge of state.graph.edges) {
+  for (const [edgeIndex, edge] of state.graph.edges.entries()) {
     if (!isMainEdgeRenderable(edge)) continue;
     if (!isEdgeVisible(edge)) continue;
     const from = state.layout.find((node) => node.id === edge.from);
     const to = state.layout.find((node) => node.id === edge.to);
     if (!from || !to) continue;
+    edge.__renderKey = edge.__renderKey || edgeKey(edge, edgeIndex);
     const curve = streetCurveForEdge(from, to);
     const color = edgeRenderColor(edge);
     const points = curve.getPoints(28);
@@ -553,8 +590,12 @@ function buildScene() {
     const arrow = makeArrowHead(points, color);
     arrow.material.opacity = edgeOpacity(edge);
     const group = new THREE.Group();
+    street.userData.edge = edge;
+    line.userData.edge = edge;
+    arrow.userData.edge = edge;
     group.add(street, line, arrow);
     group.userData.edge = edge;
+    group.userData.edgeKey = edgeKey(edge);
     group.userData.streetMaterial = streetMaterial;
     group.userData.lineMaterial = material;
     group.userData.arrowMaterial = arrow.material;
@@ -618,15 +659,9 @@ function applyKindRotation(mesh, kind) {
 function addCityBuildingDetails(mesh, node) {
   if (!isStructuralBuilding(node.kind) || node.height < 28) return;
   const tint = complexityTintForNode(node);
-  const hotWindows = tint > 0.72;
-  const windowMaterial = getBasicMaterial(`windows:${node.kind}:${hotWindows ? "hot" : "cool"}`, {
-    color: hotWindows ? 0xffe6a3 : 0x8ff7ff,
-    transparent: true,
-    opacity: 0.48,
-    depthWrite: false
-  });
+  const warmAccent = tint > 0.72;
   const floorMaterial = getBasicMaterial(`floor-band:${node.kind}`, {
-    color: hotWindows ? 0xffb84d : 0x5ee7ff,
+    color: warmAccent ? 0xffb84d : 0x5ee7ff,
     transparent: true,
     opacity: 0.22,
     depthWrite: false
@@ -638,17 +673,12 @@ function addCityBuildingDetails(mesh, node) {
     depthWrite: false
   });
   const capMaterial = getBasicMaterial(`roof:${node.kind}`, {
-    color: hotWindows ? 0xfff0ad : 0xbff8ff,
+    color: warmAccent ? 0xfff0ad : 0xbff8ff,
     transparent: true,
     opacity: 0.34,
     depthWrite: false
   });
   const levels = clamp(Math.floor(node.height / 18), 2, 14);
-  const columns = clamp(Math.floor(node.width / 16), 2, 8);
-  const sideColumns = clamp(Math.floor(node.depth / 16), 2, 7);
-  const windowWidth = Math.max(2.2, node.width / (columns * 5.8));
-  const sideWindowWidth = Math.max(2.2, node.depth / (sideColumns * 5.8));
-  const windowHeight = Math.max(2.2, node.height / (levels * 9));
   const sideYStart = -node.height / 2 + node.height / (levels + 1);
 
   const podiumHeight = clamp(node.height * 0.12, 4, 18);
@@ -663,23 +693,11 @@ function addCityBuildingDetails(mesh, node) {
     const y = sideYStart + level * (node.height / (levels + 1));
     if (level % 2 === 0 || level === levels - 1) {
       const frontBand = new THREE.Mesh(new THREE.BoxGeometry(node.width * 0.88, 0.65, 0.7), floorMaterial);
-      frontBand.position.set(0, y - windowHeight * 1.25, node.depth / 2 + 0.38);
+      frontBand.position.set(0, y, node.depth / 2 + 0.38);
       mesh.add(frontBand);
       const sideBand = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.65, node.depth * 0.88), floorMaterial);
-      sideBand.position.set(node.width / 2 + 0.38, y - windowHeight * 1.25, 0);
+      sideBand.position.set(node.width / 2 + 0.38, y, 0);
       mesh.add(sideBand);
-    }
-    for (let column = 0; column < columns; column += 1) {
-      const x = columns === 1 ? 0 : (column - (columns - 1) / 2) * (node.width / columns);
-      const front = new THREE.Mesh(new THREE.BoxGeometry(windowWidth, windowHeight, 0.55), windowMaterial);
-      front.position.set(x, y, node.depth / 2 + 0.35);
-      mesh.add(front);
-    }
-    for (let column = 0; column < sideColumns; column += 1) {
-      const z = sideColumns === 1 ? 0 : (column - (sideColumns - 1) / 2) * (node.depth / sideColumns);
-      const sideWindow = new THREE.Mesh(new THREE.BoxGeometry(0.55, windowHeight, sideWindowWidth), windowMaterial);
-      sideWindow.position.set(node.width / 2 + 0.35, y, z);
-      mesh.add(sideWindow);
     }
   }
 
@@ -770,9 +788,9 @@ function isTranslucentCityObject(kind) {
 }
 
 function cityObjectOpacity(kind) {
-  if (kind === "property") return 0.78;
-  if (kind === "function" || kind === "protocol") return 0.68;
-  if (isStructuralBuilding(kind)) return 0.58;
+  if (kind === "property") return 0.9;
+  if (kind === "function" || kind === "protocol") return 0.84;
+  if (isStructuralBuilding(kind)) return 0.82;
   return 1;
 }
 
@@ -901,22 +919,29 @@ function applyFilters() {
   });
   buildHoverXray(neighborhood);
   applyPopupHoverMaterials();
+  applyPopupEdgeSelection();
   buildPopupHoverXray();
 
   edgeRoot.visible = state.showEdges;
   edgeRoot.children.forEach((edgeObject) => {
     const edge = edgeObject.userData.edge;
-    const matchesSelection = !state.selectedEdgesOnly || edge.from === state.selectedId || edge.to === state.selectedId;
+    const isSelectedEdge = edgeKey(edge) === state.selectedEdgeKey;
+    const matchesSelection = !state.selectedEdgesOnly || isSelectedEdge || edge.from === state.selectedId || edge.to === state.selectedId;
     const visible = (!state.focusMode || neighborhood.has(edge.from) || neighborhood.has(edge.to))
       && isEdgeVisible(edge)
       && matchesSelection
       && root.children.some((object) => object.userData.nodeId === edge.from && object.visible)
       && root.children.some((object) => object.userData.nodeId === edge.to && object.visible);
     edgeObject.visible = visible;
-    const opacity = edge.from === state.selectedId || edge.to === state.selectedId ? 1 : edgeOpacity(edge);
-    edgeObject.userData.streetMaterial.opacity = opacity * 0.48;
-    edgeObject.userData.lineMaterial.opacity = Math.min(1, opacity * 1.08);
-    edgeObject.userData.arrowMaterial.opacity = opacity;
+    const touchesSelectedNode = edge.from === state.selectedId || edge.to === state.selectedId;
+    const opacity = isSelectedEdge || touchesSelectedNode ? 1 : edgeOpacity(edge);
+    edgeObject.userData.streetMaterial.color.setHex(isSelectedEdge ? 0x2f3c18 : 0x111a20);
+    edgeObject.userData.streetMaterial.opacity = isSelectedEdge ? 0.92 : opacity * 0.48;
+    edgeObject.userData.lineMaterial.color.setHex(isSelectedEdge ? 0xd7ff57 : edgeRenderColor(edge));
+    edgeObject.userData.lineMaterial.opacity = isSelectedEdge ? 1 : Math.min(1, opacity * 1.08);
+    edgeObject.userData.arrowMaterial.color.setHex(isSelectedEdge ? 0xd7ff57 : edgeRenderColor(edge));
+    edgeObject.userData.arrowMaterial.opacity = isSelectedEdge ? 1 : opacity;
+    edgeObject.scale.setScalar(1);
   });
 }
 
@@ -979,9 +1004,22 @@ function bindEvents() {
     state.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     state.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
     raycaster.setFromCamera(state.pointer, camera);
-    const intersections = raycaster.intersectObjects([...root.children, ...popupRoot.children], true).filter(isPickableIntersection);
-    const selectedNodeId = pickNodeIdFromIntersections(intersections);
-    if (selectedNodeId) selectNode(selectedNodeId);
+    const intersections = raycaster.intersectObjects([...root.children, ...popupRoot.children, ...edgeRoot.children], true);
+    const selectedNodeId = pickNodeIdFromIntersections(intersections.filter(isPickableIntersection));
+    if (selectedNodeId) {
+      if (state.openShellId && selectedNodeId === state.openShellId) {
+        hidePopup();
+        return;
+      }
+      selectNode(selectedNodeId);
+      return;
+    }
+    const selectedEdge = pickEdgeFromIntersections(intersections);
+    if (selectedEdge) {
+      selectEdge(selectedEdge);
+      return;
+    }
+    if (state.openShellId) hidePopup();
   });
 
   searchInput.addEventListener("keydown", (event) => {
@@ -1385,6 +1423,7 @@ function applyKeyboardNavigation() {
 function resetMapView() {
   state.focusMode = false;
   state.selectedId = null;
+  state.selectedEdgeKey = null;
   state.openShellId = null;
   state.query = "";
   state.hoveredId = null;
@@ -1408,14 +1447,14 @@ function updateHoverFromPointer(event) {
   state.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   state.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(state.pointer, camera);
-  const intersections = raycaster.intersectObjects([...root.children, ...popupRoot.children], true)
-    .filter(isPickableIntersection);
-  const hoveredId = pickNodeIdFromIntersections(intersections);
+  const intersections = raycaster.intersectObjects([...root.children, ...popupRoot.children, ...edgeRoot.children], true);
+  const hoveredId = pickNodeIdFromIntersections(intersections.filter(isPickableIntersection));
+  const hoveredEdge = pickEdgeFromIntersections(intersections);
   if (state.hoveredId !== hoveredId) {
     state.hoveredId = hoveredId;
     markFiltersDirty();
   }
-  canvas.style.cursor = hoveredId ? "pointer" : "grab";
+  canvas.style.cursor = hoveredId || hoveredEdge ? "pointer" : "grab";
 
   if (!hoveredId) {
     clearHover();
@@ -1549,6 +1588,7 @@ function applyCameraAnimation() {
 
 function selectNode(id) {
   state.selectedId = id;
+  state.selectedEdgeKey = null;
   const node = state.graph.nodes.find((candidate) => candidate.id === id);
   if (!node) return;
   state.openShellId = resolveOpenShellId(id);
@@ -1559,6 +1599,22 @@ function selectNode(id) {
   if (node.file) {
     showSourcePreview(node);
   }
+}
+
+function selectEdge(edge) {
+  state.selectedEdgeKey = edgeKey(edge);
+  state.selectedId = null;
+  popupXrayRoot.clear();
+  selectedDetails.innerHTML = renderEdgeDetails(edge);
+  markFiltersDirty();
+}
+
+function hidePopup() {
+  state.openShellId = null;
+  state.popupFocusTarget = null;
+  popupRoot.clear();
+  popupXrayRoot.clear();
+  markFiltersDirty();
 }
 
 function renderDetails(node) {
@@ -1613,6 +1669,46 @@ function renderDetails(node) {
       <p><strong>Used by</strong><br>${names(incoming, "in") || "No incoming relationships yet."}</p>
     </div>
   `;
+}
+
+function renderEdgeDetails(edge) {
+  const from = state.graph.nodes.find((node) => node.id === edge.from);
+  const to = state.graph.nodes.find((node) => node.id === edge.to);
+  return `
+    <div class="detail-card object-summary-card">
+      <div class="detail-title">
+        <div class="object-title-lockup">
+          <span class="object-icon" aria-hidden="true"></span>
+          <div>
+            <h3>${escapeHtml(edge.kind.replaceAll("_", " "))}</h3>
+            <p>Selected connection</p>
+          </div>
+        </div>
+        <span class="detail-badge">Edge</span>
+      </div>
+      <div class="summary-table">
+        <div><span>From</span><strong>${escapeHtml(from?.name || edge.from)}</strong></div>
+        <div><span>To</span><strong>${escapeHtml(to?.name || edge.to)}</strong></div>
+        <div><span>Type</span><strong>${escapeHtml(edge.kind)}</strong></div>
+        ${edge.source ? `<div><span>Source</span><strong>${escapeHtml(edge.source)}</strong></div>` : ""}
+        ${edge.inferred ? "<div><span>Confidence</span><strong>Inferred</strong></div>" : ""}
+      </div>
+    </div>
+    <div class="detail-grid">
+      <p><strong>Meaning</strong><br>${escapeHtml(describeEdge(edge))}</p>
+      <p><strong>Action</strong><br>Use “Useful only” to keep this selected connection visible, or click an object at either end to inspect its source.</p>
+    </div>
+  `;
+}
+
+function describeEdge(edge) {
+  if (edge.kind === "uses") return "The source object references or calls the target object.";
+  if (edge.kind === "imports") return "The source file imports the target framework or module.";
+  if (edge.kind === "defines") return "The source file contains or defines the target object.";
+  if (edge.kind === "owns_state") return "The source type owns or exposes this state/property.";
+  if (edge.kind === "uses_member") return "A member inside the popup references another member or dependency.";
+  if (edge.kind === "conforms_to") return "The source type conforms to the target protocol.";
+  return "A detected relationship between two code objects.";
 }
 
 async function openSourceInXcode(node) {
@@ -1764,10 +1860,11 @@ function formatNumber(value) {
 }
 
 function focusedNeighborhood() {
-  if (!state.graph || !state.selectedId) {
+  if (!state.graph || (!state.selectedId && !state.selectedEdgeKey)) {
     return new Set();
   }
-  const neighborhood = new Set([state.selectedId]);
+  const selectedEdge = state.graph.edges.find((edge) => edgeKey(edge) === state.selectedEdgeKey);
+  const neighborhood = new Set([state.selectedId, selectedEdge?.from, selectedEdge?.to].filter(Boolean));
   if (state.openShellId) {
     neighborhood.add(state.openShellId);
     getInspectableMemberIds(state.openShellId).forEach((memberId) => neighborhood.add(memberId));
@@ -1970,7 +2067,7 @@ function childPositionOnFilePlane(index, total, fileNode, childNodes = []) {
   const rows = Math.max(1, Math.ceil(total / columns));
   const column = index % columns;
   const row = Math.floor(index / columns);
-  const spacing = spacingForNodes(childNodes, 48, 44, 16);
+  const spacing = spacingForNodes(childNodes, 58, 54, 34);
   const usableWidth = Math.max(fileNode.width * 0.78, spacing.x * Math.max(1, columns - 1));
   const usableDepth = Math.max(fileNode.depth * 0.72, spacing.z * Math.max(1, rows - 1));
   return {
@@ -1983,9 +2080,10 @@ function spacingForNodes(nodes, minimumX, minimumZ, padding = 18) {
   const dimensions = nodes.map((node) => dimensionsForNode(node));
   const maxWidth = dimensions.reduce((value, item) => Math.max(value, item.width || 0), 0);
   const maxDepth = dimensions.reduce((value, item) => Math.max(value, item.depth || 0), 0);
+  const sizePadding = Math.max(padding, Math.max(maxWidth, maxDepth) * 0.28);
   return {
-    x: Math.max(minimumX, maxWidth + padding),
-    z: Math.max(minimumZ, maxDepth + padding)
+    x: Math.max(minimumX, maxWidth + sizePadding),
+    z: Math.max(minimumZ, maxDepth + sizePadding)
   };
 }
 
@@ -2309,6 +2407,11 @@ function pickNodeIdFromIntersections(intersections) {
   return nodeIdFromObject((preferred || intersections[0]).object);
 }
 
+function pickEdgeFromIntersections(intersections) {
+  const hit = intersections.find((item) => edgeFromObject(item.object));
+  return hit ? edgeFromObject(hit.object) : null;
+}
+
 function nodeIdFromObject(object) {
   let current = object;
   while (current) {
@@ -2317,6 +2420,20 @@ function nodeIdFromObject(object) {
     current = current.parent;
   }
   return null;
+}
+
+function edgeFromObject(object) {
+  let current = object;
+  while (current) {
+    if (current.userData?.edge) return current.userData.edge;
+    current = current.parent;
+  }
+  return null;
+}
+
+function edgeKey(edge, fallbackIndex = "") {
+  if (edge.__renderKey) return edge.__renderKey;
+  return `${edge.kind}:${edge.from}->${edge.to}:${edge.source || ""}:${edge.inferred ? "inferred" : "direct"}:${fallbackIndex}`;
 }
 
 function isPickableIntersection(intersection) {
@@ -2431,6 +2548,21 @@ function applyPopupHoverMaterials() {
   });
 }
 
+function applyPopupEdgeSelection() {
+  popupRoot.traverse((object) => {
+    const edge = object.userData?.edge;
+    if (!object.isMesh || !edge || !object.material) return;
+    const isSelectedEdge = edgeKey(edge) === state.selectedEdgeKey;
+    if (object.userData.popupEdgeRole === "road") {
+      object.material.color.setHex(isSelectedEdge ? 0x2f3c18 : 0x10212a);
+      object.material.opacity = isSelectedEdge ? 0.9 : popupEdgeOpacity(edge.kind) * 0.42;
+    } else {
+      object.material.color.setHex(isSelectedEdge ? 0xd7ff57 : popupEdgeColor(edge.kind));
+      object.material.opacity = isSelectedEdge ? 1 : popupEdgeOpacity(edge.kind);
+    }
+  });
+}
+
 function buildPopupHoverXray() {
   if (!state.hoveredId || popupRoot.children.length === 0) return;
 
@@ -2449,9 +2581,9 @@ function buildPopupHoverXray() {
     x: center.x,
     y: center.y - size.y / 2,
     z: center.z,
-    width: Math.max(22, size.x * 1.34),
-    height: Math.max(26, size.y * 1.32),
-    depth: Math.max(22, size.z * 1.34)
+    width: Math.max(18, size.x),
+    height: Math.max(20, size.y),
+    depth: Math.max(18, size.z)
   };
   addGlassObjectShellToRoot(shell, popupXrayRoot, 42);
   buildPopupXrayInternals(shell, state.hoveredId);
@@ -2516,9 +2648,9 @@ function addGlassObjectShell(shell) {
 }
 
 function addGlassObjectShellToRoot(shell, targetRoot, renderOrderBase) {
-  const shellWidth = shell.width * 1.12;
-  const shellHeight = shell.height * 1.08;
-  const shellDepth = shell.depth * 1.12;
+  const shellWidth = shell.width;
+  const shellHeight = shell.height;
+  const shellDepth = shell.depth;
   const center = new THREE.Vector3(shell.x, (shell.y || 0) + shell.height / 2, shell.z);
   const glassMaterial = getBasicMaterial("selected-glass-shell-fill", {
     color: 0x8fd8ff,
@@ -2813,8 +2945,8 @@ function popupGridLayout(nodes, dimensionsForPopupNode) {
   const maxDepth = dimensions.reduce((value, item) => Math.max(value, item.depth), 0);
   const columns = Math.max(1, Math.ceil(Math.sqrt(nodes.length)));
   const rows = Math.max(1, Math.ceil(nodes.length / columns));
-  const cellWidth = Math.max(76, maxWidth + 34);
-  const cellDepth = Math.max(68, maxDepth + 34);
+  const cellWidth = Math.max(84, maxWidth + Math.max(46, maxWidth * 0.32));
+  const cellDepth = Math.max(76, maxDepth + Math.max(42, maxDepth * 0.32));
   return {
     columns,
     rows,
@@ -2863,8 +2995,9 @@ function getPopupEdges(parentId, memberIds, dependencyIds) {
   const visibleIds = new Set([parentId, ...memberIds, ...dependencyIds]);
   const edges = [];
 
-  state.graph.edges.forEach((edge) => {
+  state.graph.edges.forEach((edge, edgeIndex) => {
     if (!isEdgeVisible(edge)) return;
+    edge.__renderKey = edge.__renderKey || edgeKey(edge, edgeIndex);
     if (edge.kind === "defines" && edge.from === parentId && visibleIds.has(edge.to)) edges.push(edge);
     if (edge.kind === "owns_state" && edge.from === parentId && visibleIds.has(edge.to)) edges.push(edge);
     if (["uses", "conforms_to"].includes(edge.kind) && edge.from === parentId && visibleIds.has(edge.to)) edges.push(edge);
@@ -2898,7 +3031,17 @@ function drawPopupEdge(edge, positions) {
   const line = new THREE.Mesh(geometry, material);
   const arrow = makeArrowHead(points, color);
   arrow.material.opacity = popupEdgeOpacity(edge.kind);
-  popupRoot.add(road, line, arrow);
+  road.userData.edge = edge;
+  road.userData.popupEdgeRole = "road";
+  line.userData.edge = edge;
+  line.userData.popupEdgeRole = "line";
+  arrow.userData.edge = edge;
+  arrow.userData.popupEdgeRole = "arrow";
+  const group = new THREE.Group();
+  group.userData.edge = edge;
+  group.userData.edgeKey = edgeKey(edge);
+  group.add(road, line, arrow);
+  popupRoot.add(group);
 }
 
 function popupStreetCurveForEdge(fromPosition, toPosition) {
