@@ -130,9 +130,10 @@ controls.addEventListener("change", requestRender);
 
 const universe = new THREE.Group();
 const root = new THREE.Group();
+const xrayRoot = new THREE.Group();
 const edgeRoot = new THREE.Group();
 const popupRoot = new THREE.Group();
-universe.add(root, edgeRoot, popupRoot);
+universe.add(root, xrayRoot, edgeRoot, popupRoot);
 scene.add(universe);
 
 scene.add(new THREE.AmbientLight(0xb7c8d2, 0.85));
@@ -462,7 +463,11 @@ function buildScene() {
       nodeId: node.id,
       defaultPosition: mesh.position.clone(),
       defaultScale: mesh.scale.clone(),
-      defaultWireframe: material.wireframe
+      defaultWireframe: material.wireframe,
+      defaultOpacity: material.opacity,
+      defaultTransparent: material.transparent,
+      defaultDepthWrite: material.depthWrite,
+      defaultEmissiveIntensity: material.emissiveIntensity
     };
     if (node.kind === "function" || node.kind === "property") {
       mesh.visible = false;
@@ -553,13 +558,31 @@ function applyKindRotation(mesh, kind) {
 function colorForNode(node) {
   const base = new THREE.Color(node.kind === "file" ? 0x252b31 : colors[node.kind] || 0x95a4ad);
   const complexityTint = complexityTintForNode(node);
-  return base.lerp(new THREE.Color(0xffd166), complexityTint * 0.55).getHex();
+  const spectrum = spectrumColorForComplexity(complexityTint);
+  return base.lerp(spectrum, 0.38 + complexityTint * 0.58).getHex();
 }
 
 function emissiveForNode(node) {
   const base = new THREE.Color(node.kind === "file" ? 0x05080a : colors[node.kind] || 0x000000);
   const complexityTint = complexityTintForNode(node);
-  return base.lerp(new THREE.Color(0xff7a3d), complexityTint * 0.42).getHex();
+  const spectrum = spectrumColorForComplexity(complexityTint);
+  return base.lerp(spectrum, complexityTint * 0.62).getHex();
+}
+
+function spectrumColorForComplexity(value) {
+  const stops = [
+    { at: 0, color: new THREE.Color(0x3a7bd5) },
+    { at: 0.25, color: new THREE.Color(0x00d2ff) },
+    { at: 0.5, color: new THREE.Color(0x4ade80) },
+    { at: 0.75, color: new THREE.Color(0xffd166) },
+    { at: 1, color: new THREE.Color(0xff4d4d) }
+  ];
+  const clampedValue = clamp(value, 0, 1);
+  const upperIndex = stops.findIndex((stop) => stop.at >= clampedValue);
+  const upper = stops[Math.max(upperIndex, 1)];
+  const lower = stops[Math.max(0, stops.indexOf(upper) - 1)];
+  const span = Math.max(0.001, upper.at - lower.at);
+  return lower.color.clone().lerp(upper.color, (clampedValue - lower.at) / span);
 }
 
 function complexityTintForNode(node) {
@@ -614,6 +637,7 @@ function applyFilters() {
   if (!state.graph) return;
   const neighborhood = focusedNeighborhood();
   resetDynamicLayout();
+  xrayRoot.clear();
   root.children.forEach((object) => {
     const nodeId = object.userData.nodeId;
     if (!nodeId) return;
@@ -633,12 +657,16 @@ function applyFilters() {
     if (object.material) {
       const isOpenShell = isOpenedShell(nodeId);
       const hovered = nodeId === state.hoveredId;
+      const xrayShell = hovered && getInspectableMemberIds(nodeId).length > 0;
       object.material.wireframe = isOpenShell;
-      object.material.opacity = dim ? 0.24 : 1;
-      object.material.transparent = Boolean(dim);
+      const opacity = xrayShell ? 0.34 : dim ? 0.24 : object.userData.defaultOpacity ?? 1;
+      object.material.opacity = opacity;
+      object.material.transparent = xrayShell || dim || Boolean(object.userData.defaultTransparent);
+      object.material.depthWrite = xrayShell ? false : object.userData.defaultDepthWrite ?? true;
       object.material.emissiveIntensity = nodeId === state.selectedId ? 0.45 : hovered ? 0.34 : matched ? 0.28 : node?.kind === "swiftui_view" ? 0.08 : 0.02;
     }
   });
+  buildHoverXray(neighborhood);
 
   edgeRoot.visible = state.showEdges;
   edgeRoot.children.forEach((edgeObject) => {
@@ -715,7 +743,7 @@ function bindEvents() {
     state.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     state.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
     raycaster.setFromCamera(state.pointer, camera);
-    const intersections = raycaster.intersectObjects([...root.children, ...popupRoot.children], true).filter((item) => nodeIdFromObject(item.object));
+    const intersections = raycaster.intersectObjects([...root.children, ...popupRoot.children], true).filter(isPickableIntersection);
     const selectedNodeId = pickNodeIdFromIntersections(intersections);
     if (selectedNodeId) selectNode(selectedNodeId);
   });
@@ -1122,7 +1150,7 @@ function updateHoverFromPointer(event) {
   state.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(state.pointer, camera);
   const intersections = raycaster.intersectObjects([...root.children, ...popupRoot.children], true)
-    .filter((item) => nodeIdFromObject(item.object));
+    .filter(isPickableIntersection);
   const hoveredId = pickNodeIdFromIntersections(intersections);
   if (state.hoveredId !== hoveredId) {
     state.hoveredId = hoveredId;
@@ -1142,11 +1170,40 @@ function updateHoverFromPointer(event) {
   }
 
   hoverTooltip.hidden = false;
-  hoverTooltip.style.left = `${event.clientX - rect.left}px`;
-  hoverTooltip.style.top = `${event.clientY - rect.top}px`;
-  hoverTooltip.innerHTML = `
-    <strong>${escapeHtml(node.name)}</strong>
-    <span>${escapeHtml(friendlyKind(node.kind))}${node.file ? ` · ${escapeHtml(node.file)}:${node.line}` : ""}</span>
+  hoverTooltip.style.left = `${event.clientX - rect.left + 18}px`;
+  hoverTooltip.style.top = `${event.clientY - rect.top + 18}px`;
+  hoverTooltip.innerHTML = renderHoverTooltip(node);
+}
+
+function renderHoverTooltip(node) {
+  const metrics = node.metrics || {};
+  const ownLines = Math.max(1, metrics.lines || 1);
+  const ownVars = Math.max(0, metrics.properties || (node.kind === "property" ? 1 : 0));
+  const ownFuncs = Math.max(0, metrics.methods || (node.kind === "function" ? 1 : 0));
+  const ownComplexity = complexityForNode(node);
+  const title = escapeHtml(node.name);
+  const location = node.file ? `${escapeHtml(node.file)}:${node.line}` : friendlyKind(node.kind);
+  const kind = escapeHtml(friendlyKind(node.kind));
+  const details = [];
+
+  if (node.kind === "file") {
+    details.push(`${formatNumber(ownLines)} LOC`);
+    details.push(`file plot`);
+  } else if (node.kind === "function") {
+    details.push(`${formatNumber(ownLines)} LOC · ${formatNumber(metrics.branches || 0)} branches`);
+    details.push(`${formatNumber(metrics.calls || 0)} calls · complexity ${formatNumber(ownComplexity)}`);
+  } else if (node.kind === "property") {
+    details.push(`state/property sphere`);
+    details.push(`complexity ${formatNumber(ownComplexity)}`);
+  } else {
+    details.push(`${formatNumber(ownLines)} LOC · ${formatNumber(ownVars)} vars · ${formatNumber(ownFuncs)} funcs`);
+    details.push(`complexity ${formatNumber(ownComplexity)}`);
+  }
+
+  return `
+    <strong>${title}</strong>
+    <span>${kind} · ${location}</span>
+    ${details.map((detail) => `<span>${escapeHtml(detail)}</span>`).join("")}
   `;
 }
 
@@ -1354,34 +1411,37 @@ function describeAxisDrivers(node) {
   const dimensions = dimensionsForNode(node);
   const volume = dimensions.width * dimensions.height * dimensions.depth;
   const axis = axisMetricsForNode(node);
+  const city = cityMetricsForNode(node);
   const edgeCounts = graphEdgeCountsForNode(node.id);
   const tint = complexityTintForNode(node);
   const axisDescription = node.kind === "file"
     ? [
-        `flat file plane`,
-        `X width + Z depth = lines of code <code>${formatNumber(axis.lines)}</code>`,
-        `Y height = fixed thin floor`
+        `district plot: X/Z footprint = lines of code <code>${formatNumber(axis.lines)}</code>`,
+        `Y height = fixed thin floor`,
+        `complexity tint = file activity around the district`
       ]
     : node.kind === "property"
       ? [
-          `ball diameter = vars/properties <code>${formatNumber(axis.variables)}</code>`,
-          `property/state is shown as a ball`,
-          `Z depth = same ball diameter`
+          `city object: state sphere`,
+          `diameter = state weight + complexity`,
+          `inputs: LOC <code>${formatNumber(city.loc)}</code>, vars <code>${formatNumber(city.vars)}</code>, funcs <code>${formatNumber(city.funcs)}</code>`
         ]
       : node.kind === "function"
         ? [
-            `X width = calls/branches <code>${formatNumber(axis.functions)}</code>`,
-            `Y height = lines of code <code>${formatNumber(axis.lines)}</code>`,
-            `Z depth = calls/branches <code>${formatNumber(axis.functions)}</code>`
+            `city object: utility tower`,
+            `Y height = LOC × complexity boost <code>${formatNumber(city.heightScore)}</code>`,
+            `X/Z footprint = calls + branches <code>${formatNumber(axis.functions)}</code>`
           ]
       : [
-          `X width = vars/properties <code>${formatNumber(axis.variables)}</code>`,
-          `Y height = lines of code <code>${formatNumber(axis.lines)}</code>`,
-          `Z depth = functions/methods <code>${formatNumber(axis.functions)}</code>`
+          `city object: building mass`,
+          `X width = vars/properties <code>${formatNumber(axis.variables)}</code> + LOC share`,
+          `Z depth = functions/methods <code>${formatNumber(axis.functions)}</code> + LOC share`,
+          `Y height = LOC <code>${formatNumber(axis.lines)}</code> × complexity boost`
         ];
   const factors = [
     ...axisDescription,
-    `tint = complexity <code>${formatNumber(tint * 100)}%</code>`,
+    `formula mass = (LOC + vars×18 + funcs×22) × complexity boost <code>${formatNumber(city.volumeScore)}</code>`,
+    `complexity boost <code>${formatNumber(city.complexityBoost)}</code> · tint <code>${formatNumber(tint * 100)}%</code>`,
     `size <code>${dimensions.width}×${dimensions.height}×${dimensions.depth}</code>`,
     `volume <code>${formatNumber(volume)}</code>`
   ];
@@ -1660,18 +1720,18 @@ function dimensionsForNode(node) {
   const base = baseDimensionsForKind(node.kind);
   if (node.kind === "repository" || node.kind === "module") return base;
 
-  const axis = axisMetricsForNode(node);
+  const city = cityMetricsForNode(node);
   if (node.kind === "file") {
-    const footprint = axisLengthForMetric(axis.lines, 32);
+    const footprint = clamp(44 + Math.sqrt(city.loc) * 8.5, 44, 420);
     return {
       width: Math.round(footprint),
       height: 3,
-      depth: Math.round(Math.max(24, footprint * 0.68))
+      depth: Math.round(Math.max(28, footprint * 0.7))
     };
   }
 
   if (node.kind === "property") {
-    const diameter = axisLengthForMetric(axis.variables, 12);
+    const diameter = clamp(10 + Math.sqrt(city.volumeScore) * 1.8, 10, 58);
     return {
       width: Math.round(diameter),
       height: Math.round(diameter),
@@ -1679,9 +1739,9 @@ function dimensionsForNode(node) {
     };
   }
 
-  const width = axisLengthForMetric(axis.variables, node.kind === "file" ? 12 : 8);
-  const height = axisLengthForMetric(axis.lines, node.kind === "file" ? 4 : 12);
-  const depth = axisLengthForMetric(axis.functions, node.kind === "file" ? 12 : 8);
+  const width = clamp(base.width * 0.62 + city.widthScore * 5.5, base.width * 0.75, 190);
+  const height = clamp(base.height * 0.62 + city.heightScore * 7.5, base.height * 0.85, 280);
+  const depth = clamp(base.depth * 0.62 + city.depthScore * 5.5, base.depth * 0.75, 190);
 
   return {
     width: Math.round(width),
@@ -1692,6 +1752,31 @@ function dimensionsForNode(node) {
 
 function axisLengthForMetric(value, minimum) {
   return Math.max(minimum, Math.round(8 + Math.sqrt(Math.max(0, value)) * 14));
+}
+
+function cityMetricsForNode(node) {
+  const axis = axisMetricsForNode(node);
+  const complexity = complexityForNode(node);
+  const maxComplexity = node.kind === "function" ? 18 : node.kind === "property" ? 5 : 14;
+  const normalizedComplexity = clamp(complexity / maxComplexity, 0, 1);
+  const loc = Math.max(1, axis.lines);
+  const vars = Math.max(0, axis.variables);
+  const funcs = Math.max(0, axis.functions);
+  const complexityBoost = 1 + normalizedComplexity * 0.78;
+  const footprintBoost = 1 + normalizedComplexity * 0.35;
+  const volumeScore = (loc + vars * 18 + funcs * 22) * complexityBoost;
+
+  return {
+    loc,
+    vars,
+    funcs,
+    complexity,
+    complexityBoost,
+    volumeScore,
+    widthScore: Math.sqrt(loc * 0.18 + vars * 12 + funcs * 3) * footprintBoost,
+    heightScore: (Math.sqrt(loc) + Math.log1p(vars + funcs) * 2.2) * complexityBoost,
+    depthScore: Math.sqrt(loc * 0.18 + funcs * 12 + vars * 3) * footprintBoost
+  };
 }
 
 function axisMetricsForNode(node) {
@@ -1925,10 +2010,22 @@ function pickNodeIdFromIntersections(intersections) {
 function nodeIdFromObject(object) {
   let current = object;
   while (current) {
+    if (current.userData?.role === "xray-inner") return null;
     if (current.userData?.nodeId) return current.userData.nodeId;
     current = current.parent;
   }
   return null;
+}
+
+function isPickableIntersection(intersection) {
+  if (!nodeIdFromObject(intersection.object)) return false;
+  let current = intersection.object;
+  while (current) {
+    if (current.userData?.role === "xray-inner") return false;
+    if (current.visible === false) return false;
+    current = current.parent;
+  }
+  return true;
 }
 
 function shouldShowLabel(nodeId) {
@@ -1956,12 +2053,69 @@ function shouldShowMesh(nodeId) {
   return true;
 }
 
+function buildHoverXray(neighborhood) {
+  if (!state.hoveredId) return;
+  const shell = state.layout.find((candidate) => candidate.id === state.hoveredId);
+  if (!shell || !shouldShowMesh(shell.id) || !isNodeVisible(shell, neighborhood)) return;
+
+  const memberIds = getInspectableMemberIds(shell.id);
+  if (memberIds.length === 0) return;
+
+  const members = memberIds
+    .map((memberId) => state.graph.nodes.find((candidate) => candidate.id === memberId))
+    .filter(Boolean)
+    .slice(0, 36);
+  if (members.length === 0) return;
+
+  const columns = Math.ceil(Math.sqrt(members.length));
+  const rows = Math.ceil(members.length / columns);
+  const innerWidth = Math.max(8, shell.width * 0.72);
+  const innerDepth = Math.max(8, shell.depth * 0.72);
+  const innerHeight = Math.max(8, shell.height * 0.7);
+  const spacingX = columns > 1 ? innerWidth / (columns - 1) : 0;
+  const spacingZ = rows > 1 ? innerDepth / (rows - 1) : 0;
+  const itemSize = clamp(Math.min(innerWidth / Math.max(columns, 1), innerDepth / Math.max(rows, 1), innerHeight * 0.28), 4, 16);
+  const baseY = (shell.y || 0) + shell.height * 0.5;
+
+  members.forEach((member, index) => {
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    const x = shell.x + (columns === 1 ? 0 : column * spacingX - innerWidth / 2);
+    const z = shell.z + (rows === 1 ? 0 : row * spacingZ - innerDepth / 2);
+    const y = baseY + ((index % 3) - 1) * itemSize * 0.38;
+    const geometry = makeNodeGeometry(member.kind, itemSize, itemSize * (member.kind === "function" ? 1.6 : 1), itemSize);
+    const material = new THREE.MeshStandardMaterial({
+      color: colorForNode(member),
+      emissive: emissiveForNode(member),
+      emissiveIntensity: 0.38,
+      roughness: 0.52,
+      metalness: 0.08,
+      transparent: true,
+      opacity: 0.88,
+      depthWrite: false
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(x, y, z);
+    applyKindRotation(mesh, member.kind);
+    mesh.userData = {
+      role: "xray-inner"
+    };
+    xrayRoot.add(mesh);
+  });
+}
+
 function resetDynamicLayout() {
   for (const mesh of state.meshById.values()) {
     mesh.position.copy(mesh.userData.defaultPosition);
     mesh.scale.copy(mesh.userData.defaultScale);
     if (mesh.material) {
       mesh.material.wireframe = mesh.userData.defaultWireframe;
+      mesh.material.opacity = mesh.userData.defaultOpacity ?? 1;
+      mesh.material.transparent = Boolean(mesh.userData.defaultTransparent);
+      mesh.material.depthWrite = mesh.userData.defaultDepthWrite ?? true;
+      if (typeof mesh.userData.defaultEmissiveIntensity === "number") {
+        mesh.material.emissiveIntensity = mesh.userData.defaultEmissiveIntensity;
+      }
     }
   }
   for (const label of state.labelById.values()) {
@@ -1985,8 +2139,6 @@ function buildMemberPopup() {
   });
   if (visibleMemberIds.length === 0) return;
 
-  const shellTop = (shellNode.y || 0) + shellNode.height;
-  const origin = new THREE.Vector3(shellNode.x + 160 + shellNode.width, shellTop + 210, shellNode.z);
   const dependencyIds = getPopupDependencyIds(shellNode.id, visibleMemberIds);
   const memberNodes = visibleMemberIds.map((memberId) => state.layout.find((candidate) => candidate.id === memberId)).filter(Boolean);
   const dependencyNodes = dependencyIds
@@ -2007,6 +2159,10 @@ function buildMemberPopup() {
     maxDependencyHeight + 154
   );
   const frameDepth = Math.max(230, contentDepth + parentDimensions.depth + 82);
+  const shellTop = (shellNode.y || 0) + shellNode.height;
+  const popupGap = clamp(shellNode.width * 0.55 + frameWidth * 0.55 + 220, 360, 760);
+  const popupLift = clamp(shellNode.height * 0.45 + frameHeight * 0.35 + 190, 280, 620);
+  const origin = new THREE.Vector3(shellNode.x + popupGap, shellTop + popupLift, shellNode.z);
   state.popupFocusTarget = {
     nodeId: shellNode.id,
     target: new THREE.Vector3(origin.x, origin.y + 10, origin.z),

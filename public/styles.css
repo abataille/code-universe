@@ -613,18 +613,17 @@ h1 {
 .hover-tooltip {
   position: absolute;
   z-index: 4;
-  max-width: 280px;
-  padding: 8px 10px;
+  max-width: 320px;
+  padding: 10px 12px;
   border: 1px solid rgba(127, 214, 194, 0.26);
   border-radius: 12px;
-  background: rgba(8, 12, 14, 0.86);
+  background: rgba(8, 12, 14, 0.92);
   color: var(--text);
   box-shadow: 0 16px 34px rgba(0, 0, 0, 0.34);
   backdrop-filter: blur(14px);
   font-size: 12px;
   line-height: 1.35;
   pointer-events: none;
-  transform: translate(14px, 14px);
 }
 
 .hover-tooltip strong,
