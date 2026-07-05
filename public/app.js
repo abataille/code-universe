@@ -33,6 +33,9 @@ const pickerStatus = document.querySelector("#pickerStatus");
 const scanSummary = document.querySelector("#scanSummary");
 const parserDiff = document.querySelector("#parserDiff");
 const mapPresetButtons = document.querySelectorAll("[data-view-preset]");
+const appShell = document.querySelector(".app-shell");
+const toggleLeftRailButton = document.querySelector("#toggleLeftRailButton");
+const toggleRightRailButton = document.querySelector("#toggleRightRailButton");
 
 const colors = {
   repository: 0x63d2ff,
@@ -95,6 +98,7 @@ const state = {
   hoveredId: null,
   filtersDirty: true,
   renderRequested: false,
+  sourceContext: 12,
   mapRadius: 900
 };
 
@@ -133,7 +137,8 @@ const root = new THREE.Group();
 const xrayRoot = new THREE.Group();
 const edgeRoot = new THREE.Group();
 const popupRoot = new THREE.Group();
-universe.add(root, xrayRoot, edgeRoot, popupRoot);
+const popupXrayRoot = new THREE.Group();
+universe.add(root, xrayRoot, edgeRoot, popupRoot, popupXrayRoot);
 scene.add(universe);
 
 scene.add(new THREE.AmbientLight(0xb7c8d2, 0.85));
@@ -446,7 +451,9 @@ function buildScene() {
       roughness: 0.64,
       metalness: node.kind === "swiftui_view" ? 0.24 : 0.12,
       emissive: emissiveForNode(node),
-      emissiveIntensity: node.kind === "swiftui_view" ? 0.08 : 0.02
+      emissiveIntensity: node.kind === "swiftui_view" ? 0.08 : 0.02,
+      transparent: isTranslucentCityObject(node.kind),
+      opacity: cityObjectOpacity(node.kind)
     });
     if (node.kind === "file") {
       material.polygonOffset = true;
@@ -457,6 +464,9 @@ function buildScene() {
     const mesh = new THREE.Mesh(geometry, material);
     mesh.position.set(node.x, (node.y || 0) + node.height / 2, node.z);
     applyKindRotation(mesh, node.kind);
+    addCityBuildingDetails(mesh, node);
+    addFileDistrictDetails(mesh, node);
+    addCityObjectOutline(mesh, node);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     mesh.userData = {
@@ -521,45 +531,258 @@ function buildScene() {
     const from = state.layout.find((node) => node.id === edge.from);
     const to = state.layout.find((node) => node.id === edge.to);
     if (!from || !to) continue;
-    const curve = new THREE.QuadraticBezierCurve3(
-      new THREE.Vector3(from.x, (from.y || 0) + from.height + 10, from.z),
-      new THREE.Vector3((from.x + to.x) / 2, Math.max(from.height, to.height) + 92, (from.z + to.z) / 2),
-      new THREE.Vector3(to.x, (to.y || 0) + to.height + 10, to.z)
-    );
+    const curve = streetCurveForEdge(from, to);
     const color = edgeRenderColor(edge);
-    const points = curve.getPoints(24);
-    const geometry = new THREE.TubeGeometry(curve, 24, edgeTubeRadius(edge), 6, false);
+    const points = curve.getPoints(28);
+    const streetGeometry = new THREE.TubeGeometry(curve, 28, edgeTubeRadius(edge) * 3.4, 6, false);
+    const streetMaterial = new THREE.MeshBasicMaterial({
+      color: 0x111a20,
+      transparent: true,
+      opacity: edgeOpacity(edge) * 0.48,
+      depthWrite: false
+    });
+    const street = new THREE.Mesh(streetGeometry, streetMaterial);
+    const geometry = new THREE.TubeGeometry(curve, 28, edgeTubeRadius(edge) * 0.78, 6, false);
     const material = new THREE.MeshBasicMaterial({
       color,
       transparent: true,
-      opacity: edgeOpacity(edge),
+      opacity: Math.min(1, edgeOpacity(edge) * 1.08),
       depthWrite: false
     });
     const line = new THREE.Mesh(geometry, material);
     const arrow = makeArrowHead(points, color);
     arrow.material.opacity = edgeOpacity(edge);
     const group = new THREE.Group();
-    group.add(line, arrow);
+    group.add(street, line, arrow);
     group.userData.edge = edge;
+    group.userData.streetMaterial = streetMaterial;
     group.userData.lineMaterial = material;
     group.userData.arrowMaterial = arrow.material;
     edgeRoot.add(group);
   }
 }
 
+function streetCurveForEdge(from, to) {
+  const fromRadius = Math.max(from.width || 0, from.depth || 0) * 0.52 + 10;
+  const toRadius = Math.max(to.width || 0, to.depth || 0) * 0.52 + 10;
+  const direction = new THREE.Vector3(to.x - from.x, 0, to.z - from.z);
+  if (direction.lengthSq() < 1) direction.set(1, 0, 0);
+  direction.normalize();
+  const startY = Math.max(5, (from.y || 0) + Math.min(from.height || 0, 6));
+  const endY = Math.max(5, (to.y || 0) + Math.min(to.height || 0, 6));
+  const streetY = Math.max(5, Math.min(startY, endY));
+  const start = new THREE.Vector3(from.x + direction.x * fromRadius, streetY, from.z + direction.z * fromRadius);
+  const end = new THREE.Vector3(to.x - direction.x * toRadius, streetY + 0.4, to.z - direction.z * toRadius);
+  const route = new THREE.CurvePath();
+  const horizontalFirst = Math.abs(end.x - start.x) > Math.abs(end.z - start.z);
+  const jog = rectangularStreetJog(start, end, horizontalFirst);
+  [start, ...jog, end].forEach((point, index, points) => {
+    if (index === 0) return;
+    const previous = points[index - 1];
+    if (previous.distanceTo(point) > 0.1) {
+      route.add(new THREE.LineCurve3(previous, point));
+    }
+  });
+  return route;
+}
+
+function rectangularStreetJog(start, end, horizontalFirst) {
+  const laneOffset = laneOffsetForStreet(start, end);
+  if (horizontalFirst) {
+    const midX = (start.x + end.x) / 2 + laneOffset;
+    return [
+      new THREE.Vector3(midX, start.y, start.z),
+      new THREE.Vector3(midX, end.y, end.z)
+    ];
+  }
+  const midZ = (start.z + end.z) / 2 + laneOffset;
+  return [
+    new THREE.Vector3(start.x, start.y, midZ),
+    new THREE.Vector3(end.x, end.y, midZ)
+  ];
+}
+
+function laneOffsetForStreet(start, end) {
+  const hash = Math.sin((start.x * 12.9898 + start.z * 78.233 + end.x * 37.719 + end.z * 11.131) * 0.001) * 43758.5453;
+  return (hash - Math.floor(hash) - 0.5) * 34;
+}
+
 function applyKindRotation(mesh, kind) {
-  if (kind === "service" || kind === "class") {
+  if (kind === "service") {
     mesh.rotation.y = Math.PI / 6;
   } else if (kind === "protocol") {
     mesh.rotation.y = Math.PI / 4;
   }
 }
 
+function addCityBuildingDetails(mesh, node) {
+  if (!isStructuralBuilding(node.kind) || node.height < 28) return;
+  const tint = complexityTintForNode(node);
+  const hotWindows = tint > 0.72;
+  const windowMaterial = getBasicMaterial(`windows:${node.kind}:${hotWindows ? "hot" : "cool"}`, {
+    color: hotWindows ? 0xffe6a3 : 0x8ff7ff,
+    transparent: true,
+    opacity: 0.48,
+    depthWrite: false
+  });
+  const floorMaterial = getBasicMaterial(`floor-band:${node.kind}`, {
+    color: hotWindows ? 0xffb84d : 0x5ee7ff,
+    transparent: true,
+    opacity: 0.22,
+    depthWrite: false
+  });
+  const podiumMaterial = getBasicMaterial(`podium:${node.kind}`, {
+    color: 0x071017,
+    transparent: true,
+    opacity: 0.62,
+    depthWrite: false
+  });
+  const capMaterial = getBasicMaterial(`roof:${node.kind}`, {
+    color: hotWindows ? 0xfff0ad : 0xbff8ff,
+    transparent: true,
+    opacity: 0.34,
+    depthWrite: false
+  });
+  const levels = clamp(Math.floor(node.height / 18), 2, 14);
+  const columns = clamp(Math.floor(node.width / 16), 2, 8);
+  const sideColumns = clamp(Math.floor(node.depth / 16), 2, 7);
+  const windowWidth = Math.max(2.2, node.width / (columns * 5.8));
+  const sideWindowWidth = Math.max(2.2, node.depth / (sideColumns * 5.8));
+  const windowHeight = Math.max(2.2, node.height / (levels * 9));
+  const sideYStart = -node.height / 2 + node.height / (levels + 1);
+
+  const podiumHeight = clamp(node.height * 0.12, 4, 18);
+  const podium = new THREE.Mesh(
+    new THREE.BoxGeometry(node.width * 1.08, podiumHeight, node.depth * 1.08),
+    podiumMaterial
+  );
+  podium.position.set(0, -node.height / 2 + podiumHeight / 2 + 0.3, 0);
+  mesh.add(podium);
+
+  for (let level = 0; level < levels; level += 1) {
+    const y = sideYStart + level * (node.height / (levels + 1));
+    if (level % 2 === 0 || level === levels - 1) {
+      const frontBand = new THREE.Mesh(new THREE.BoxGeometry(node.width * 0.88, 0.65, 0.7), floorMaterial);
+      frontBand.position.set(0, y - windowHeight * 1.25, node.depth / 2 + 0.38);
+      mesh.add(frontBand);
+      const sideBand = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.65, node.depth * 0.88), floorMaterial);
+      sideBand.position.set(node.width / 2 + 0.38, y - windowHeight * 1.25, 0);
+      mesh.add(sideBand);
+    }
+    for (let column = 0; column < columns; column += 1) {
+      const x = columns === 1 ? 0 : (column - (columns - 1) / 2) * (node.width / columns);
+      const front = new THREE.Mesh(new THREE.BoxGeometry(windowWidth, windowHeight, 0.55), windowMaterial);
+      front.position.set(x, y, node.depth / 2 + 0.35);
+      mesh.add(front);
+    }
+    for (let column = 0; column < sideColumns; column += 1) {
+      const z = sideColumns === 1 ? 0 : (column - (sideColumns - 1) / 2) * (node.depth / sideColumns);
+      const sideWindow = new THREE.Mesh(new THREE.BoxGeometry(0.55, windowHeight, sideWindowWidth), windowMaterial);
+      sideWindow.position.set(node.width / 2 + 0.35, y, z);
+      mesh.add(sideWindow);
+    }
+  }
+
+  const roof = new THREE.Mesh(
+    new THREE.BoxGeometry(Math.max(5, node.width * 0.72), Math.max(2, node.height * 0.04), Math.max(5, node.depth * 0.72)),
+    capMaterial
+  );
+  roof.position.set(0, node.height / 2 + Math.max(1.2, node.height * 0.025), 0);
+  mesh.add(roof);
+
+  if (node.height > 70) {
+    const antenna = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.7, 1.1, clamp(node.height * 0.12, 8, 24), 8),
+      capMaterial
+    );
+    antenna.position.set(node.width * 0.22, node.height / 2 + clamp(node.height * 0.08, 6, 16), node.depth * 0.18);
+    mesh.add(antenna);
+  }
+}
+
+function addCityObjectOutline(mesh, node) {
+  if (!isTranslucentCityObject(node.kind)) return;
+  const outlineMaterial = new THREE.LineBasicMaterial({
+    color: complexityTintForNode(node) > 0.72 ? 0xffdf8a : 0x8fd8ff,
+    transparent: true,
+    opacity: isStructuralBuilding(node.kind) ? 0.52 : 0.38,
+    depthWrite: false
+  });
+  const outline = new THREE.LineSegments(
+    new THREE.EdgesGeometry(makeNodeGeometry(node.kind, node.width * 1.01, node.height * 1.01, node.depth * 1.01)),
+    outlineMaterial
+  );
+  outline.userData = { role: "city-outline" };
+  mesh.add(outline);
+}
+
+function addFileDistrictDetails(mesh, node) {
+  if (node.kind !== "file") return;
+  const roadMaterial = getBasicMaterial("file-district-road", {
+    color: 0x1d313b,
+    transparent: true,
+    opacity: 0.78,
+    depthWrite: false
+  });
+  const glowMaterial = getBasicMaterial("file-district-glow", {
+    color: 0x63d2ff,
+    transparent: true,
+    opacity: 0.24,
+    depthWrite: false
+  });
+  const topY = node.height / 2 + 0.42;
+  const roadCountX = clamp(Math.floor(node.width / 58), 1, 6);
+  const roadCountZ = clamp(Math.floor(node.depth / 46), 1, 5);
+
+  for (let index = 1; index <= roadCountX; index += 1) {
+    const x = -node.width / 2 + (node.width / (roadCountX + 1)) * index;
+    const road = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.38, node.depth * 0.82), roadMaterial);
+    road.position.set(x, topY, 0);
+    mesh.add(road);
+  }
+
+  for (let index = 1; index <= roadCountZ; index += 1) {
+    const z = -node.depth / 2 + (node.depth / (roadCountZ + 1)) * index;
+    const road = new THREE.Mesh(new THREE.BoxGeometry(node.width * 0.82, 0.38, 1.2), roadMaterial);
+    road.position.set(0, topY + 0.04, z);
+    mesh.add(road);
+  }
+
+  const markerSize = clamp(Math.min(node.width, node.depth) * 0.06, 2.8, 8);
+  [
+    [-1, -1],
+    [1, -1],
+    [-1, 1],
+    [1, 1]
+  ].forEach(([xSide, zSide]) => {
+    const marker = new THREE.Mesh(new THREE.BoxGeometry(markerSize, 0.5, markerSize), glowMaterial);
+    marker.position.set(xSide * node.width * 0.38, topY + 0.12, zSide * node.depth * 0.36);
+    mesh.add(marker);
+  });
+}
+
+function isStructuralBuilding(kind) {
+  return ["swiftui_view", "service", "class", "model", "struct", "enum"].includes(kind);
+}
+
+function isTranslucentCityObject(kind) {
+  return isStructuralBuilding(kind) || kind === "function" || kind === "protocol" || kind === "property";
+}
+
+function cityObjectOpacity(kind) {
+  if (kind === "property") return 0.78;
+  if (kind === "function" || kind === "protocol") return 0.68;
+  if (isStructuralBuilding(kind)) return 0.58;
+  return 1;
+}
+
 function colorForNode(node) {
   const base = new THREE.Color(node.kind === "file" ? 0x252b31 : colors[node.kind] || 0x95a4ad);
   const complexityTint = complexityTintForNode(node);
   const spectrum = spectrumColorForComplexity(complexityTint);
-  return base.lerp(spectrum, 0.38 + complexityTint * 0.58).getHex();
+  const blend = isStructuralBuilding(node.kind) ? 0.28 + complexityTint * 0.48 : 0.38 + complexityTint * 0.58;
+  const shadowedBase = isStructuralBuilding(node.kind) ? base.clone().lerp(new THREE.Color(0x071017), 0.38) : base;
+  return shadowedBase.lerp(spectrum, blend).getHex();
 }
 
 function emissiveForNode(node) {
@@ -638,6 +861,7 @@ function applyFilters() {
   const neighborhood = focusedNeighborhood();
   resetDynamicLayout();
   xrayRoot.clear();
+  popupXrayRoot.clear();
   root.children.forEach((object) => {
     const nodeId = object.userData.nodeId;
     if (!nodeId) return;
@@ -657,16 +881,27 @@ function applyFilters() {
     if (object.material) {
       const isOpenShell = isOpenedShell(nodeId);
       const hovered = nodeId === state.hoveredId;
-      const xrayShell = hovered && getInspectableMemberIds(nodeId).length > 0;
-      object.material.wireframe = isOpenShell;
-      const opacity = xrayShell ? 0.34 : dim ? 0.24 : object.userData.defaultOpacity ?? 1;
+      const selected = nodeId === state.selectedId;
+      const xrayShell = (selected || hovered || isOpenShell) && shouldShowMesh(nodeId);
+      object.material.wireframe = xrayShell;
+      const opacity = dim ? 0.24 : xrayShell ? Math.min(object.userData.defaultOpacity ?? 1, 0.36) : object.userData.defaultOpacity ?? 1;
       object.material.opacity = opacity;
       object.material.transparent = xrayShell || dim || Boolean(object.userData.defaultTransparent);
       object.material.depthWrite = xrayShell ? false : object.userData.defaultDepthWrite ?? true;
+      if (xrayShell) {
+        object.material.color.setHex(0x8fd8ff);
+        object.material.emissive.setHex(0x63d2ff);
+      } else if (node) {
+        object.material.color.setHex(colorForNode(node));
+        object.material.emissive.setHex(emissiveForNode(node));
+      }
+      object.material.needsUpdate = true;
       object.material.emissiveIntensity = nodeId === state.selectedId ? 0.45 : hovered ? 0.34 : matched ? 0.28 : node?.kind === "swiftui_view" ? 0.08 : 0.02;
     }
   });
   buildHoverXray(neighborhood);
+  applyPopupHoverMaterials();
+  buildPopupHoverXray();
 
   edgeRoot.visible = state.showEdges;
   edgeRoot.children.forEach((edgeObject) => {
@@ -679,7 +914,8 @@ function applyFilters() {
       && root.children.some((object) => object.userData.nodeId === edge.to && object.visible);
     edgeObject.visible = visible;
     const opacity = edge.from === state.selectedId || edge.to === state.selectedId ? 1 : edgeOpacity(edge);
-    edgeObject.userData.lineMaterial.opacity = opacity;
+    edgeObject.userData.streetMaterial.opacity = opacity * 0.48;
+    edgeObject.userData.lineMaterial.opacity = Math.min(1, opacity * 1.08);
     edgeObject.userData.arrowMaterial.opacity = opacity;
   });
 }
@@ -783,6 +1019,20 @@ function bindEvents() {
     await shareMapScreenshot();
   });
 
+  toggleLeftRailButton.addEventListener("click", () => {
+    appShell.classList.toggle("is-left-hidden");
+    syncRailButtons();
+    resize();
+    requestRender();
+  });
+
+  toggleRightRailButton.addEventListener("click", () => {
+    appShell.classList.toggle("is-right-hidden");
+    syncRailButtons();
+    resize();
+    requestRender();
+  });
+
   mapPresetButtons.forEach((button) => {
     button.addEventListener("click", () => applyMapPreset(button.dataset.viewPreset));
   });
@@ -861,6 +1111,15 @@ function bindEvents() {
     if (sourceButton) {
       const node = state.graph.nodes.find((candidate) => candidate.id === sourceButton.dataset.sourceNodeId);
       if (!node) return;
+      await showSourcePreview(node);
+      return;
+    }
+
+    const contextButton = event.target.closest("[data-source-context]");
+    if (contextButton) {
+      const node = state.graph.nodes.find((candidate) => candidate.id === contextButton.dataset.sourceContext);
+      if (!node) return;
+      state.sourceContext = clamp(state.sourceContext + Number(contextButton.dataset.delta || 0), 4, 80);
       await showSourcePreview(node);
       return;
     }
@@ -1297,6 +1556,9 @@ function selectNode(id) {
   buildMemberPopup();
   markFiltersDirty();
   focusCameraOnNode(node);
+  if (node.file) {
+    showSourcePreview(node);
+  }
 }
 
 function renderDetails(node) {
@@ -1306,6 +1568,9 @@ function renderDetails(node) {
   const memberIds = getInspectableMemberIds(node.id);
   const externalUses = getExternalUses(node);
   const ownedState = getOwnedState(node);
+  const axis = axisMetricsForNode(node);
+  const dimensions = dimensionsForNode(node);
+  const complexity = complexityForNode(node);
   const axisDetails = describeAxisDrivers(node);
   const names = (edges, direction) => edges
     .slice(0, 6)
@@ -1317,15 +1582,28 @@ function renderDetails(node) {
     .join("<br>");
 
   return `
-    <div class="detail-card">
+    <div class="detail-card object-summary-card">
       <div class="detail-title">
-        <h3>${escapeHtml(node.name)}</h3>
+        <div class="object-title-lockup">
+          <span class="object-icon" aria-hidden="true"></span>
+          <div>
+            <h3>${escapeHtml(node.name)}</h3>
+            <p>${escapeHtml(kindMeaning)}</p>
+          </div>
+        </div>
         <span class="detail-badge">${escapeHtml(friendlyKind(node.kind))}</span>
       </div>
-      <p>${escapeHtml(kindMeaning)}${node.file ? ` · <code>${escapeHtml(node.file)}:${node.line}</code>` : ""}</p>
+      <div class="summary-table">
+        <div><span>Complexity</span><strong>${formatNumber(complexity)}</strong></div>
+        <div><span>LOC</span><strong>${formatNumber(axis.lines)}</strong></div>
+        <div><span>Vars</span><strong>${formatNumber(axis.variables)}</strong></div>
+        <div><span>Funcs</span><strong>${formatNumber(axis.functions)}</strong></div>
+        <div><span>Size</span><strong>${dimensions.width}×${dimensions.height}×${dimensions.depth}</strong></div>
+        ${node.file ? `<div><span>File</span><strong>${escapeHtml(node.file)}:${node.line}</strong></div>` : ""}
+      </div>
     </div>
     ${node.source ? `<p>Found by <code>${escapeHtml(node.source)}</code>${node.inferred ? " · inferred hint" : ""}${node.indexResolved ? " · Xcode index resolved" : ""}${node.confidence ? ` · confidence <code>${escapeHtml(node.confidence)}</code>` : ""}</p>` : ""}
-    ${node.file ? `<div class="source-actions"><button class="button" type="button" data-source-node-id="${escapeHtml(node.id)}">Source</button><button class="button" type="button" data-xcode-node-id="${escapeHtml(node.id)}">Open in Xcode</button></div><div id="sourcePreview" class="source-preview"></div>` : ""}
+    ${node.file ? `<section class="source-card"><div class="source-card-header"><div><span class="eyebrow">Source view</span><strong>${escapeHtml(node.file)}:${node.line}</strong></div><div class="source-control-group"><button class="button button-compact source-button-primary" type="button" data-source-node-id="${escapeHtml(node.id)}">View source</button><button class="button button-compact" type="button" data-source-context="${escapeHtml(node.id)}" data-delta="-6">− Context</button><button class="button button-compact" type="button" data-source-context="${escapeHtml(node.id)}" data-delta="6">+ Context</button><button class="button button-compact" type="button" data-xcode-node-id="${escapeHtml(node.id)}">Open in Xcode</button></div></div><div id="sourcePreview" class="source-preview"><p>Loading source...</p></div></section>` : ""}
     <div class="detail-grid">
       <p><strong>Axis mapping</strong><br>${axisDetails}</p>
       <p><strong>Inside this object</strong><br>${memberIds.length > 0 ? `${memberIds.length} functions / properties in the 3D popup.` : "No inspectable members yet."}</p>
@@ -1347,7 +1625,8 @@ async function openSourceInXcode(node) {
       body: JSON.stringify({
         sourceRoot: state.graph.project.sourceRoot,
         file: node.file,
-        line: node.line
+        line: node.line,
+        context: state.sourceContext
       })
     });
     const payload = await response.json();
@@ -1547,9 +1826,19 @@ function syncButtons() {
   focusButton.classList.toggle("is-active", state.focusMode);
   edgesButton.classList.toggle("is-active", state.showEdges);
   viewAllButton.classList.toggle("is-active", !state.focusMode);
+  syncRailButtons();
   if (!state.showEdges) {
     mapPresetButtons.forEach((button) => button.classList.toggle("is-active", button.dataset.viewPreset === "quiet"));
   }
+}
+
+function syncRailButtons() {
+  const leftVisible = !appShell.classList.contains("is-left-hidden");
+  const rightVisible = !appShell.classList.contains("is-right-hidden");
+  toggleLeftRailButton.classList.toggle("is-active", leftVisible);
+  toggleRightRailButton.classList.toggle("is-active", rightVisible);
+  toggleLeftRailButton.setAttribute("aria-pressed", String(leftVisible));
+  toggleRightRailButton.setAttribute("aria-pressed", String(rightVisible));
 }
 
 async function shareMapScreenshot() {
@@ -1876,9 +2165,8 @@ function makeNodeGeometry(kind, width, height, depth) {
     const radius = Math.max(7, Math.min(roundedWidth, roundedDepth) / 2);
     geometry = new THREE.TorusGeometry(radius, Math.max(2, roundedHeight / 3), 8, 20);
     geometry.rotateX(Math.PI / 2);
-  } else if (kind === "service" || kind === "class") {
-    geometry = new THREE.CylinderGeometry(0.37, 0.5, 1, 6);
-    geometry.scale(roundedWidth, roundedHeight, roundedDepth);
+  } else if (isStructuralBuilding(kind)) {
+    geometry = new THREE.BoxGeometry(roundedWidth, roundedHeight, roundedDepth);
   } else if (kind === "file") {
     geometry = new THREE.BoxGeometry(roundedWidth, roundedHeight, roundedDepth);
   } else if (kind === "function" || kind === "protocol") {
@@ -1984,6 +2272,20 @@ function getInspectableMemberIds(nodeId) {
     });
 }
 
+function getXrayContentIds(nodeId) {
+  if (!state.graph) return [];
+  const shell = state.graph.nodes.find((candidate) => candidate.id === nodeId);
+  return state.graph.edges
+    .filter((edge) => edge.kind === "defines" && edge.from === nodeId)
+    .map((edge) => edge.to)
+    .filter((childId) => {
+      const child = state.graph.nodes.find((candidate) => candidate.id === childId);
+      if (!child) return false;
+      if (shell?.kind === "file") return child.kind !== "function" && child.kind !== "property";
+      return child.kind === "function" || child.kind === "property";
+    });
+}
+
 function isOpenedShell(nodeId) {
   return nodeId === state.openShellId && getInspectableMemberIds(nodeId).length > 0;
 }
@@ -2054,11 +2356,14 @@ function shouldShowMesh(nodeId) {
 }
 
 function buildHoverXray(neighborhood) {
-  if (!state.hoveredId) return;
-  const shell = state.layout.find((candidate) => candidate.id === state.hoveredId);
+  const shellId = state.hoveredId || state.openShellId || state.selectedId;
+  if (!shellId) return;
+  const shell = state.layout.find((candidate) => candidate.id === shellId);
   if (!shell || !shouldShowMesh(shell.id) || !isNodeVisible(shell, neighborhood)) return;
 
-  const memberIds = getInspectableMemberIds(shell.id);
+  addGlassObjectShell(shell);
+
+  const memberIds = getXrayContentIds(shell.id);
   if (memberIds.length === 0) return;
 
   const members = memberIds
@@ -2069,20 +2374,22 @@ function buildHoverXray(neighborhood) {
 
   const columns = Math.ceil(Math.sqrt(members.length));
   const rows = Math.ceil(members.length / columns);
-  const innerWidth = Math.max(8, shell.width * 0.72);
-  const innerDepth = Math.max(8, shell.depth * 0.72);
-  const innerHeight = Math.max(8, shell.height * 0.7);
+  const innerWidth = Math.max(8, shell.width * 0.66);
+  const innerDepth = Math.max(8, shell.depth * 0.66);
+  const innerHeight = Math.max(8, shell.height * 0.82);
   const spacingX = columns > 1 ? innerWidth / (columns - 1) : 0;
   const spacingZ = rows > 1 ? innerDepth / (rows - 1) : 0;
-  const itemSize = clamp(Math.min(innerWidth / Math.max(columns, 1), innerDepth / Math.max(rows, 1), innerHeight * 0.28), 4, 16);
-  const baseY = (shell.y || 0) + shell.height * 0.5;
+  const itemSize = clamp(Math.min(innerWidth / Math.max(columns, 1), innerDepth / Math.max(rows, 1), innerHeight * 0.18), 4, 14);
+  const minY = (shell.y || 0) + shell.height * 0.16;
+  const maxY = (shell.y || 0) + shell.height * 0.88;
 
   members.forEach((member, index) => {
     const column = index % columns;
     const row = Math.floor(index / columns);
     const x = shell.x + (columns === 1 ? 0 : column * spacingX - innerWidth / 2);
     const z = shell.z + (rows === 1 ? 0 : row * spacingZ - innerDepth / 2);
-    const y = baseY + ((index % 3) - 1) * itemSize * 0.38;
+    const verticalT = members.length === 1 ? 0.5 : index / Math.max(1, members.length - 1);
+    const y = minY + (maxY - minY) * verticalT;
     const geometry = makeNodeGeometry(member.kind, itemSize, itemSize * (member.kind === "function" ? 1.6 : 1), itemSize);
     const material = new THREE.MeshStandardMaterial({
       color: colorForNode(member),
@@ -2092,16 +2399,212 @@ function buildHoverXray(neighborhood) {
       metalness: 0.08,
       transparent: true,
       opacity: 0.88,
-      depthWrite: false
+      depthWrite: false,
+      depthTest: false
     });
     const mesh = new THREE.Mesh(geometry, material);
     mesh.position.set(x, y, z);
     applyKindRotation(mesh, member.kind);
+    mesh.renderOrder = 24;
     mesh.userData = {
       role: "xray-inner"
     };
     xrayRoot.add(mesh);
   });
+}
+
+function applyPopupHoverMaterials() {
+  popupRoot.traverse((object) => {
+    if (!object.isMesh || !object.userData.nodeId || !object.material) return;
+    if (object.userData.defaultPopupOpacity === undefined) {
+      object.userData.defaultPopupOpacity = object.material.opacity ?? 1;
+      object.userData.defaultPopupTransparent = Boolean(object.material.transparent);
+      object.userData.defaultPopupDepthWrite = object.material.depthWrite ?? true;
+      object.userData.defaultPopupWireframe = Boolean(object.material.wireframe);
+    }
+    const hovered = object.userData.nodeId === state.hoveredId;
+    object.material.wireframe = hovered || object.userData.defaultPopupWireframe;
+    object.material.opacity = hovered ? Math.min(object.userData.defaultPopupOpacity, 0.34) : object.userData.defaultPopupOpacity;
+    object.material.transparent = hovered || object.userData.defaultPopupTransparent;
+    object.material.depthWrite = hovered ? false : object.userData.defaultPopupDepthWrite;
+    object.material.needsUpdate = true;
+  });
+}
+
+function buildPopupHoverXray() {
+  if (!state.hoveredId || popupRoot.children.length === 0) return;
+
+  const hoveredObject = findPopupObject(state.hoveredId);
+  if (!hoveredObject) return;
+
+  const box = new THREE.Box3().setFromObject(hoveredObject);
+  if (box.isEmpty()) return;
+
+  const size = new THREE.Vector3();
+  const center = new THREE.Vector3();
+  box.getSize(size);
+  box.getCenter(center);
+
+  const shell = {
+    x: center.x,
+    y: center.y - size.y / 2,
+    z: center.z,
+    width: Math.max(22, size.x * 1.34),
+    height: Math.max(26, size.y * 1.32),
+    depth: Math.max(22, size.z * 1.34)
+  };
+  addGlassObjectShellToRoot(shell, popupXrayRoot, 42);
+  buildPopupXrayInternals(shell, state.hoveredId);
+}
+
+function findPopupObject(nodeId) {
+  let found = null;
+  popupRoot.traverse((object) => {
+    if (found || !object.isMesh || object.userData.nodeId !== nodeId) return;
+    found = object;
+  });
+  return found;
+}
+
+function buildPopupXrayInternals(shell, nodeId) {
+  const members = getXrayContentIds(nodeId)
+    .map((memberId) => state.graph.nodes.find((candidate) => candidate.id === memberId))
+    .filter(Boolean)
+    .slice(0, 24);
+  if (members.length === 0) return;
+
+  const columns = Math.ceil(Math.sqrt(members.length));
+  const rows = Math.ceil(members.length / columns);
+  const innerWidth = Math.max(8, shell.width * 0.62);
+  const innerDepth = Math.max(8, shell.depth * 0.62);
+  const spacingX = columns > 1 ? innerWidth / (columns - 1) : 0;
+  const spacingZ = rows > 1 ? innerDepth / (rows - 1) : 0;
+  const itemSize = clamp(Math.min(innerWidth / Math.max(columns, 1), innerDepth / Math.max(rows, 1), shell.height * 0.18), 3, 10);
+  const minY = shell.y + shell.height * 0.18;
+  const maxY = shell.y + shell.height * 0.86;
+
+  members.forEach((member, index) => {
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    const x = shell.x + (columns === 1 ? 0 : column * spacingX - innerWidth / 2);
+    const z = shell.z + (rows === 1 ? 0 : row * spacingZ - innerDepth / 2);
+    const verticalT = members.length === 1 ? 0.5 : index / Math.max(1, members.length - 1);
+    const y = minY + (maxY - minY) * verticalT;
+    const geometry = makeNodeGeometry(member.kind, itemSize, itemSize * (member.kind === "function" ? 1.6 : 1), itemSize);
+    const material = new THREE.MeshStandardMaterial({
+      color: colorForNode(member),
+      emissive: emissiveForNode(member),
+      emissiveIntensity: 0.42,
+      roughness: 0.5,
+      metalness: 0.08,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      depthTest: false
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(x, y, z);
+    applyKindRotation(mesh, member.kind);
+    mesh.renderOrder = 48;
+    mesh.userData = { role: "xray-inner" };
+    popupXrayRoot.add(mesh);
+  });
+}
+
+function addGlassObjectShell(shell) {
+  addGlassObjectShellToRoot(shell, xrayRoot, 20);
+}
+
+function addGlassObjectShellToRoot(shell, targetRoot, renderOrderBase) {
+  const shellWidth = shell.width * 1.12;
+  const shellHeight = shell.height * 1.08;
+  const shellDepth = shell.depth * 1.12;
+  const center = new THREE.Vector3(shell.x, (shell.y || 0) + shell.height / 2, shell.z);
+  const glassMaterial = getBasicMaterial("selected-glass-shell-fill", {
+    color: 0x8fd8ff,
+    transparent: true,
+    opacity: 0.16,
+    depthWrite: false,
+    depthTest: false
+  });
+  const glass = new THREE.Mesh(new THREE.BoxGeometry(shellWidth, shellHeight, shellDepth), glassMaterial);
+  glass.position.copy(center);
+  glass.renderOrder = renderOrderBase;
+  glass.userData = { role: "xray-inner" };
+  targetRoot.add(glass);
+
+  const edgeMaterial = getBasicMaterial("selected-glass-shell-edge-bars", {
+    color: 0xa8ddff,
+    transparent: true,
+    opacity: 0.95,
+    depthWrite: false,
+    depthTest: false
+  });
+  const edges = makeGlassBoxBars(shellWidth, shellHeight, shellDepth, Math.max(1.8, Math.min(shellWidth, shellDepth) * 0.018), edgeMaterial);
+  edges.position.copy(center);
+  edges.renderOrder = renderOrderBase + 2;
+  edges.userData = { role: "xray-inner" };
+  targetRoot.add(edges);
+
+  const gridMaterial = getBasicMaterial("selected-glass-shell-grid-bars", {
+    color: 0x8fd8ff,
+    transparent: true,
+    opacity: 0.48,
+    depthWrite: false,
+    depthTest: false
+  });
+  const grid = new THREE.Group();
+  const gridThickness = Math.max(0.9, Math.min(shellWidth, shellDepth) * 0.01);
+  const levels = clamp(Math.floor(shellHeight / 26), 3, 9);
+  for (let level = 1; level < levels; level += 1) {
+    const y = -shellHeight / 2 + (shellHeight / levels) * level;
+    const front = new THREE.Mesh(new THREE.BoxGeometry(shellWidth, gridThickness, gridThickness), gridMaterial);
+    front.position.set(0, y, shellDepth / 2 + gridThickness);
+    const side = new THREE.Mesh(new THREE.BoxGeometry(gridThickness, gridThickness, shellDepth), gridMaterial);
+    side.position.set(shellWidth / 2 + gridThickness, y, 0);
+    grid.add(front, side);
+  }
+  const columns = clamp(Math.floor(shellWidth / 28), 2, 6);
+  for (let column = 1; column < columns; column += 1) {
+    const x = -shellWidth / 2 + (shellWidth / columns) * column;
+    const line = new THREE.Mesh(new THREE.BoxGeometry(gridThickness, shellHeight, gridThickness), gridMaterial);
+    line.position.set(x, 0, shellDepth / 2 + gridThickness);
+    grid.add(line);
+  }
+  grid.position.copy(center);
+  grid.renderOrder = renderOrderBase + 1;
+  grid.userData = { role: "xray-inner" };
+  targetRoot.add(grid);
+}
+
+function makeGlassBoxBars(width, height, depth, thickness, material) {
+  const group = new THREE.Group();
+  const xPositions = [-width / 2, width / 2];
+  const yPositions = [-height / 2, height / 2];
+  const zPositions = [-depth / 2, depth / 2];
+
+  yPositions.forEach((y) => {
+    zPositions.forEach((z) => {
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(width + thickness, thickness, thickness), material);
+      bar.position.set(0, y, z);
+      group.add(bar);
+    });
+    xPositions.forEach((x) => {
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(thickness, thickness, depth + thickness), material);
+      bar.position.set(x, y, 0);
+      group.add(bar);
+    });
+  });
+
+  xPositions.forEach((x) => {
+    zPositions.forEach((z) => {
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(thickness, height + thickness, thickness), material);
+      bar.position.set(x, 0, z);
+      group.add(bar);
+    });
+  });
+
+  return group;
 }
 
 function resetDynamicLayout() {
@@ -2113,6 +2616,7 @@ function resetDynamicLayout() {
       mesh.material.opacity = mesh.userData.defaultOpacity ?? 1;
       mesh.material.transparent = Boolean(mesh.userData.defaultTransparent);
       mesh.material.depthWrite = mesh.userData.defaultDepthWrite ?? true;
+      mesh.material.needsUpdate = true;
       if (typeof mesh.userData.defaultEmissiveIntensity === "number") {
         mesh.material.emissiveIntensity = mesh.userData.defaultEmissiveIntensity;
       }
@@ -2125,6 +2629,7 @@ function resetDynamicLayout() {
 
 function buildMemberPopup() {
   popupRoot.clear();
+  popupXrayRoot.clear();
   state.popupFocusTarget = null;
 
   const memberIds = getInspectableMemberIds(state.openShellId);
@@ -2208,7 +2713,10 @@ function buildMemberPopup() {
       roughness: 0.56,
       metalness: 0.12,
       emissive: colors[shellNode.kind] || 0x000000,
-      emissiveIntensity: 0.12
+      emissiveIntensity: 0.12,
+      transparent: true,
+      opacity: 0.22,
+      depthWrite: false
     })
   );
   parentMesh.position.copy(parentPosition);
@@ -2242,7 +2750,10 @@ function placePopupMembers(memberIds, origin, frameHeight, positions, layoutInfo
       roughness: 0.56,
       metalness: 0.1,
       emissive: colors[node.kind] || 0x000000,
-      emissiveIntensity: 0.08
+      emissiveIntensity: 0.08,
+      transparent: true,
+      opacity: cityObjectOpacity(node.kind),
+      depthWrite: false
     });
     const boxWidth = dimensions.width;
     const boxHeight = dimensions.height;
@@ -2371,19 +2882,40 @@ function drawPopupEdge(edge, positions) {
   const fromPosition = positions.get(edge.from);
   const toPosition = positions.get(edge.to);
   if (!fromPosition || !toPosition) return;
-  const curve = new THREE.QuadraticBezierCurve3(
-    fromPosition,
-    new THREE.Vector3((fromPosition.x + toPosition.x) / 2, Math.max(fromPosition.y, toPosition.y) + popupEdgeLift(edge.kind), (fromPosition.z + toPosition.z) / 2),
-    toPosition
-  );
-  const points = curve.getPoints(12);
+  const curve = popupStreetCurveForEdge(fromPosition, toPosition);
+  const points = curve.getPoints(18);
   const color = popupEdgeColor(edge.kind);
-  const geometry = new THREE.BufferGeometry().setFromPoints(points);
-  const material = new THREE.LineBasicMaterial({ color, transparent: true, opacity: popupEdgeOpacity(edge.kind) });
-  const line = new THREE.Line(geometry, material);
+  const roadGeometry = new THREE.TubeGeometry(curve, 18, 2.6, 6, false);
+  const roadMaterial = new THREE.MeshBasicMaterial({
+    color: 0x10212a,
+    transparent: true,
+    opacity: popupEdgeOpacity(edge.kind) * 0.42,
+    depthWrite: false
+  });
+  const road = new THREE.Mesh(roadGeometry, roadMaterial);
+  const geometry = new THREE.TubeGeometry(curve, 18, 0.75, 6, false);
+  const material = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: popupEdgeOpacity(edge.kind), depthWrite: false });
+  const line = new THREE.Mesh(geometry, material);
   const arrow = makeArrowHead(points, color);
   arrow.material.opacity = popupEdgeOpacity(edge.kind);
-  popupRoot.add(line, arrow);
+  popupRoot.add(road, line, arrow);
+}
+
+function popupStreetCurveForEdge(fromPosition, toPosition) {
+  const start = fromPosition.clone();
+  const end = toPosition.clone();
+  const streetY = Math.min(start.y, end.y) + 2;
+  start.y = streetY;
+  end.y = streetY + 0.2;
+  const horizontalFirst = Math.abs(end.x - start.x) > Math.abs(end.z - start.z);
+  const route = new THREE.CurvePath();
+  const jog = rectangularStreetJog(start, end, horizontalFirst);
+  [start, ...jog, end].forEach((point, index, points) => {
+    if (index === 0) return;
+    const previous = points[index - 1];
+    if (previous.distanceTo(point) > 0.1) route.add(new THREE.LineCurve3(previous, point));
+  });
+  return route;
 }
 
 function popupEdgeColor(kind) {

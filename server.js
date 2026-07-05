@@ -560,8 +560,9 @@ async function readSourceSnippet(body) {
   const source = await readFile(resolvedFile, "utf8");
   const lines = source.split(/\r?\n/);
   const clampedLine = Math.max(1, Math.min(lines.length, targetLine));
-  const startLine = Math.max(1, clampedLine - 8);
-  const endLine = Math.min(lines.length, clampedLine + 18);
+  const context = Math.max(4, Math.min(80, Number(body?.context || 12)));
+  const startLine = Math.max(1, clampedLine - context);
+  const endLine = Math.min(lines.length, clampedLine + context);
 
   return {
     file: relativeFile,

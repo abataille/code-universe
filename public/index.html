@@ -8,7 +8,7 @@
   </head>
   <body>
     <main class="app-shell">
-      <aside class="sidebar">
+      <aside class="sidebar left-rail">
         <div class="brand">
           <div class="brand-mark" aria-hidden="true">⌘</div>
           <div>
@@ -27,32 +27,12 @@
           <h2>Project</h2>
           <p class="panel-copy">Choose an Xcode project or a single Swift file. Scanning stays on this Mac.</p>
           <div class="stack">
-            <label class="field-label" for="parserSelect">Analysis style</label>
-            <select id="parserSelect" class="search selection-field">
-              <option value="heuristic">Fast overview</option>
-              <option value="merged">Best combined view</option>
-              <option value="swiftsyntax">Accurate Swift parse</option>
-              <option value="xcode-index">Xcode Index map</option>
-            </select>
             <button id="pickProjectButton" class="button button-primary" type="button">Choose Project or File</button>
             <button id="compareParsersButton" class="button" type="button">Compare Parsers</button>
             <button id="loadSampleButton" class="button" type="button">Load Sample Universe</button>
             <p id="pickerStatus" class="status-copy">No project chosen yet.</p>
             <p id="scanSummary" class="status-copy">The sample universe is available immediately.</p>
           </div>
-        </section>
-
-        <section class="panel">
-          <h2>Parser differences</h2>
-          <div id="parserDiff" class="parser-diff">
-            <p>Compare analysis styles to see symbols that only one method finds.</p>
-          </div>
-        </section>
-
-        <section class="panel panel-search">
-          <label class="field-label" for="searchInput">Find code object</label>
-          <input id="searchInput" class="search selection-field" type="search" placeholder="ContentView, AuthService..." />
-          <p class="status-copy">Press Enter to highlight the first match. Escape clears the search.</p>
         </section>
 
         <div class="control-row">
@@ -62,7 +42,7 @@
           <button id="shareMapButton" class="button" type="button">Share PNG</button>
         </div>
 
-        <section class="panel">
+        <section class="panel panel-map-layers">
           <h2>Map layers</h2>
           <div class="stack">
             <label class="toggle-row">
@@ -88,7 +68,7 @@
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel panel-streets">
           <h2>Connection detail</h2>
           <div class="stack">
             <label class="field-label" for="edgeDensitySelect">Amount of paths</label>
@@ -132,22 +112,6 @@
           </div>
         </section>
 
-        <section class="panel">
-          <h2>Inspector</h2>
-          <div id="selectedDetails" class="details">
-            <p>Click any object in the map to inspect what it is, what it uses, and where it lives in source.</p>
-          </div>
-        </section>
-
-        <section class="panel">
-          <h2>Map stats</h2>
-          <dl class="stats">
-            <div><dt>Nodes</dt><dd id="nodeCount">0</dd></div>
-            <div><dt>Edges</dt><dd id="edgeCount">0</dd></div>
-            <div><dt>SwiftUI Views</dt><dd id="viewCount">0</dd></div>
-            <div><dt>Services</dt><dd id="serviceCount">0</dd></div>
-          </dl>
-        </section>
       </aside>
 
       <section class="stage">
@@ -155,6 +119,20 @@
           <div>
             <strong id="projectName">Loading universe...</strong>
             <span id="projectMeta"></span>
+          </div>
+          <select id="parserSelect" class="topbar-select selection-field" aria-label="Analysis style">
+            <option value="heuristic">Fast overview</option>
+            <option value="merged">Best combined view</option>
+            <option value="swiftsyntax">Accurate Swift parse</option>
+            <option value="xcode-index">Xcode Index map</option>
+          </select>
+          <label class="topbar-search" aria-label="Search code object">
+            <span>Search</span>
+            <input id="searchInput" type="search" placeholder="ContentView, AuthService..." />
+          </label>
+          <div class="chrome-actions" aria-label="Layout controls">
+            <button id="toggleLeftRailButton" class="chrome-button" type="button" aria-pressed="false">Controls</button>
+            <button id="toggleRightRailButton" class="chrome-button" type="button" aria-pressed="false">Inspector</button>
           </div>
           <div class="legend">
             <span><i class="legend-file"></i>File</span>
@@ -190,7 +168,7 @@
         </div>
         <div class="shape-legend">
           <span><i class="shape-file"></i>File plane</span>
-          <span><i class="shape-view"></i>View panel</span>
+          <span><i class="shape-view"></i>View building</span>
           <span><i class="shape-service"></i>Service tower</span>
           <span><i class="shape-module"></i>Module ring</span>
           <span><i class="shape-cylinder"></i>Function/protocol</span>
@@ -203,6 +181,35 @@
           <span><b>File</b> LOC footprint</span>
         </div>
       </section>
+
+      <aside class="sidebar inspector-rail">
+        <section class="panel panel-inspector">
+          <span class="eyebrow">Inspector</span>
+          <h2>Selected object</h2>
+          <div id="selectedDetails" class="details">
+            <p>Click any object in the map to inspect what it is, what it uses, and where it lives in source.</p>
+          </div>
+        </section>
+
+        <section class="panel panel-metrics">
+          <span class="eyebrow">Complexity</span>
+          <h2>Map stats</h2>
+          <dl class="stats">
+            <div><dt>Nodes</dt><dd id="nodeCount">0</dd></div>
+            <div><dt>Edges</dt><dd id="edgeCount">0</dd></div>
+            <div><dt>SwiftUI Views</dt><dd id="viewCount">0</dd></div>
+            <div><dt>Services</dt><dd id="serviceCount">0</dd></div>
+          </dl>
+        </section>
+
+        <section class="panel panel-diff">
+          <span class="eyebrow">Analysis</span>
+          <h2>Parser differences</h2>
+          <div id="parserDiff" class="parser-diff">
+            <p>Compare analysis styles to see symbols that only one method finds.</p>
+          </div>
+        </section>
+      </aside>
     </main>
 
     <script type="importmap">
