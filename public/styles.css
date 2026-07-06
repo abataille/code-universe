@@ -558,7 +558,7 @@ h1 {
   grid-template-columns: 34px 1fr;
   gap: 10px;
   min-width: 0;
-  white-space: pre;
+  align-items: start;
 }
 
 .source-preview b {
@@ -566,6 +566,14 @@ h1 {
   font-weight: 500;
   text-align: right;
   user-select: none;
+}
+
+.source-preview code {
+  display: block;
+  min-width: max-content;
+  color: inherit;
+  white-space: pre;
+  overflow-wrap: normal;
 }
 
 .source-preview .is-target {
@@ -745,11 +753,12 @@ h1 {
 
 .topbar {
   position: absolute;
-  z-index: 2;
+  z-index: 5;
   top: 16px;
   left: 16px;
   right: 16px;
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-start;
   gap: 12px;
   align-items: center;
@@ -762,7 +771,9 @@ h1 {
 }
 
 .topbar > div:first-child {
-  min-width: 170px;
+  flex: 1 1 220px;
+  min-width: 190px;
+  max-width: 100%;
 }
 
 #projectMeta {
@@ -785,7 +796,8 @@ h1 {
 
 .topbar-search {
   flex: 1 1 260px;
-  max-width: 420px;
+  max-width: min(100%, 420px);
+  min-width: 220px;
   height: 36px;
   display: grid;
   grid-template-columns: auto 1fr;
@@ -824,6 +836,7 @@ h1 {
 
 .chrome-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 7px;
   margin-left: auto;
   flex: 0 0 auto;
@@ -1149,50 +1162,101 @@ h1 {
     border-bottom: 1px solid var(--line);
   }
 
+  .left-rail {
+    order: 2;
+  }
+
   .inspector-rail {
     order: 3;
   }
 
+  .stage {
+    order: 1;
+  }
+
   .stage,
   #worldCanvas {
-    min-height: 620px;
-    height: 620px;
+    min-height: min(74vh, 680px);
+    height: min(74vh, 680px);
   }
 
   .topbar {
-    align-items: flex-start;
-    flex-direction: column;
+    left: 10px;
+    right: 10px;
+    top: 10px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    padding: 10px;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .topbar > div:first-child {
+    grid-column: 1 / -1;
+    min-width: 0;
+  }
+
+  #projectMeta {
+    display: block;
+    margin: 2px 0 0;
+    font-size: 12px;
+  }
+
+  .topbar-select {
+    grid-column: 1;
+    min-width: 0;
+    width: 100%;
+    height: 34px;
+    flex: none;
+  }
+
+  .topbar-search {
+    grid-column: 1 / -1;
+    min-width: 0;
+    max-width: none;
+    height: 34px;
   }
 
   .chrome-actions {
+    grid-column: 2;
+    grid-row: 2;
     margin-left: 0;
+    width: auto;
+    justify-content: flex-end;
+  }
+
+  .chrome-button {
+    height: 34px;
+    padding: 0 9px;
   }
 
   .edge-legend {
-    right: 18px;
-    bottom: 78px;
+    display: none;
   }
 
   .shape-legend {
-    right: 18px;
-    bottom: 128px;
+    display: none;
   }
 
   .axis-legend {
-    right: 18px;
-    bottom: 178px;
+    display: none;
   }
 
   .map-presets {
-    left: 18px;
-    right: 18px;
+    top: 148px;
+    left: 10px;
+    right: 10px;
     justify-content: center;
     transform: none;
+    overflow-x: auto;
   }
 
   .hint {
-    left: 18px;
-    right: 18px;
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
     transform: none;
     border-radius: 16px;
   }

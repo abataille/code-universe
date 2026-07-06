@@ -1,6 +1,20 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 
+const excludedDirectoryNames = new Set([
+  ".build",
+  ".git",
+  "DerivedData",
+  "build",
+  "Build",
+  "Pods",
+  "Carthage",
+  ".swiftpm",
+  "SourcePackages",
+  "Generated",
+  "generated"
+]);
+
 const declarationPattern = /^\s*(?:(?:public|private|fileprivate|internal|open|final)\s+)*(struct|class|enum|protocol)\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*:\s*([^{]+))?/;
 const functionPattern = /^\s*(?:(?:public|private|fileprivate|internal|open|static|mutating|nonisolated)\s+)*func\s+([A-Za-z_][A-Za-z0-9_]*)/;
 const propertyPattern = /^\s*(?:@[A-Za-z][A-Za-z0-9_]*(?:\([^)]*\))?\s+)*(?:(?:public|private|fileprivate|internal|open|static)\s+)*(?:let|var)\s+([A-Za-z_][A-Za-z0-9_]*)/;
@@ -14,6 +28,8 @@ export async function scanSwiftFolder(inputRoot) {
   const declarations = [];
   const functions = [];
   const properties = [];
+  const typeIdsByName = new Map();
+  const pendingConformances = [];
 
   addNode(nodes, {
     id: "repo:root",
@@ -55,8 +71,9 @@ export async function scanSwiftFolder(inputRoot) {
         const [, declarationKind, name, inheritance = ""] = declarationMatch;
         const nodeKind = classifyType(declarationKind, name, inheritance, code);
         const declarationSource = extractDeclarationBody(codeLines, index);
+        const typeId = typeNodeId(fileName, name);
         const node = {
-          id: `type:${name}`,
+          id: typeId,
           kind: nodeKind,
           declarationKind,
           name,
@@ -68,7 +85,8 @@ export async function scanSwiftFolder(inputRoot) {
         addNode(nodes, node);
         addEdge(edges, fileId, node.id, "defines");
         typeNames.add(name);
-        declarations.push({ ...node, inheritance, source: code });
+        addTypeId(typeIdsByName, name, node.id);
+        declarations.push({ ...node, inheritance, source: declarationSource });
         currentType = nodes.get(node.id);
 
         inheritance
@@ -76,7 +94,7 @@ export async function scanSwiftFolder(inputRoot) {
           .map((item) => item.trim())
           .filter(Boolean)
           .forEach((conformance) => {
-            addEdge(edges, node.id, `type:${conformance}`, "conforms_to");
+            pendingConformances.push({ from: node.id, name: conformance });
           });
         return;
       }
@@ -84,7 +102,7 @@ export async function scanSwiftFolder(inputRoot) {
       const functionMatch = line.match(functionPattern);
       if (functionMatch && currentType) {
         const name = functionMatch[1];
-        const functionId = `function:${currentType.name}.${name}`;
+        const functionId = memberNodeId("function", currentType.file, currentType.name, name, lineNumber);
         const source = extractFunctionBody(codeLines, index);
         addNode(nodes, {
           id: functionId,
@@ -107,7 +125,7 @@ export async function scanSwiftFolder(inputRoot) {
       const propertyMatch = line.match(propertyPattern);
       if (propertyMatch && currentType) {
         const name = propertyMatch[1];
-        const propertyId = `property:${currentType.name}.${name}`;
+        const propertyId = memberNodeId("property", currentType.file, currentType.name, name, lineNumber);
         addNode(nodes, {
           id: propertyId,
           kind: "property",
@@ -148,7 +166,8 @@ export async function scanSwiftFolder(inputRoot) {
     for (const typeName of typeNames) {
       if (typeName === declaration.name) continue;
       if (referencesType(declaration.source, typeName)) {
-        addEdge(edges, declaration.id, `type:${typeName}`, "uses");
+        resolveTypeIds(typeIdsByName, typeName, declaration.id)
+          .forEach((typeId) => addEdge(edges, declaration.id, typeId, "uses"));
       }
     }
   }
@@ -157,8 +176,29 @@ export async function scanSwiftFolder(inputRoot) {
     for (const typeName of typeNames) {
       if (typeName === functionNode.parentTypeName) continue;
       if (referencesType(functionNode.source, typeName)) {
-        addEdge(edges, functionNode.id, `type:${typeName}`, "uses");
+        resolveTypeIds(typeIdsByName, typeName, functionNode.id)
+          .forEach((typeId) => addEdge(edges, functionNode.id, typeId, "uses"));
       }
+    }
+  }
+
+  for (const conformance of pendingConformances) {
+    resolveTypeIds(typeIdsByName, conformance.name, conformance.from, externalTypeId(conformance.name))
+      .forEach((typeId) => addEdge(edges, conformance.from, typeId, "conforms_to"));
+  }
+
+  for (const edge of edges) {
+    if (edge.kind === "conforms_to" && !nodes.has(edge.to) && edge.to.startsWith("type:external:")) {
+      const protocolName = edge.to.slice("type:external:".length);
+      addNode(nodes, {
+        id: edge.to,
+        kind: "protocol",
+        declarationKind: "protocol",
+        name: protocolName,
+        file: "",
+        line: 1,
+        metrics: {}
+      });
     }
   }
 
@@ -196,6 +236,7 @@ async function listSwiftFiles(root) {
   const results = [];
 
   for (const entry of entries) {
+    if (entry.isDirectory() && shouldSkipDirectory(entry.name)) continue;
     const fullPath = join(root, entry.name);
     if (entry.isDirectory()) {
       results.push(...await listSwiftFiles(fullPath));
@@ -205,6 +246,10 @@ async function listSwiftFiles(root) {
   }
 
   return results.sort((left, right) => left.localeCompare(right));
+}
+
+function shouldSkipDirectory(name) {
+  return excludedDirectoryNames.has(name) || name.endsWith(".xcodeproj") || name.endsWith(".xcworkspace");
 }
 
 function classifyType(declarationKind, name, inheritance, source) {
@@ -225,6 +270,30 @@ function referencesType(source, typeName) {
 
 function referencesMember(source, memberName) {
   return new RegExp(`\\b${memberName}\\b`).test(source);
+}
+
+function typeNodeId(fileName, name) {
+  return `type:${fileName}:${name}`;
+}
+
+function memberNodeId(kind, fileName, typeName, name, lineNumber) {
+  return `${kind}:${fileName}:${typeName}.${name}:${lineNumber}`;
+}
+
+function externalTypeId(name) {
+  return `type:external:${name}`;
+}
+
+function addTypeId(typeIdsByName, name, id) {
+  if (!typeIdsByName.has(name)) typeIdsByName.set(name, []);
+  typeIdsByName.get(name).push(id);
+}
+
+function resolveTypeIds(typeIdsByName, name, sourceId, fallbackId = null) {
+  const ids = typeIdsByName.get(name) || [];
+  const resolved = ids.filter((id) => id !== sourceId);
+  if (resolved.length > 0) return resolved;
+  return fallbackId ? [fallbackId] : [];
 }
 
 function extractFunctionBody(lines, startIndex) {

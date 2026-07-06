@@ -2,6 +2,20 @@ import Foundation
 import SwiftParser
 import SwiftSyntax
 
+let excludedDirectoryNames: Set<String> = [
+  ".build",
+  ".git",
+  "DerivedData",
+  "build",
+  "Build",
+  "Pods",
+  "Carthage",
+  ".swiftpm",
+  "SourcePackages",
+  "Generated",
+  "generated"
+]
+
 struct Graph: Encodable {
   let schemaVersion: Int
   let project: Project
@@ -63,6 +77,7 @@ final class Collector: SyntaxVisitor {
   var typeSources: [String: String] = [:]
   var functionSources: [(id: String, parentType: String, source: String)] = []
   var properties: [(id: String, parentType: String, name: String)] = []
+  var conformances: [(from: String, name: String)] = []
 
   init(file: String, source: String, sourceFile: SourceFileSyntax) {
     self.file = file
@@ -117,15 +132,16 @@ final class Collector: SyntaxVisitor {
     }
 
     let name = node.name.text
-    let id = "function:\(currentType.name).\(name)"
     let functionSource = stripSwiftComments(node.trimmedDescription)
+    let line = lineNumber(for: Syntax(node))
+    let id = memberNodeId(kind: "function", file: currentType.file, typeName: currentType.name, name: name, line: line)
     nodes[id] = GraphNode(
       id: id,
       kind: "function",
       declarationKind: nil,
       name: name,
       file: file,
-      line: lineNumber(for: Syntax(node)),
+      line: line,
       metrics: metricsForFunctionSource(functionSource)
     )
     edges.append(GraphEdge(from: currentType.id, to: id, kind: "defines"))
@@ -145,14 +161,15 @@ final class Collector: SyntaxVisitor {
         continue
       }
       let name = identifier.identifier.text
-      let id = "property:\(currentType.name).\(name)"
+      let line = lineNumber(for: Syntax(node))
+      let id = memberNodeId(kind: "property", file: currentType.file, typeName: currentType.name, name: name, line: line)
       nodes[id] = GraphNode(
         id: id,
         kind: "property",
         declarationKind: nil,
         name: name,
         file: file,
-        line: lineNumber(for: Syntax(node)),
+        line: line,
         metrics: [:]
       )
       edges.append(GraphEdge(from: currentType.id, to: id, kind: "defines"))
@@ -176,7 +193,7 @@ final class Collector: SyntaxVisitor {
     let conformances = inheritanceConformances(inheritanceText)
     let source = stripSwiftComments(syntax.trimmedDescription)
     let kind = classifyType(declarationKind: declarationKind, name: name, conformances: conformances, source: source)
-    let id = "type:\(name)"
+    let id = typeNodeId(file: file, name: name)
     let node = GraphNode(
       id: id,
       kind: kind,
@@ -193,7 +210,7 @@ final class Collector: SyntaxVisitor {
 
     conformances
       .forEach { conformance in
-        edges.append(GraphEdge(from: id, to: "type:\(conformance)", kind: "conforms_to"))
+        self.conformances.append((from: id, name: conformance))
       }
   }
 
@@ -237,8 +254,10 @@ var nodes: [String: GraphNode] = [:]
 var edges: [GraphEdge] = []
 var typeNames: Set<String> = []
 var typeSources: [String: String] = [:]
+var typeIdsByName: [String: [String]] = [:]
 var functionSources: [(id: String, parentType: String, source: String)] = []
 var properties: [(id: String, parentType: String, name: String)] = []
+var conformances: [(from: String, name: String)] = []
 
 nodes["repo:root"] = GraphNode(
   id: "repo:root",
@@ -275,6 +294,7 @@ for fileURL in files {
     nodes[node.id] = node
     if node.id.starts(with: "type:") {
       edges.append(GraphEdge(from: fileId, to: node.id, kind: "defines"))
+      typeIdsByName[node.name, default: []].append(node.id)
     }
   }
 
@@ -297,13 +317,16 @@ for fileURL in files {
   collector.typeSources.forEach { typeSources[$0.key] = $0.value }
   functionSources.append(contentsOf: collector.functionSources)
   properties.append(contentsOf: collector.properties)
+  conformances.append(contentsOf: collector.conformances)
 }
 
 for (typeId, source) in typeSources {
-  let typeName = String(typeId.dropFirst("type:".count))
+  let typeName = nodes[typeId]?.name ?? String(typeId.split(separator: ":").last ?? "")
   for referencedType in typeNames where referencedType != typeName {
     if referencesType(source: source, typeName: referencedType) {
-      edges.append(GraphEdge(from: typeId, to: "type:\(referencedType)", kind: "uses"))
+      for targetId in resolveTypeIds(typeIdsByName, name: referencedType, sourceId: typeId) {
+        edges.append(GraphEdge(from: typeId, to: targetId, kind: "uses"))
+      }
     }
   }
 }
@@ -311,7 +334,9 @@ for (typeId, source) in typeSources {
 for functionSource in functionSources {
   for referencedType in typeNames where referencedType != functionSource.parentType {
     if referencesType(source: functionSource.source, typeName: referencedType) {
-      edges.append(GraphEdge(from: functionSource.id, to: "type:\(referencedType)", kind: "uses"))
+      for targetId in resolveTypeIds(typeIdsByName, name: referencedType, sourceId: functionSource.id) {
+        edges.append(GraphEdge(from: functionSource.id, to: targetId, kind: "uses"))
+      }
     }
   }
 
@@ -322,8 +347,21 @@ for functionSource in functionSources {
   }
 }
 
+for conformance in conformances {
+  for targetId in resolveTypeIds(
+    typeIdsByName,
+    name: conformance.name,
+    sourceId: conformance.from,
+    fallbackId: externalTypeId(conformance.name)
+  ) {
+    edges.append(GraphEdge(from: conformance.from, to: targetId, kind: "conforms_to"))
+  }
+}
+
 for edge in edges where edge.kind == "conforms_to" && nodes[edge.to] == nil {
-  let protocolName = String(edge.to.dropFirst("type:".count))
+  let protocolName = edge.to.hasPrefix("type:external:")
+    ? String(edge.to.dropFirst("type:external:".count))
+    : String(edge.to.split(separator: ":").last ?? "")
   nodes[edge.to] = GraphNode(
     id: edge.to,
     kind: "protocol",
@@ -354,17 +392,30 @@ try data.write(to: outputURL)
 func listSwiftFiles(_ root: URL) throws -> [URL] {
   guard let enumerator = FileManager.default.enumerator(
     at: root,
-    includingPropertiesForKeys: [.isRegularFileKey],
+    includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
     options: [.skipsHiddenFiles]
   ) else {
     return []
   }
 
-  return try enumerator.compactMap { item in
-    guard let url = item as? URL else { return nil }
-    let resourceValues = try url.resourceValues(forKeys: [.isRegularFileKey])
-    return resourceValues.isRegularFile == true && url.pathExtension == "swift" ? url : nil
-  }.sorted { $0.path < $1.path }
+  var files: [URL] = []
+  for item in enumerator {
+    guard let url = item as? URL else { continue }
+    let resourceValues = try url.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey])
+    if resourceValues.isDirectory == true && shouldSkipDirectory(url.lastPathComponent) {
+      enumerator.skipDescendants()
+      continue
+    }
+    if resourceValues.isRegularFile == true && url.pathExtension == "swift" {
+      files.append(url)
+    }
+  }
+
+  return files.sorted { $0.path < $1.path }
+}
+
+func shouldSkipDirectory(_ name: String) -> Bool {
+  excludedDirectoryNames.contains(name) || name.hasSuffix(".xcodeproj") || name.hasSuffix(".xcworkspace")
 }
 
 func relativePath(from root: URL, to file: URL) -> String {
@@ -415,6 +466,26 @@ func referencesType(source: String, typeName: String) -> Bool {
 
 func referencesMember(source: String, memberName: String) -> Bool {
   source.range(of: "\\b\(NSRegularExpression.escapedPattern(for: memberName))\\b", options: .regularExpression) != nil
+}
+
+func typeNodeId(file: String, name: String) -> String {
+  "type:\(file):\(name)"
+}
+
+func memberNodeId(kind: String, file: String, typeName: String, name: String, line: Int) -> String {
+  "\(kind):\(file):\(typeName).\(name):\(line)"
+}
+
+func externalTypeId(_ name: String) -> String {
+  "type:external:\(name)"
+}
+
+func resolveTypeIds(_ idsByName: [String: [String]], name: String, sourceId: String, fallbackId: String? = nil) -> [String] {
+  let resolved = (idsByName[name] ?? []).filter { $0 != sourceId }
+  if !resolved.isEmpty {
+    return resolved
+  }
+  return fallbackId.map { [$0] } ?? []
 }
 
 func countSourceLines(_ source: String) -> Int {

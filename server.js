@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
-import { mkdir, readFile, stat } from "node:fs/promises";
-import { extname, dirname, join, normalize, relative, resolve } from "node:path";
+import { mkdir, readdir, readFile, stat } from "node:fs/promises";
+import { basename, extname, dirname, join, normalize, relative, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { scanSwiftFolder } from "./scripts/scan-swift-core.js";
@@ -15,6 +15,7 @@ const swiftSyntaxTimeoutMs = Number(process.env.CODE_UNIVERSE_SWIFTSYNTAX_TIMEOU
 const activeClients = new Map();
 let shutdownTimer = null;
 let pruneTimer = null;
+const sourceFileIndexCache = new Map();
 
 const contentTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -132,6 +133,7 @@ async function scanResolvedPath(inputPath, scanner) {
   const resolvedInput = resolve(inputPath);
   const inputEntry = await stat(resolvedInput);
   const projectRoot = await resolveProjectRoot(resolvedInput);
+  sourceFileIndexCache.delete(resolve(projectRoot));
   const selectedSwiftFile = !inputEntry.isDirectory() && resolvedInput.endsWith(".swift")
     ? relative(projectRoot, resolvedInput)
     : null;
@@ -470,6 +472,7 @@ function toComparableEdge(edge, nodes) {
     toName: to?.name || edge.to,
     kind: edge.kind,
     source: edge.source || null,
+    evidence: edge.evidence || null,
     confidence: edge.confidence || null,
     inferred: edge.inferred === true,
     indexResolved: edge.indexResolved === true
@@ -480,7 +483,7 @@ function nodeComparisonKey(node) {
   if (node.kind === "repository") return `${node.kind}:${node.name}`;
   if (node.kind === "file") return `${node.kind}:${node.file}`;
   if (node.kind === "module") return `${node.kind}:${node.name}`;
-  return `${node.kind}:${node.file}:${node.name}`;
+  return `${node.kind}:${node.file}:${node.name}:${node.line || 1}`;
 }
 
 function edgeComparisonKey(edge) {
@@ -556,7 +559,7 @@ async function scanSwiftFolderWithSwiftSyntax(projectRoot) {
 }
 
 async function readSourceSnippet(body) {
-  const { resolvedFile, relativeFile, targetLine } = resolveSourceLocation(body);
+  const { resolvedFile, relativeFile, targetLine } = await resolveSourceLocation(body);
   const source = await readFile(resolvedFile, "utf8");
   const lines = source.split(/\r?\n/);
   const clampedLine = Math.max(1, Math.min(lines.length, targetLine));
@@ -577,7 +580,7 @@ async function readSourceSnippet(body) {
 }
 
 async function openSourceInXcode(body) {
-  const { resolvedFile, relativeFile, targetLine } = resolveSourceLocation(body);
+  const { resolvedFile, relativeFile, targetLine } = await resolveSourceLocation(body);
   await execFileAsync("xed", ["--line", String(targetLine), resolvedFile]);
   return {
     opened: true,
@@ -586,7 +589,7 @@ async function openSourceInXcode(body) {
   };
 }
 
-function resolveSourceLocation(body) {
+async function resolveSourceLocation(body) {
   const sourceRoot = body?.sourceRoot;
   const file = body?.file;
   const line = Number(body?.line || 1);
@@ -596,7 +599,7 @@ function resolveSourceLocation(body) {
   }
 
   const resolvedRoot = resolve(sourceRoot);
-  const resolvedFile = resolve(resolvedRoot, file);
+  const resolvedFile = await resolveSourceFile(resolvedRoot, file);
   const relativeFile = relative(resolvedRoot, resolvedFile);
 
   if (relativeFile.startsWith("..") || relativeFile === "" || relativeFile.startsWith("/")) {
@@ -608,6 +611,77 @@ function resolveSourceLocation(body) {
     relativeFile,
     targetLine: Math.max(1, Number.isFinite(line) ? Math.floor(line) : 1)
   };
+}
+
+async function resolveSourceFile(resolvedRoot, file) {
+  const directFile = resolve(resolvedRoot, file);
+  if (isInsideRoot(resolvedRoot, directFile) && await isReadableFile(directFile)) {
+    return directFile;
+  }
+
+  const sourceFiles = await swiftFileIndexForRoot(resolvedRoot);
+  const normalizedFile = normalize(file);
+  const suffixMatches = sourceFiles.filter((candidate) => {
+    const candidateRelative = normalize(relative(resolvedRoot, candidate));
+    return candidateRelative === normalizedFile || candidateRelative.endsWith(`${normalize("/")}${normalizedFile}`);
+  });
+  if (suffixMatches.length === 1) return suffixMatches[0];
+
+  const basenameMatches = sourceFiles.filter((candidate) => basename(candidate) === basename(file));
+  if (basenameMatches.length === 1) return basenameMatches[0];
+
+  if (basenameMatches.length > 1) {
+    const choices = basenameMatches
+      .slice(0, 6)
+      .map((candidate) => relative(resolvedRoot, candidate))
+      .join(", ");
+    throw new Error(`Multiple Swift files named ${basename(file)}. Matching files: ${choices}${basenameMatches.length > 6 ? ", ..." : ""}`);
+  }
+
+  throw new Error(`Source file not found: ${file}`);
+}
+
+async function swiftFileIndexForRoot(resolvedRoot) {
+  const cached = sourceFileIndexCache.get(resolvedRoot);
+  if (cached) return cached;
+  const files = await listSwiftSourceFiles(resolvedRoot);
+  sourceFileIndexCache.set(resolvedRoot, files);
+  return files;
+}
+
+async function listSwiftSourceFiles(directory) {
+  let entries = [];
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const files = [];
+
+  for (const entry of entries) {
+    if (entry.name === ".git" || entry.name === "DerivedData" || entry.name === "build") continue;
+    const fullPath = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...await listSwiftSourceFiles(fullPath));
+    } else if (entry.isFile() && entry.name.endsWith(".swift")) {
+      files.push(fullPath);
+    }
+  }
+
+  return files;
+}
+
+async function isReadableFile(path) {
+  try {
+    return (await stat(path)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function isInsideRoot(rootPath, filePath) {
+  const relativeFile = relative(rootPath, filePath);
+  return Boolean(relativeFile) && !relativeFile.startsWith("..") && !relativeFile.startsWith("/");
 }
 
 async function resolveProjectRoot(inputPath) {

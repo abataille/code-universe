@@ -54,7 +54,11 @@ const colors = {
 
 const geometryCache = new Map();
 const materialCache = new Map();
+const edgeGeometryCache = new Map();
 const arrowHeadGeometry = new THREE.ConeGeometry(4.5, 11, 14);
+const largeGraphNodeThreshold = 1200;
+const largeGraphEdgeThreshold = 2500;
+const edgeGeometryCacheLimit = 4000;
 const lastProjectPathKey = "codeUniverse.lastProjectPath";
 const parserModeKey = "codeUniverse.parserMode";
 const clientIdKey = "codeUniverse.clientId";
@@ -94,6 +98,14 @@ const state = {
   dragDistance: 0,
   meshById: new Map(),
   labelById: new Map(),
+  nodeById: new Map(),
+  layoutById: new Map(),
+  edgesByFrom: new Map(),
+  edgesByTo: new Map(),
+  visibleNodeIds: new Set(),
+  largeGraphMode: false,
+  edgeRenderLimitHit: false,
+  layoutPreparedInWorker: false,
   cameraAnimation: null,
   popupFocusTarget: null,
   hoveredId: null,
@@ -238,7 +250,7 @@ async function loadSampleUniverse() {
   pickerStatus.textContent = "Loaded bundled sample universe.";
   scanSummary.textContent = "Sample data only. Use the picker to analyze a real Xcode project.";
   const graph = await fetch("./sample-graph.json").then((response) => response.json());
-  loadGraph(graph, "Sample Swift app");
+  await loadGraph(graph, "Sample Swift app");
 }
 
 async function pickAndScanProject() {
@@ -256,7 +268,7 @@ async function pickAndScanProject() {
     throw new Error(payload.error || "Project scan failed.");
   }
 
-  loadGraph(payload.graph, "Native Xcode scan");
+  await loadGraph(payload.graph, "Native Xcode scan");
   focusSelectedFile(payload.diagnostics);
   const rememberedPath = payload.diagnostics.selectedFile ? payload.diagnostics.pickedPath : payload.diagnostics.sourceRoot;
   if (rememberedPath) {
@@ -283,7 +295,7 @@ async function scanPath(path, descriptor) {
     throw new Error(payload.error || "Project scan failed.");
   }
 
-  loadGraph(payload.graph, descriptor);
+  await loadGraph(payload.graph, descriptor);
   focusSelectedFile(payload.diagnostics);
   const rememberedPath = payload.diagnostics.selectedFile ? payload.diagnostics.pickedPath : payload.diagnostics.sourceRoot;
   localStorage.setItem(lastProjectPathKey, rememberedPath);
@@ -316,9 +328,19 @@ async function compareParsers() {
   parserDiff.innerHTML = renderParserComparison(payload);
 }
 
-function loadGraph(graph, descriptor) {
+async function loadGraph(graph, descriptor) {
   state.graph = graph;
-  state.layout = buildLayout(graph);
+  state.largeGraphMode = isLargeGraph(graph);
+  if (state.largeGraphMode) {
+    state.performanceMode = true;
+    performanceModeToggle.checked = true;
+    renderer.setPixelRatio(1);
+  }
+  clearEdgeGeometryCache();
+  updateGraphIndexes(graph);
+  pickerStatus.textContent = state.largeGraphMode ? "Preparing a large graph in performance mode..." : pickerStatus.textContent;
+  state.layout = await buildLayoutPrepared(graph);
+  state.layoutById = new Map(state.layout.map((node) => [node.id, node]));
   state.selectedId = null;
   state.selectedEdgeKey = null;
   state.openShellId = null;
@@ -339,9 +361,51 @@ function loadGraph(graph, descriptor) {
   controls.update();
   updateStats(graph, descriptor);
   buildScene();
+  appendGraphScaleNotice();
   markFiltersDirty();
   selectNode(state.layout.find((item) => item.kind === "repository")?.id || state.layout[0]?.id);
   syncButtons();
+}
+
+function isLargeGraph(graph) {
+  return graph.nodes.length > largeGraphNodeThreshold || graph.edges.length > largeGraphEdgeThreshold;
+}
+
+async function buildLayoutPrepared(graph) {
+  if (!window.Worker) {
+    state.layoutPreparedInWorker = false;
+    return buildLayout(graph);
+  }
+
+  return new Promise((resolve) => {
+    const worker = new Worker(new URL("./layout-worker.js", import.meta.url), { type: "module" });
+    const timeout = window.setTimeout(() => {
+      worker.terminate();
+      state.layoutPreparedInWorker = false;
+      resolve(buildLayout(graph));
+    }, state.largeGraphMode ? 12000 : 5000);
+
+    worker.onmessage = (event) => {
+      window.clearTimeout(timeout);
+      worker.terminate();
+      if (event.data?.layout) {
+        state.layoutPreparedInWorker = true;
+        resolve(event.data.layout);
+      } else {
+        state.layoutPreparedInWorker = false;
+        resolve(buildLayout(graph));
+      }
+    };
+
+    worker.onerror = () => {
+      window.clearTimeout(timeout);
+      worker.terminate();
+      state.layoutPreparedInWorker = false;
+      resolve(buildLayout(graph));
+    };
+
+    worker.postMessage({ graph });
+  });
 }
 
 function focusSelectedFile(diagnostics) {
@@ -361,10 +425,12 @@ function buildLayout(graph) {
   const types = graph.nodes.filter((node) => !["repository", "file", "module", "function", "property"].includes(node.kind));
   const functions = graph.nodes.filter((node) => node.kind === "function" || node.kind === "property");
   const modules = graph.nodes.filter((node) => node.kind === "module");
+  const definesByFrom = groupEdgesByFrom(graph.edges, "defines");
   const layout = [];
+  const layoutById = new Map();
   const fileSpacing = spacingForNodes(files, 260, 225, 28);
 
-  layout.push({
+  addLayoutNode(layout, layoutById, {
     ...graph.nodes.find((node) => node.kind === "repository"),
     ...gridPosition(0, 1, 170, 150, 0, -230),
     y: 0,
@@ -372,7 +438,7 @@ function buildLayout(graph) {
   });
 
   files.forEach((file, index) => {
-    layout.push({
+    addLayoutNode(layout, layoutById, {
       ...file,
       ...gridPosition(index, Math.max(1, files.length), fileSpacing.x, fileSpacing.z, 0, 20),
       y: 0,
@@ -381,11 +447,12 @@ function buildLayout(graph) {
   });
 
   files.forEach((file) => {
-    const parent = layout.find((item) => item.id === file.id);
-    const childTypes = types.filter((candidate) => graph.edges.some((edge) => edge.kind === "defines" && edge.from === file.id && edge.to === candidate.id));
+    const parent = layoutById.get(file.id);
+    const childIds = new Set((definesByFrom.get(file.id) || []).map((edge) => edge.to));
+    const childTypes = types.filter((candidate) => childIds.has(candidate.id));
     childTypes.forEach((type, siblingIndex) => {
       const offset = childPositionOnFilePlane(siblingIndex, Math.max(1, childTypes.length), parent, childTypes);
-      layout.push({
+      addLayoutNode(layout, layoutById, {
         ...type,
         x: (parent?.x || 0) + offset.x,
         z: (parent?.z || 0) + offset.z,
@@ -396,11 +463,11 @@ function buildLayout(graph) {
   });
 
   types
-    .filter((type) => !layout.some((item) => item.id === type.id))
+    .filter((type) => !layoutById.has(type.id))
     .forEach((type, index, orphanTypes) => {
       const spacing = spacingForNodes(orphanTypes, 78, 68, 24);
       const position = gridPosition(index, Math.max(1, orphanTypes.length), spacing.x, spacing.z, 0, 210);
-      layout.push({
+      addLayoutNode(layout, layoutById, {
         ...type,
         ...position,
         y: 48,
@@ -411,7 +478,7 @@ function buildLayout(graph) {
   const fileBounds = boundsForLayout(layout.filter((item) => item.kind === "file"));
   const moduleOriginZ = fileBounds.minZ - 180;
   modules.forEach((moduleNode, index) => {
-    layout.push({
+    addLayoutNode(layout, layoutById, {
       ...moduleNode,
       ...gridPosition(index, Math.max(1, modules.length), 125, 105, 0, moduleOriginZ),
       y: 72,
@@ -420,13 +487,14 @@ function buildLayout(graph) {
   });
 
   types.forEach((type) => {
-    const parent = layout.find((item) => item.id === type.id);
+    const parent = layoutById.get(type.id);
     if (!parent) return;
-    const members = functions.filter((candidate) => graph.edges.some((edge) => edge.kind === "defines" && edge.from === type.id && edge.to === candidate.id));
+    const memberIds = new Set((definesByFrom.get(type.id) || []).map((edge) => edge.to));
+    const members = functions.filter((candidate) => memberIds.has(candidate.id));
     const spacing = spacingForNodes(members, 24, 24, 12);
     members.forEach((node, index) => {
       const position = gridPosition(index, Math.max(1, members.length), spacing.x, spacing.z);
-      layout.push({
+      addLayoutNode(layout, layoutById, {
         ...node,
         x: parent.x + position.x,
         z: parent.z + position.z,
@@ -438,6 +506,30 @@ function buildLayout(graph) {
 
   separateLargeObjects(layout);
   return layout;
+}
+
+function addLayoutNode(layout, layoutById, node) {
+  layout.push(node);
+  layoutById.set(node.id, node);
+}
+
+function updateGraphIndexes(graph) {
+  state.nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+  state.edgesByFrom = groupEdgesByFrom(graph.edges);
+  state.edgesByTo = graph.edges.reduce((groups, edge) => {
+    if (!groups.has(edge.to)) groups.set(edge.to, []);
+    groups.get(edge.to).push(edge);
+    return groups;
+  }, new Map());
+}
+
+function groupEdgesByFrom(edges, kind = null) {
+  return edges.reduce((groups, edge) => {
+    if (kind && edge.kind !== kind) return groups;
+    if (!groups.has(edge.from)) groups.set(edge.from, []);
+    groups.get(edge.from).push(edge);
+    return groups;
+  }, new Map());
 }
 
 function separateLargeObjects(layout) {
@@ -474,14 +566,21 @@ function pushApartIfOverlapping(left, right) {
 }
 
 function buildScene() {
+  disposeGroupMaterials(root);
+  disposeGroupMaterials(edgeRoot);
+  disposeGroupMaterials(popupRoot);
   root.clear();
   edgeRoot.clear();
   popupRoot.clear();
   state.meshById.clear();
   state.labelById.clear();
+  state.edgeRenderLimitHit = false;
+  const edgeBudget = renderEdgeBudget();
+  let renderedEdges = 0;
 
   for (const node of state.layout) {
     if (node.kind === "repository") continue;
+    if (node.kind === "function" || node.kind === "property") continue;
     const material = new THREE.MeshStandardMaterial({
       color: colorForNode(node),
       roughness: 0.64,
@@ -515,9 +614,6 @@ function buildScene() {
       defaultDepthWrite: material.depthWrite,
       defaultEmissiveIntensity: material.emissiveIntensity
     };
-    if (node.kind === "function" || node.kind === "property") {
-      mesh.visible = false;
-    }
     root.add(mesh);
     state.meshById.set(node.id, mesh);
 
@@ -564,14 +660,18 @@ function buildScene() {
   for (const [edgeIndex, edge] of state.graph.edges.entries()) {
     if (!isMainEdgeRenderable(edge)) continue;
     if (!isEdgeVisible(edge)) continue;
-    const from = state.layout.find((node) => node.id === edge.from);
-    const to = state.layout.find((node) => node.id === edge.to);
+    if (renderedEdges >= edgeBudget) {
+      state.edgeRenderLimitHit = true;
+      continue;
+    }
+    const from = state.layoutById.get(edge.from);
+    const to = state.layoutById.get(edge.to);
     if (!from || !to) continue;
     edge.__renderKey = edge.__renderKey || edgeKey(edge, edgeIndex);
     const curve = streetCurveForEdge(from, to);
     const color = edgeRenderColor(edge);
     const points = curve.getPoints(28);
-    const streetGeometry = new THREE.TubeGeometry(curve, 28, edgeTubeRadius(edge) * 3.4, 6, false);
+    const streetGeometry = getEdgeTubeGeometry(edge, from, to, "street", curve, edgeTubeRadius(edge) * 3.4);
     const streetMaterial = new THREE.MeshBasicMaterial({
       color: 0x111a20,
       transparent: true,
@@ -579,7 +679,7 @@ function buildScene() {
       depthWrite: false
     });
     const street = new THREE.Mesh(streetGeometry, streetMaterial);
-    const geometry = new THREE.TubeGeometry(curve, 28, edgeTubeRadius(edge) * 0.78, 6, false);
+    const geometry = getEdgeTubeGeometry(edge, from, to, "line", curve, edgeTubeRadius(edge) * 0.78);
     const material = new THREE.MeshBasicMaterial({
       color,
       transparent: true,
@@ -600,7 +700,77 @@ function buildScene() {
     group.userData.lineMaterial = material;
     group.userData.arrowMaterial = arrow.material;
     edgeRoot.add(group);
+    renderedEdges += 1;
   }
+}
+
+function renderEdgeBudget() {
+  if (state.edgeDensity === "everything") return state.largeGraphMode ? 900 : 2400;
+  if (state.edgeDensity === "clean") return state.largeGraphMode ? 450 : 1200;
+  return state.largeGraphMode ? 700 : 1800;
+}
+
+function getEdgeTubeGeometry(edge, from, to, role, curve, radius) {
+  const key = [
+    edge.__renderKey || edgeKey(edge),
+    role,
+    Math.round(from.x),
+    Math.round(from.y || 0),
+    Math.round(from.z),
+    Math.round(to.x),
+    Math.round(to.y || 0),
+    Math.round(to.z),
+    Math.round(radius * 100)
+  ].join(":");
+  let geometry = edgeGeometryCache.get(key);
+  if (!geometry) {
+    geometry = getCachedTubeGeometry(key, curve, 28, radius);
+  }
+  return geometry;
+}
+
+function getCachedTubeGeometry(key, curve, segments, radius) {
+  let geometry = edgeGeometryCache.get(key);
+  if (!geometry) {
+    geometry = new THREE.TubeGeometry(curve, segments, radius, 6, false);
+    edgeGeometryCache.set(key, geometry);
+    capEdgeGeometryCache();
+  }
+  return geometry;
+}
+
+function capEdgeGeometryCache() {
+  while (edgeGeometryCache.size > edgeGeometryCacheLimit) {
+    const [oldestKey, geometry] = edgeGeometryCache.entries().next().value;
+    geometry.dispose?.();
+    edgeGeometryCache.delete(oldestKey);
+  }
+}
+
+function clearEdgeGeometryCache() {
+  for (const geometry of edgeGeometryCache.values()) {
+    geometry.dispose?.();
+  }
+  edgeGeometryCache.clear();
+}
+
+function disposeGroupMaterials(group) {
+  group.traverse((object) => {
+    const materials = Array.isArray(object.material) ? object.material : object.material ? [object.material] : [];
+    materials.forEach((material) => {
+      if (!materialCacheHas(material)) {
+        material.map?.dispose?.();
+        material.dispose?.();
+      }
+    });
+  });
+}
+
+function materialCacheHas(material) {
+  for (const cached of materialCache.values()) {
+    if (cached === material) return true;
+  }
+  return false;
 }
 
 function streetCurveForEdge(from, to) {
@@ -649,9 +819,7 @@ function laneOffsetForStreet(start, end) {
 }
 
 function applyKindRotation(mesh, kind) {
-  if (kind === "service") {
-    mesh.rotation.y = Math.PI / 6;
-  } else if (kind === "protocol") {
+  if (kind === "protocol") {
     mesh.rotation.y = Math.PI / 4;
   }
 }
@@ -878,14 +1046,18 @@ function applyFilters() {
   if (!state.graph) return;
   const neighborhood = focusedNeighborhood();
   resetDynamicLayout();
+  disposeGroupMaterials(xrayRoot);
+  disposeGroupMaterials(popupXrayRoot);
   xrayRoot.clear();
   popupXrayRoot.clear();
+  state.visibleNodeIds = new Set();
   root.children.forEach((object) => {
     const nodeId = object.userData.nodeId;
     if (!nodeId) return;
-    const node = state.layout.find((candidate) => candidate.id === nodeId);
+    const node = state.layoutById.get(nodeId);
     const matched = isSearchMatch(node);
     const visible = isNodeVisible(node, neighborhood);
+    if (visible) state.visibleNodeIds.add(nodeId);
     if (object.userData.role === "search-halo") {
       object.visible = visible && matched;
       return;
@@ -930,8 +1102,8 @@ function applyFilters() {
     const visible = (!state.focusMode || neighborhood.has(edge.from) || neighborhood.has(edge.to))
       && isEdgeVisible(edge)
       && matchesSelection
-      && root.children.some((object) => object.userData.nodeId === edge.from && object.visible)
-      && root.children.some((object) => object.userData.nodeId === edge.to && object.visible);
+      && state.visibleNodeIds.has(edge.from)
+      && state.visibleNodeIds.has(edge.to);
     edgeObject.visible = visible;
     const touchesSelectedNode = edge.from === state.selectedId || edge.to === state.selectedId;
     const opacity = isSelectedEdge || touchesSelectedNode ? 1 : edgeOpacity(edge);
@@ -1147,7 +1319,7 @@ function bindEvents() {
   selectedDetails.addEventListener("click", async (event) => {
     const sourceButton = event.target.closest("[data-source-node-id]");
     if (sourceButton) {
-      const node = state.graph.nodes.find((candidate) => candidate.id === sourceButton.dataset.sourceNodeId);
+      const node = state.nodeById.get(sourceButton.dataset.sourceNodeId);
       if (!node) return;
       await showSourcePreview(node);
       return;
@@ -1155,7 +1327,7 @@ function bindEvents() {
 
     const contextButton = event.target.closest("[data-source-context]");
     if (contextButton) {
-      const node = state.graph.nodes.find((candidate) => candidate.id === contextButton.dataset.sourceContext);
+      const node = state.nodeById.get(contextButton.dataset.sourceContext);
       if (!node) return;
       state.sourceContext = clamp(state.sourceContext + Number(contextButton.dataset.delta || 0), 4, 80);
       await showSourcePreview(node);
@@ -1164,7 +1336,7 @@ function bindEvents() {
 
     const xcodeButton = event.target.closest("[data-xcode-node-id]");
     if (xcodeButton) {
-      const node = state.graph.nodes.find((candidate) => candidate.id === xcodeButton.dataset.xcodeNodeId);
+      const node = state.nodeById.get(xcodeButton.dataset.xcodeNodeId);
       if (!node) return;
       await openSourceInXcode(node);
     }
@@ -1303,7 +1475,7 @@ function renderEdgeDelta(title, edges) {
     <article class="diff-item">
       <div>
         <strong>${escapeHtml(edge.fromName)} → ${escapeHtml(edge.toName)}</strong>
-        <span><code>${escapeHtml(edge.kind)}</code> ${edge.source ? `from <code>${escapeHtml(edge.source)}</code>` : ""}${edge.confidence ? ` · confidence <code>${escapeHtml(edge.confidence)}</code>` : ""}</span>
+        <span><code>${escapeHtml(edge.kind)}</code> ${edge.source ? `from <code>${escapeHtml(edge.source)}</code>` : ""}${edge.evidence ? ` · evidence <code>${escapeHtml(edge.evidence)}</code>` : ""}${edge.confidence ? ` · confidence <code>${escapeHtml(edge.confidence)}</code>` : ""}</span>
       </div>
     </article>
   `).join("");
@@ -1430,6 +1602,7 @@ function resetMapView() {
   state.pressedKeys.clear();
   searchInput.value = "";
   clearHover();
+  disposeGroupMaterials(popupRoot);
   popupRoot.clear();
   state.cameraAnimation = null;
   state.popupFocusTarget = null;
@@ -1461,7 +1634,7 @@ function updateHoverFromPointer(event) {
     return;
   }
 
-  const node = state.graph.nodes.find((candidate) => candidate.id === hoveredId);
+  const node = state.nodeById.get(hoveredId);
   if (!node) {
     clearHover();
     return;
@@ -1554,7 +1727,7 @@ function applyMapPreset(preset) {
 }
 
 function focusCameraOnNode(node) {
-  const layoutNode = state.layout.find((candidate) => candidate.id === node?.id);
+  const layoutNode = state.layoutById.get(node?.id);
   if (!layoutNode || layoutNode.kind === "repository") return;
   const focusTarget = state.popupFocusTarget?.nodeId === node.id ? state.popupFocusTarget : null;
   const target = focusTarget
@@ -1589,7 +1762,7 @@ function applyCameraAnimation() {
 function selectNode(id) {
   state.selectedId = id;
   state.selectedEdgeKey = null;
-  const node = state.graph.nodes.find((candidate) => candidate.id === id);
+  const node = state.nodeById.get(id);
   if (!node) return;
   state.openShellId = resolveOpenShellId(id);
   selectedDetails.innerHTML = renderDetails(node);
@@ -1604,6 +1777,7 @@ function selectNode(id) {
 function selectEdge(edge) {
   state.selectedEdgeKey = edgeKey(edge);
   state.selectedId = null;
+  disposeGroupMaterials(popupXrayRoot);
   popupXrayRoot.clear();
   selectedDetails.innerHTML = renderEdgeDetails(edge);
   markFiltersDirty();
@@ -1612,14 +1786,16 @@ function selectEdge(edge) {
 function hidePopup() {
   state.openShellId = null;
   state.popupFocusTarget = null;
+  disposeGroupMaterials(popupRoot);
+  disposeGroupMaterials(popupXrayRoot);
   popupRoot.clear();
   popupXrayRoot.clear();
   markFiltersDirty();
 }
 
 function renderDetails(node) {
-  const outgoing = state.graph.edges.filter((edge) => edge.from === node.id);
-  const incoming = state.graph.edges.filter((edge) => edge.to === node.id);
+  const outgoing = state.edgesByFrom.get(node.id) || [];
+  const incoming = state.edgesByTo.get(node.id) || [];
   const kindMeaning = describeKind(node.kind);
   const memberIds = getInspectableMemberIds(node.id);
   const externalUses = getExternalUses(node);
@@ -1632,7 +1808,7 @@ function renderDetails(node) {
     .slice(0, 6)
     .map((edge) => {
       const otherId = direction === "out" ? edge.to : edge.from;
-      const other = state.graph.nodes.find((candidate) => candidate.id === otherId);
+      const other = state.nodeById.get(otherId);
       return `<code>${edge.kind}</code> ${escapeHtml(other?.name || otherId)}`;
     })
     .join("<br>");
@@ -1672,8 +1848,8 @@ function renderDetails(node) {
 }
 
 function renderEdgeDetails(edge) {
-  const from = state.graph.nodes.find((node) => node.id === edge.from);
-  const to = state.graph.nodes.find((node) => node.id === edge.to);
+  const from = state.nodeById.get(edge.from);
+  const to = state.nodeById.get(edge.to);
   return `
     <div class="detail-card object-summary-card">
       <div class="detail-title">
@@ -1691,6 +1867,7 @@ function renderEdgeDetails(edge) {
         <div><span>To</span><strong>${escapeHtml(to?.name || edge.to)}</strong></div>
         <div><span>Type</span><strong>${escapeHtml(edge.kind)}</strong></div>
         ${edge.source ? `<div><span>Source</span><strong>${escapeHtml(edge.source)}</strong></div>` : ""}
+        ${edge.evidence ? `<div><span>Evidence</span><strong>${escapeHtml(edge.evidence)}</strong></div>` : ""}
         ${edge.inferred ? "<div><span>Confidence</span><strong>Inferred</strong></div>" : ""}
       </div>
     </div>
@@ -1702,6 +1879,9 @@ function renderEdgeDetails(edge) {
 }
 
 function describeEdge(edge) {
+  if (edge.source === "xcode-index" && edge.evidence === "file-level") {
+    return "Xcode index evidence found both symbols in the same indexed file record; treat this as a file-level semantic hint.";
+  }
   if (edge.kind === "uses") return "The source object references or calls the target object.";
   if (edge.kind === "imports") return "The source file imports the target framework or module.";
   if (edge.kind === "defines") return "The source file contains or defines the target object.";
@@ -1747,7 +1927,8 @@ async function showSourcePreview(node) {
       body: JSON.stringify({
         sourceRoot: state.graph.project.sourceRoot,
         file: node.file,
-        line: node.line
+        line: node.line,
+        context: state.sourceContext
       })
     });
     const payload = await response.json();
@@ -1763,7 +1944,7 @@ async function showSourcePreview(node) {
 function renderSourceSnippet(payload) {
   const rows = payload.code.map((line) => {
     const isTarget = line.number === payload.line;
-    return `<span class="${isTarget ? "is-target" : ""}"><b>${line.number}</b>${escapeHtml(line.content || " ")}</span>`;
+    return `<span class="${isTarget ? "is-target" : ""}"><b>${line.number}</b><code>${escapeHtml(line.content || " ")}</code></span>`;
   }).join("");
 
   return `
@@ -1774,12 +1955,12 @@ function renderSourceSnippet(payload) {
 
 function getExternalUses(node) {
   if (node.kind !== "function") return [];
-  const parentId = state.graph.edges.find((edge) => edge.kind === "defines" && edge.to === node.id)?.from;
-  return state.graph.edges.filter((edge) => edge.kind === "uses" && edge.from === node.id && edge.to !== parentId);
+  const parentId = (state.edgesByTo.get(node.id) || []).find((edge) => edge.kind === "defines")?.from;
+  return (state.edgesByFrom.get(node.id) || []).filter((edge) => edge.kind === "uses" && edge.to !== parentId);
 }
 
 function getOwnedState(node) {
-  return state.graph.edges.filter((edge) => edge.kind === "owns_state" && edge.from === node.id);
+  return (state.edgesByFrom.get(node.id) || []).filter((edge) => edge.kind === "owns_state");
 }
 
 function describeAxisDrivers(node) {
@@ -1869,10 +2050,8 @@ function focusedNeighborhood() {
     neighborhood.add(state.openShellId);
     getInspectableMemberIds(state.openShellId).forEach((memberId) => neighborhood.add(memberId));
   }
-  for (const edge of state.graph.edges) {
-    if (edge.from === state.selectedId) neighborhood.add(edge.to);
-    if (edge.to === state.selectedId) neighborhood.add(edge.from);
-  }
+  (state.edgesByFrom.get(state.selectedId) || []).forEach((edge) => neighborhood.add(edge.to));
+  (state.edgesByTo.get(state.selectedId) || []).forEach((edge) => neighborhood.add(edge.from));
   return neighborhood;
 }
 
@@ -1912,11 +2091,22 @@ function passesEdgeDensity(edge) {
 
 function updateStats(graph, descriptor) {
   projectName.textContent = graph.project.name;
-  projectMeta.textContent = `${descriptor} · ${new Date(graph.project.scannedAt).toLocaleString()} · ${graph.nodes.length} items`;
+  const mode = state.largeGraphMode ? " · performance map" : "";
+  const worker = state.layoutPreparedInWorker ? " · worker layout" : "";
+  projectMeta.textContent = `${descriptor} · ${new Date(graph.project.scannedAt).toLocaleString()} · ${graph.nodes.length} items${mode}${worker}`;
   document.querySelector("#nodeCount").textContent = graph.nodes.length;
   document.querySelector("#edgeCount").textContent = graph.edges.length;
   document.querySelector("#viewCount").textContent = graph.nodes.filter((node) => node.kind === "swiftui_view").length;
   document.querySelector("#serviceCount").textContent = graph.nodes.filter((node) => node.kind === "service" || node.kind === "class").length;
+}
+
+function appendGraphScaleNotice() {
+  if (!state.edgeRenderLimitHit && !state.largeGraphMode) return;
+  const parts = [];
+  if (state.largeGraphMode) parts.push("Large graph performance mode is active.");
+  if (state.edgeRenderLimitHit) parts.push("Some edges are hidden by the current render budget; use Focus or cleaner filters for detail.");
+  if (!parts.length) return;
+  scanSummary.textContent = `${scanSummary.textContent} · ${parts.join(" ")}`;
 }
 
 function syncButtons() {
@@ -2170,7 +2360,7 @@ function axisMetricsForNode(node) {
   const metrics = node.metrics || {};
   const edgeCounts = graphEdgeCountsForNode(node.id);
   const definedMembers = getInspectableMemberIds(node.id)
-    .map((memberId) => state.graph.nodes.find((candidate) => candidate.id === memberId))
+    .map((memberId) => state.nodeById.get(memberId))
     .filter(Boolean);
   const definedFunctions = definedMembers.filter((member) => member.kind === "function").length;
   const definedProperties = definedMembers.filter((member) => member.kind === "property").length;
@@ -2227,15 +2417,14 @@ function graphEdgeCountsForNode(nodeId) {
   if (!state.graph) {
     return { incoming: 0, outgoingUses: 0, memberUses: 0, definedMembers: 0, ownedState: 0 };
   }
-  return state.graph.edges.reduce((counts, edge) => {
-    if (edge.to === nodeId) counts.incoming += 1;
-    if (edge.from !== nodeId) return counts;
+  const counts = { incoming: (state.edgesByTo.get(nodeId) || []).length, outgoingUses: 0, memberUses: 0, definedMembers: 0, ownedState: 0 };
+  return (state.edgesByFrom.get(nodeId) || []).reduce((counts, edge) => {
     if (["uses", "imports", "conforms_to"].includes(edge.kind)) counts.outgoingUses += 1;
     if (edge.kind === "uses_member" || edge.kind === "owns_state") counts.memberUses += 1;
     if (edge.kind === "owns_state") counts.ownedState += 1;
     if (edge.kind === "defines") counts.definedMembers += 1;
     return counts;
-  }, { incoming: 0, outgoingUses: 0, memberUses: 0, definedMembers: 0, ownedState: 0 });
+  }, counts);
 }
 
 function baseDimensionsForKind(kind) {
@@ -2361,23 +2550,23 @@ function friendlyKind(kind) {
 
 function getInspectableMemberIds(nodeId) {
   if (!state.graph) return [];
-  return state.graph.edges
-    .filter((edge) => edge.kind === "defines" && edge.from === nodeId)
+  return (state.edgesByFrom.get(nodeId) || [])
+    .filter((edge) => edge.kind === "defines")
     .map((edge) => edge.to)
     .filter((memberId) => {
-      const node = state.graph.nodes.find((candidate) => candidate.id === memberId);
+      const node = state.nodeById.get(memberId);
       return node?.kind === "function" || node?.kind === "property";
     });
 }
 
 function getXrayContentIds(nodeId) {
   if (!state.graph) return [];
-  const shell = state.graph.nodes.find((candidate) => candidate.id === nodeId);
-  return state.graph.edges
-    .filter((edge) => edge.kind === "defines" && edge.from === nodeId)
+  const shell = state.nodeById.get(nodeId);
+  return (state.edgesByFrom.get(nodeId) || [])
+    .filter((edge) => edge.kind === "defines")
     .map((edge) => edge.to)
     .filter((childId) => {
-      const child = state.graph.nodes.find((candidate) => candidate.id === childId);
+      const child = state.nodeById.get(childId);
       if (!child) return false;
       if (shell?.kind === "file") return child.kind !== "function" && child.kind !== "property";
       return child.kind === "function" || child.kind === "property";
@@ -2392,9 +2581,9 @@ function resolveOpenShellId(nodeId) {
   const memberIds = getInspectableMemberIds(nodeId);
   if (memberIds.length > 0) return nodeId;
 
-  const node = state.graph?.nodes.find((candidate) => candidate.id === nodeId);
+  const node = state.nodeById.get(nodeId);
   if (node?.kind === "function" || node?.kind === "property") {
-    return state.graph.edges.find((edge) => edge.kind === "defines" && edge.to === nodeId)?.from || null;
+    return (state.edgesByTo.get(nodeId) || []).find((edge) => edge.kind === "defines")?.from || null;
   }
 
   return null;
@@ -2448,7 +2637,7 @@ function isPickableIntersection(intersection) {
 }
 
 function shouldShowLabel(nodeId) {
-  const node = state.graph?.nodes.find((candidate) => candidate.id === nodeId);
+  const node = state.nodeById.get(nodeId);
   if (!node) return false;
   if (isSearchMatch(node)) return true;
   if (state.performanceMode && node.id !== state.selectedId && node.id !== state.openShellId) return false;
@@ -2466,7 +2655,7 @@ function isSearchMatch(node) {
 }
 
 function shouldShowMesh(nodeId) {
-  const node = state.graph?.nodes.find((candidate) => candidate.id === nodeId);
+  const node = state.nodeById.get(nodeId);
   if (!node) return false;
   if (node.kind === "function" || node.kind === "property") return false;
   return true;
@@ -2475,7 +2664,7 @@ function shouldShowMesh(nodeId) {
 function buildHoverXray(neighborhood) {
   const shellId = state.hoveredId || state.openShellId || state.selectedId;
   if (!shellId) return;
-  const shell = state.layout.find((candidate) => candidate.id === shellId);
+  const shell = state.layoutById.get(shellId);
   if (!shell || !shouldShowMesh(shell.id) || !isNodeVisible(shell, neighborhood)) return;
 
   addGlassObjectShell(shell);
@@ -2484,7 +2673,7 @@ function buildHoverXray(neighborhood) {
   if (memberIds.length === 0) return;
 
   const members = memberIds
-    .map((memberId) => state.graph.nodes.find((candidate) => candidate.id === memberId))
+    .map((memberId) => state.nodeById.get(memberId))
     .filter(Boolean)
     .slice(0, 36);
   if (members.length === 0) return;
@@ -2600,7 +2789,7 @@ function findPopupObject(nodeId) {
 
 function buildPopupXrayInternals(shell, nodeId) {
   const members = getXrayContentIds(nodeId)
-    .map((memberId) => state.graph.nodes.find((candidate) => candidate.id === memberId))
+    .map((memberId) => state.nodeById.get(memberId))
     .filter(Boolean)
     .slice(0, 24);
   if (members.length === 0) return;
@@ -2760,6 +2949,8 @@ function resetDynamicLayout() {
 }
 
 function buildMemberPopup() {
+  disposeGroupMaterials(popupRoot);
+  disposeGroupMaterials(popupXrayRoot);
   popupRoot.clear();
   popupXrayRoot.clear();
   state.popupFocusTarget = null;
@@ -2767,19 +2958,19 @@ function buildMemberPopup() {
   const memberIds = getInspectableMemberIds(state.openShellId);
   if (memberIds.length === 0) return;
 
-  const shellNode = state.layout.find((candidate) => candidate.id === state.openShellId);
+  const shellNode = state.layoutById.get(state.openShellId);
   if (!shellNode) return;
 
   const visibleMemberIds = memberIds.filter((memberId) => {
-    const member = state.graph.nodes.find((candidate) => candidate.id === memberId);
+    const member = state.nodeById.get(memberId);
     return member?.kind !== "property" || state.showProperties;
   });
   if (visibleMemberIds.length === 0) return;
 
   const dependencyIds = getPopupDependencyIds(shellNode.id, visibleMemberIds);
-  const memberNodes = visibleMemberIds.map((memberId) => state.layout.find((candidate) => candidate.id === memberId)).filter(Boolean);
+  const memberNodes = visibleMemberIds.map((memberId) => state.layoutById.get(memberId)).filter(Boolean);
   const dependencyNodes = dependencyIds
-    .map((dependencyId) => state.layout.find((candidate) => candidate.id === dependencyId) || state.graph.nodes.find((candidate) => candidate.id === dependencyId))
+    .map((dependencyId) => state.layoutById.get(dependencyId) || state.nodeById.get(dependencyId))
     .filter(Boolean);
   const memberLayout = popupGridLayout(memberNodes, popupDimensionsForMember);
   const dependencyLayout = popupGridLayout(dependencyNodes, popupDimensionsForDependency);
@@ -2867,7 +3058,7 @@ function buildMemberPopup() {
 
 function placePopupMembers(memberIds, origin, frameHeight, positions, layoutInfo) {
   memberIds.forEach((memberId, index) => {
-    const node = state.layout.find((candidate) => candidate.id === memberId);
+    const node = state.layoutById.get(memberId);
     if (!node) return;
     const base = layoutInfo.positions[index] || { x: 0, z: 0 };
     const layerY = node.kind === "function" ? 42 : 12;
@@ -2905,7 +3096,7 @@ function placePopupMembers(memberIds, origin, frameHeight, positions, layoutInfo
 
 function placePopupDependencies(dependencyIds, origin, frameHeight, positions, layoutInfo) {
   dependencyIds.forEach((dependencyId, index) => {
-    const node = state.layout.find((candidate) => candidate.id === dependencyId) || state.graph.nodes.find((candidate) => candidate.id === dependencyId);
+    const node = state.layoutById.get(dependencyId) || state.nodeById.get(dependencyId);
     if (!node) return;
     const base = layoutInfo.positions[index] || { x: 0, z: 0 };
     const dimensions = popupDimensionsForDependency(node);
@@ -2985,8 +3176,8 @@ function popupDimensionsForDependency(node) {
 
 function getPopupDependencyIds(parentId, memberIds) {
   const memberSet = new Set(memberIds);
-  return uniqueValues(state.graph.edges
-    .filter((edge) => edge.from === parentId && ["uses", "conforms_to"].includes(edge.kind))
+  return uniqueValues((state.edgesByFrom.get(parentId) || [])
+    .filter((edge) => ["uses", "conforms_to"].includes(edge.kind))
     .map((edge) => edge.to)
     .filter((nodeId) => nodeId !== parentId && !memberSet.has(nodeId)));
 }
@@ -2995,7 +3186,12 @@ function getPopupEdges(parentId, memberIds, dependencyIds) {
   const visibleIds = new Set([parentId, ...memberIds, ...dependencyIds]);
   const edges = [];
 
-  state.graph.edges.forEach((edge, edgeIndex) => {
+  const candidates = uniqueValues([
+    ...(state.edgesByFrom.get(parentId) || []),
+    ...memberIds.flatMap((memberId) => state.edgesByFrom.get(memberId) || [])
+  ]);
+
+  candidates.forEach((edge, edgeIndex) => {
     if (!isEdgeVisible(edge)) return;
     edge.__renderKey = edge.__renderKey || edgeKey(edge, edgeIndex);
     if (edge.kind === "defines" && edge.from === parentId && visibleIds.has(edge.to)) edges.push(edge);
@@ -3018,7 +3214,8 @@ function drawPopupEdge(edge, positions) {
   const curve = popupStreetCurveForEdge(fromPosition, toPosition);
   const points = curve.getPoints(18);
   const color = popupEdgeColor(edge.kind);
-  const roadGeometry = new THREE.TubeGeometry(curve, 18, 2.6, 6, false);
+  const positionKey = `${Math.round(fromPosition.x)}:${Math.round(fromPosition.y)}:${Math.round(fromPosition.z)}:${Math.round(toPosition.x)}:${Math.round(toPosition.y)}:${Math.round(toPosition.z)}`;
+  const roadGeometry = getCachedTubeGeometry(`${edgeKey(edge)}:popup-road:${positionKey}`, curve, 18, 2.6);
   const roadMaterial = new THREE.MeshBasicMaterial({
     color: 0x10212a,
     transparent: true,
@@ -3026,7 +3223,7 @@ function drawPopupEdge(edge, positions) {
     depthWrite: false
   });
   const road = new THREE.Mesh(roadGeometry, roadMaterial);
-  const geometry = new THREE.TubeGeometry(curve, 18, 0.75, 6, false);
+  const geometry = getCachedTubeGeometry(`${edgeKey(edge)}:popup-line:${positionKey}`, curve, 18, 0.75);
   const material = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: popupEdgeOpacity(edge.kind), depthWrite: false });
   const line = new THREE.Mesh(geometry, material);
   const arrow = makeArrowHead(points, color);

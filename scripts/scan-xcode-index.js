@@ -147,7 +147,9 @@ function addIndexEdges(graph, indexedRecords) {
           source: "xcode-index",
           confidence: 0.82,
           inferred: false,
-          indexResolved: true
+          indexResolved: true,
+          evidence: "file-level",
+          file: record.file
         };
         const key = edgeKey(edge);
         if (knownEdges.has(key)) continue;
