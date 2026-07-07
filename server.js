@@ -35,6 +35,11 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (url.pathname === "/api/health" && request.method === "GET") {
+      sendJson(response, 200, { ok: true, port });
+      return;
+    }
+
     if (url.pathname === "/api/client-heartbeat" && request.method === "POST") {
       const clientId = await readClientId(request);
       registerClient(clientId);

@@ -1,12 +1,14 @@
 import AppKit
 import WebKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
   private var window: NSWindow?
   private var webView: WKWebView?
   private var serverProcess: Process?
   private var baseURLString = ProcessInfo.processInfo.environment["CODE_UNIVERSE_URL"] ?? "http://127.0.0.1:4174"
   private var pendingScanPath: String?
+  private var loadAttempt = 0
+  private var lastRequestedScanPath: String?
   private var bundleIcon: NSImage?
   private let logURL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Logs/CodeUniverseMac.log")
@@ -29,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     let configuration = WKWebViewConfiguration()
     let webView = WKWebView(frame: .zero, configuration: configuration)
+    webView.navigationDelegate = self
     self.webView = webView
 
     let window = NSWindow(
@@ -44,9 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     self.window = window
     applyWindowIcon()
 
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-      self.loadWebApp(scanPath: self.pendingScanPath)
-    }
+    loadWebAppWhenReady(scanPath: pendingScanPath)
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -71,7 +72,82 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     pendingScanPath = scanPath(from: url)
     NSApp.activate(ignoringOtherApps: true)
-    loadWebApp(scanPath: pendingScanPath)
+    loadWebAppWhenReady(scanPath: pendingScanPath)
+  }
+
+  private func loadWebAppWhenReady(scanPath: String?) {
+    lastRequestedScanPath = scanPath
+    loadAttempt = 0
+    waitForServerAndLoad(scanPath: scanPath)
+  }
+
+  private func waitForServerAndLoad(scanPath: String?) {
+    loadAttempt += 1
+    let attempt = loadAttempt
+    appendLog("server-ready-check attempt=\(attempt)")
+
+    probeServer { isReady in
+      DispatchQueue.main.async {
+        guard attempt == self.loadAttempt else {
+          return
+        }
+
+        if isReady {
+          self.appendLog("server-ready attempt=\(attempt)")
+          self.loadWebApp(scanPath: scanPath)
+          return
+        }
+
+        if attempt < 60 {
+          let delay = min(0.25 + Double(attempt) * 0.08, 1.5)
+          self.appendLog("server-not-ready retry-in=\(String(format: "%.2f", delay))")
+          DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            self.waitForServerAndLoad(scanPath: scanPath)
+          }
+        } else {
+          self.appendLog("server-not-ready giving-up")
+          self.showLoadingError("Code Universe server did not become ready. Check ~/Library/Logs/CodeUniverseMac.log.")
+        }
+      }
+    }
+  }
+
+  private func probeServer(completion: @escaping (Bool) -> Void) {
+    guard var components = URLComponents(string: baseURLString) else {
+      completion(false)
+      return
+    }
+    components.path = "/api/health"
+    components.queryItems = nil
+    guard let url = components.url else {
+      completion(false)
+      return
+    }
+
+    probeURL(url) { isHealthy in
+      if isHealthy {
+        completion(true)
+        return
+      }
+
+      guard let rootURL = URL(string: self.baseURLString) else {
+        completion(false)
+        return
+      }
+      self.probeURL(rootURL, completion: completion)
+    }
+  }
+
+  private func probeURL(_ url: URL, completion: @escaping (Bool) -> Void) {
+    var request = URLRequest(url: url)
+    request.timeoutInterval = 1.0
+    URLSession.shared.dataTask(with: request) { _, response, error in
+      if let error {
+        self.appendLog("server-probe-error \(error.localizedDescription)")
+      }
+      let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+      completion((200..<300).contains(status))
+    }.resume()
   }
 
   private func loadWebApp(scanPath: String?) {
@@ -87,6 +163,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       appendLog("loading \(url.absoluteString)")
       webView?.load(URLRequest(url: url))
     }
+  }
+
+  private func showLoadingError(_ message: String) {
+    let escapedMessage = message
+      .replacingOccurrences(of: "&", with: "&amp;")
+      .replacingOccurrences(of: "<", with: "&lt;")
+      .replacingOccurrences(of: ">", with: "&gt;")
+    let html = """
+    <!doctype html>
+    <html>
+    <body style="margin:0;background:#071018;color:#d9eef8;font:15px -apple-system,BlinkMacSystemFont,sans-serif;display:grid;min-height:100vh;place-items:center;">
+      <main style="max-width:560px;padding:28px;border:1px solid rgba(99,210,255,.25);border-radius:20px;background:rgba(255,255,255,.05);">
+        <h1 style="margin-top:0;">Code Universe is still starting</h1>
+        <p>\(escapedMessage)</p>
+      </main>
+    </body>
+    </html>
+    """
+    webView?.loadHTMLString(html, baseURL: nil)
   }
 
   private func scanPath(from url: URL) -> String? {
@@ -157,15 +252,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     process.currentDirectoryURL = repoRoot
     var environment = ProcessInfo.processInfo.environment
     environment["PORT"] = "4174"
+    environment["PATH"] = [
+      environment["PATH"],
+      "/opt/homebrew/bin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin"
+    ]
+      .compactMap { $0 }
+      .joined(separator: ":")
     process.environment = environment
-    process.standardOutput = Pipe()
-    process.standardError = Pipe()
+    let outputPipe = Pipe()
+    let errorPipe = Pipe()
+    process.standardOutput = outputPipe
+    process.standardError = errorPipe
+    captureProcessOutput(outputPipe, prefix: "server-out")
+    captureProcessOutput(errorPipe, prefix: "server-err")
 
     do {
       try process.run()
       serverProcess = process
+      appendLog("server-started pid=\(process.processIdentifier) root=\(repoRoot.path)")
     } catch {
       serverProcess = nil
+      appendLog("server-start-failed \(error.localizedDescription)")
+    }
+  }
+
+  private func captureProcessOutput(_ pipe: Pipe, prefix: String) {
+    pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+      let data = handle.availableData
+      guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else {
+        return
+      }
+      text
+        .split(separator: "\n", omittingEmptySubsequences: true)
+        .forEach { self?.appendLog("\(prefix) \($0)") }
+    }
+  }
+
+  func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+    appendLog("webview-provisional-fail \(error.localizedDescription)")
+    retryWebLoadAfterNavigationFailure()
+  }
+
+  func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+    appendLog("webview-navigation-fail \(error.localizedDescription)")
+    retryWebLoadAfterNavigationFailure()
+  }
+
+  private func retryWebLoadAfterNavigationFailure() {
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+      self.loadWebAppWhenReady(scanPath: self.lastRequestedScanPath)
     }
   }
 

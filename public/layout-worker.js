@@ -8,6 +8,8 @@ self.onmessage = (event) => {
   }
 };
 
+const fileChildGap = 28;
+
 function buildLayout(graph) {
   const files = graph.nodes.filter((node) => node.kind === "file");
   const types = graph.nodes.filter((node) => !["repository", "file", "module", "function", "property"].includes(node.kind));
@@ -39,16 +41,23 @@ function buildLayout(graph) {
     const parent = layoutById.get(file.id);
     const childIds = new Set((definesByFrom.get(file.id) || []).map((edge) => edge.to));
     const childTypes = types.filter((candidate) => childIds.has(candidate.id));
+    const childLayouts = [];
     childTypes.forEach((type, siblingIndex) => {
       const offset = childPositionOnFilePlane(siblingIndex, Math.max(1, childTypes.length), parent, childTypes, edgesByFrom, graph.nodes);
-      addLayoutNode(layout, layoutById, {
+      const dimensions = dimensionsForNode(type, edgesByFrom, graph.nodes);
+      const layoutNode = {
         ...type,
+        ...dimensions,
         x: (parent?.x || 0) + offset.x,
         z: (parent?.z || 0) + offset.z,
-        y: (parent?.y || 0) + (parent?.height || 0) + 22,
-        ...dimensionsForNode(type, edgesByFrom, graph.nodes)
-      });
+        y: typeBaseYOnFile(parent),
+        parentId: parent?.id || null
+      };
+      clampNodeToParentFootprint(layoutNode, parent, 5);
+      addLayoutNode(layout, layoutById, layoutNode);
+      childLayouts.push(layoutNode);
     });
+    separateContainedObjects(childLayouts, parent, 7, fileChildGap);
   });
 
   types
@@ -82,13 +91,15 @@ function buildLayout(graph) {
     const members = functions.filter((candidate) => memberIds.has(candidate.id));
     const spacing = spacingForNodes(members, edgesByFrom, graph.nodes, 24, 24, 12);
     members.forEach((node, index) => {
-      const position = gridPosition(index, Math.max(1, members.length), spacing.x, spacing.z);
+      const dimensions = dimensionsForNode(node, edgesByFrom, graph.nodes);
+      const position = memberPositionInsideType(index, Math.max(1, members.length), parent, spacing);
       addLayoutNode(layout, layoutById, {
         ...node,
+        ...dimensions,
         x: parent.x + position.x,
         z: parent.z + position.z,
-        y: (parent.y || 0) + parent.height + 20,
-        ...dimensionsForNode(node, edgesByFrom, graph.nodes)
+        y: memberBaseYInsideType(index, Math.max(1, members.length), parent, dimensions),
+        parentId: parent.id
       });
     });
   });
@@ -128,7 +139,7 @@ function childPositionOnFilePlane(index, total, fileNode, childNodes, edgesByFro
   const rows = Math.max(1, Math.ceil(total / columns));
   const column = index % columns;
   const row = Math.floor(index / columns);
-  const spacing = spacingForNodes(childNodes, edgesByFrom, nodes, 58, 54, 34);
+  const spacing = spacingForNodes(childNodes, edgesByFrom, nodes, 66, 62, fileChildGap);
   const usableWidth = Math.max(fileNode.width * 0.78, spacing.x * Math.max(1, columns - 1));
   const usableDepth = Math.max(fileNode.depth * 0.72, spacing.z * Math.max(1, rows - 1));
   return {
@@ -274,7 +285,7 @@ function baseDimensionsForKind(kind) {
 }
 
 function separateLargeObjects(layout) {
-  const movable = layout.filter((node) => !["repository", "file"].includes(node.kind));
+  const movable = layout.filter((node) => !["repository", "file"].includes(node.kind) && !node.parentId);
   for (let iteration = 0; iteration < 5; iteration += 1) {
     for (let leftIndex = 0; leftIndex < movable.length; leftIndex += 1) {
       for (let rightIndex = leftIndex + 1; rightIndex < movable.length; rightIndex += 1) {
@@ -284,9 +295,58 @@ function separateLargeObjects(layout) {
   }
 }
 
-function pushApartIfOverlapping(left, right) {
-  const minDistanceX = ((left.width || 0) + (right.width || 0)) / 2 + 18;
-  const minDistanceZ = ((left.depth || 0) + (right.depth || 0)) / 2 + 18;
+function separateContainedObjects(children, parent, padding = 4, gap = 18) {
+  if (!parent || children.length < 2) return;
+  for (let iteration = 0; iteration < 4; iteration += 1) {
+    for (let leftIndex = 0; leftIndex < children.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < children.length; rightIndex += 1) {
+        pushApartIfOverlapping(children[leftIndex], children[rightIndex], gap);
+      }
+    }
+    children.forEach((child) => clampNodeToParentFootprint(child, parent, padding));
+  }
+}
+
+function clampNodeToParentFootprint(node, parent, padding = 4) {
+  if (!node || !parent) return;
+  const maxOffsetX = Math.max(0, ((parent.width || 0) - (node.width || 0)) / 2 - padding);
+  const maxOffsetZ = Math.max(0, ((parent.depth || 0) - (node.depth || 0)) / 2 - padding);
+  node.x = clamp(node.x || 0, (parent.x || 0) - maxOffsetX, (parent.x || 0) + maxOffsetX);
+  node.z = clamp(node.z || 0, (parent.z || 0) - maxOffsetZ, (parent.z || 0) + maxOffsetZ);
+}
+
+function typeBaseYOnFile(fileNode) {
+  return (fileNode?.y || 0) + (fileNode?.height || 0) + 4;
+}
+
+function memberPositionInsideType(index, total, parent, spacing) {
+  if (!parent) return gridPosition(index, total, spacing.x, spacing.z);
+  const columns = Math.max(1, Math.ceil(Math.sqrt(total)));
+  const rows = Math.max(1, Math.ceil(total / columns));
+  const column = index % columns;
+  const row = Math.floor(index / columns);
+  const usableWidth = Math.max(0, (parent.width || 0) * 0.68);
+  const usableDepth = Math.max(0, (parent.depth || 0) * 0.68);
+  const stepX = columns <= 1 ? 0 : Math.min(spacing.x, usableWidth / Math.max(1, columns - 1));
+  const stepZ = rows <= 1 ? 0 : Math.min(spacing.z, usableDepth / Math.max(1, rows - 1));
+  return {
+    x: (column - (columns - 1) / 2) * stepX,
+    z: (row - (rows - 1) / 2) * stepZ
+  };
+}
+
+function memberBaseYInsideType(index, total, parent, dimensions) {
+  const inset = 4;
+  const minBase = (parent.y || 0) + inset;
+  const maxBase = (parent.y || 0) + Math.max(inset, (parent.height || 0) - (dimensions.height || 0) - inset);
+  if (maxBase <= minBase) return minBase;
+  const t = total <= 1 ? 0.42 : index / Math.max(1, total - 1);
+  return minBase + (maxBase - minBase) * t;
+}
+
+function pushApartIfOverlapping(left, right, gap = 18) {
+  const minDistanceX = ((left.width || 0) + (right.width || 0)) / 2 + gap;
+  const minDistanceZ = ((left.depth || 0) + (right.depth || 0)) / 2 + gap;
   const deltaX = (right.x || 0) - (left.x || 0);
   const deltaZ = (right.z || 0) - (left.z || 0);
   const overlapX = minDistanceX - Math.abs(deltaX);

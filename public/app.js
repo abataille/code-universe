@@ -15,6 +15,7 @@ const loadSampleButton = document.querySelector("#loadSampleButton");
 const parserSelect = document.querySelector("#parserSelect");
 const showFilesToggle = document.querySelector("#showFilesToggle");
 const showModulesToggle = document.querySelector("#showModulesToggle");
+const showProtocolsToggle = document.querySelector("#showProtocolsToggle");
 const showPropertiesToggle = document.querySelector("#showPropertiesToggle");
 const selectedEdgesOnlyToggle = document.querySelector("#selectedEdgesOnlyToggle");
 const performanceModeToggle = document.querySelector("#performanceModeToggle");
@@ -59,6 +60,7 @@ const arrowHeadGeometry = new THREE.ConeGeometry(4.5, 11, 14);
 const largeGraphNodeThreshold = 1200;
 const largeGraphEdgeThreshold = 2500;
 const edgeGeometryCacheLimit = 4000;
+const fileChildGap = 28;
 const lastProjectPathKey = "codeUniverse.lastProjectPath";
 const parserModeKey = "codeUniverse.parserMode";
 const clientIdKey = "codeUniverse.clientId";
@@ -78,6 +80,7 @@ const state = {
   focusMode: false,
   showFiles: true,
   showModules: true,
+  showProtocols: true,
   showProperties: true,
   parserMode: "heuristic",
   parserComparison: null,
@@ -450,16 +453,23 @@ function buildLayout(graph) {
     const parent = layoutById.get(file.id);
     const childIds = new Set((definesByFrom.get(file.id) || []).map((edge) => edge.to));
     const childTypes = types.filter((candidate) => childIds.has(candidate.id));
+    const childLayouts = [];
     childTypes.forEach((type, siblingIndex) => {
       const offset = childPositionOnFilePlane(siblingIndex, Math.max(1, childTypes.length), parent, childTypes);
-      addLayoutNode(layout, layoutById, {
+      const dimensions = dimensionsForNode(type);
+      const layoutNode = {
         ...type,
+        ...dimensions,
         x: (parent?.x || 0) + offset.x,
         z: (parent?.z || 0) + offset.z,
-        y: (parent?.y || 0) + (parent?.height || 0) + 22,
-        ...dimensionsForNode(type)
-      });
+        y: typeBaseYOnFile(parent),
+        parentId: parent?.id || null
+      };
+      clampNodeToParentFootprint(layoutNode, parent, 5);
+      addLayoutNode(layout, layoutById, layoutNode);
+      childLayouts.push(layoutNode);
     });
+    separateContainedObjects(childLayouts, parent, 7, fileChildGap);
   });
 
   types
@@ -493,13 +503,15 @@ function buildLayout(graph) {
     const members = functions.filter((candidate) => memberIds.has(candidate.id));
     const spacing = spacingForNodes(members, 24, 24, 12);
     members.forEach((node, index) => {
-      const position = gridPosition(index, Math.max(1, members.length), spacing.x, spacing.z);
+      const dimensions = dimensionsForNode(node);
+      const position = memberPositionInsideType(index, Math.max(1, members.length), parent, spacing);
       addLayoutNode(layout, layoutById, {
         ...node,
+        ...dimensions,
         x: parent.x + position.x,
         z: parent.z + position.z,
-        y: (parent.y || 0) + parent.height + 20,
-        ...dimensionsForNode(node)
+        y: memberBaseYInsideType(index, Math.max(1, members.length), parent, dimensions),
+        parentId: parent.id
       });
     });
   });
@@ -533,7 +545,7 @@ function groupEdgesByFrom(edges, kind = null) {
 }
 
 function separateLargeObjects(layout) {
-  const movable = layout.filter((node) => !["repository", "file"].includes(node.kind));
+  const movable = layout.filter((node) => !["repository", "file"].includes(node.kind) && !node.parentId);
   for (let iteration = 0; iteration < 5; iteration += 1) {
     for (let leftIndex = 0; leftIndex < movable.length; leftIndex += 1) {
       for (let rightIndex = leftIndex + 1; rightIndex < movable.length; rightIndex += 1) {
@@ -543,9 +555,58 @@ function separateLargeObjects(layout) {
   }
 }
 
-function pushApartIfOverlapping(left, right) {
-  const minDistanceX = ((left.width || 0) + (right.width || 0)) / 2 + 18;
-  const minDistanceZ = ((left.depth || 0) + (right.depth || 0)) / 2 + 18;
+function separateContainedObjects(children, parent, padding = 4, gap = 18) {
+  if (!parent || children.length < 2) return;
+  for (let iteration = 0; iteration < 4; iteration += 1) {
+    for (let leftIndex = 0; leftIndex < children.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < children.length; rightIndex += 1) {
+        pushApartIfOverlapping(children[leftIndex], children[rightIndex], gap);
+      }
+    }
+    children.forEach((child) => clampNodeToParentFootprint(child, parent, padding));
+  }
+}
+
+function clampNodeToParentFootprint(node, parent, padding = 4) {
+  if (!node || !parent) return;
+  const maxOffsetX = Math.max(0, ((parent.width || 0) - (node.width || 0)) / 2 - padding);
+  const maxOffsetZ = Math.max(0, ((parent.depth || 0) - (node.depth || 0)) / 2 - padding);
+  node.x = clamp(node.x || 0, (parent.x || 0) - maxOffsetX, (parent.x || 0) + maxOffsetX);
+  node.z = clamp(node.z || 0, (parent.z || 0) - maxOffsetZ, (parent.z || 0) + maxOffsetZ);
+}
+
+function typeBaseYOnFile(fileNode) {
+  return (fileNode?.y || 0) + (fileNode?.height || 0) + 4;
+}
+
+function memberPositionInsideType(index, total, parent, spacing) {
+  if (!parent) return gridPosition(index, total, spacing.x, spacing.z);
+  const columns = Math.max(1, Math.ceil(Math.sqrt(total)));
+  const rows = Math.max(1, Math.ceil(total / columns));
+  const column = index % columns;
+  const row = Math.floor(index / columns);
+  const usableWidth = Math.max(0, (parent.width || 0) * 0.68);
+  const usableDepth = Math.max(0, (parent.depth || 0) * 0.68);
+  const stepX = columns <= 1 ? 0 : Math.min(spacing.x, usableWidth / Math.max(1, columns - 1));
+  const stepZ = rows <= 1 ? 0 : Math.min(spacing.z, usableDepth / Math.max(1, rows - 1));
+  return {
+    x: (column - (columns - 1) / 2) * stepX,
+    z: (row - (rows - 1) / 2) * stepZ
+  };
+}
+
+function memberBaseYInsideType(index, total, parent, dimensions) {
+  const inset = 4;
+  const minBase = (parent.y || 0) + inset;
+  const maxBase = (parent.y || 0) + Math.max(inset, (parent.height || 0) - (dimensions.height || 0) - inset);
+  if (maxBase <= minBase) return minBase;
+  const t = total <= 1 ? 0.42 : index / Math.max(1, total - 1);
+  return minBase + (maxBase - minBase) * t;
+}
+
+function pushApartIfOverlapping(left, right, gap = 18) {
+  const minDistanceX = ((left.width || 0) + (right.width || 0)) / 2 + gap;
+  const minDistanceZ = ((left.depth || 0) + (right.depth || 0)) / 2 + gap;
   const deltaX = (right.x || 0) - (left.x || 0);
   const deltaZ = (right.z || 0) - (left.z || 0);
   const overlapX = minDistanceX - Math.abs(deltaX);
@@ -1281,6 +1342,12 @@ function bindEvents() {
     markFiltersDirty();
   });
 
+  showProtocolsToggle.addEventListener("change", () => {
+    state.showProtocols = showProtocolsToggle.checked;
+    buildMemberPopup();
+    markFiltersDirty();
+  });
+
   showPropertiesToggle.addEventListener("change", () => {
     state.showProperties = showPropertiesToggle.checked;
     buildMemberPopup();
@@ -1695,11 +1762,13 @@ function applyMapPreset(preset) {
   if (preset === "files") {
     state.showFiles = true;
     state.showModules = false;
+    state.showProtocols = true;
     state.showProperties = false;
     state.edgeDensity = "clean";
   } else if (preset === "architecture") {
     state.showFiles = true;
     state.showModules = true;
+    state.showProtocols = true;
     state.showProperties = true;
     state.edgeDensity = "normal";
   } else if (preset === "quiet") {
@@ -1708,12 +1777,14 @@ function applyMapPreset(preset) {
   } else {
     state.showFiles = true;
     state.showModules = true;
+    state.showProtocols = true;
     state.showProperties = true;
     state.edgeDensity = "normal";
   }
 
   showFilesToggle.checked = state.showFiles;
   showModulesToggle.checked = state.showModules;
+  showProtocolsToggle.checked = state.showProtocols;
   showPropertiesToggle.checked = state.showProperties;
   edgeDensitySelect.value = state.edgeDensity;
   mapPresetButtons.forEach((button) => {
@@ -1838,7 +1909,7 @@ function renderDetails(node) {
     ${node.file ? `<section class="source-card"><div class="source-card-header"><div><span class="eyebrow">Source view</span><strong>${escapeHtml(node.file)}:${node.line}</strong></div><div class="source-control-group"><button class="button button-compact source-button-primary" type="button" data-source-node-id="${escapeHtml(node.id)}">View source</button><button class="button button-compact" type="button" data-source-context="${escapeHtml(node.id)}" data-delta="-6">− Context</button><button class="button button-compact" type="button" data-source-context="${escapeHtml(node.id)}" data-delta="6">+ Context</button><button class="button button-compact" type="button" data-xcode-node-id="${escapeHtml(node.id)}">Open in Xcode</button></div></div><div id="sourcePreview" class="source-preview"><p>Loading source...</p></div></section>` : ""}
     <div class="detail-grid">
       <p><strong>Axis mapping</strong><br>${axisDetails}</p>
-      <p><strong>Inside this object</strong><br>${memberIds.length > 0 ? `${memberIds.length} functions / properties in the 3D popup.` : "No inspectable members yet."}</p>
+      <p><strong>Inside this object</strong><br>${memberIds.length > 0 ? `${memberIds.length} functions / properties / vars in the 3D popup.` : "No inspectable members yet."}</p>
       ${ownedState.length > 0 ? `<p><strong>State it owns</strong><br>${names(ownedState, "out")}</p>` : ""}
       ${node.kind === "function" ? `<p><strong>Uses outside parent</strong><br>${names(externalUses, "out") || "No external type usage detected."}</p>` : ""}
       <p><strong>Uses</strong><br>${names(outgoing.filter((edge) => edge.kind !== "owns_state"), "out") || "No outgoing relationships yet."}</p>
@@ -2059,6 +2130,7 @@ function isNodeVisible(node, neighborhood) {
   if (!node) return false;
   if (!state.showFiles && node.kind === "file") return false;
   if (!state.showModules && node.kind === "module") return false;
+  if (!state.showProtocols && node.kind === "protocol") return false;
   return !state.focusMode || neighborhood.has(node.id) || node.kind === "repository";
 }
 
@@ -2257,7 +2329,7 @@ function childPositionOnFilePlane(index, total, fileNode, childNodes = []) {
   const rows = Math.max(1, Math.ceil(total / columns));
   const column = index % columns;
   const row = Math.floor(index / columns);
-  const spacing = spacingForNodes(childNodes, 58, 54, 34);
+  const spacing = spacingForNodes(childNodes, 66, 62, fileChildGap);
   const usableWidth = Math.max(fileNode.width * 0.78, spacing.x * Math.max(1, columns - 1));
   const usableDepth = Math.max(fileNode.depth * 0.72, spacing.z * Math.max(1, rows - 1));
   return {
@@ -2534,7 +2606,7 @@ function describeKind(kind) {
   if (kind === "protocol") return "protocol contract";
   if (kind === "module") return "imported framework or module";
   if (kind === "function") return "method or function";
-  if (kind === "property") return "stored or computed property";
+  if (kind === "property") return "stored or computed property / var";
   return "code structure";
 }
 
@@ -2544,7 +2616,7 @@ function friendlyKind(kind) {
   if (kind === "module") return "Module";
   if (kind === "service") return "Service";
   if (kind === "function") return "Function";
-  if (kind === "property") return "State";
+  if (kind === "property") return "Property / Var";
   return kind.replaceAll("_", " ");
 }
 
@@ -2568,7 +2640,10 @@ function getXrayContentIds(nodeId) {
     .filter((childId) => {
       const child = state.nodeById.get(childId);
       if (!child) return false;
-      if (shell?.kind === "file") return child.kind !== "function" && child.kind !== "property";
+      if (shell?.kind === "file") {
+        if (!state.showProtocols && child.kind === "protocol") return false;
+        return child.kind !== "function" && child.kind !== "property";
+      }
       return child.kind === "function" || child.kind === "property";
     });
 }
