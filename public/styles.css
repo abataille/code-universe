@@ -129,10 +129,11 @@ select {
   order: 0;
 }
 
-.left-rail .panel-map-layers { order: 1; }
-.left-rail .panel-streets { order: 2; }
-.left-rail .panel-accent { order: 3; }
-.left-rail .control-row { order: 4; }
+.left-rail .control-row { order: 1; }
+.left-rail .panel-accent { order: 2; }
+.left-rail .panel-map-layers { order: 3; }
+.left-rail .panel-streets { order: 4; }
+.left-rail .welcome-card { order: 5; }
 
 .brand-mark {
   display: grid;

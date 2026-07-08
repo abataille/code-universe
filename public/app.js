@@ -39,18 +39,18 @@ const toggleLeftRailButton = document.querySelector("#toggleLeftRailButton");
 const toggleRightRailButton = document.querySelector("#toggleRightRailButton");
 
 const colors = {
-  repository: 0x63d2ff,
-  file: 0x7fa3b8,
-  swiftui_view: 0x7cf1b8,
-  service: 0xf6c762,
-  class: 0xf6c762,
-  model: 0xbca4ff,
-  struct: 0xbca4ff,
-  enum: 0xbca4ff,
-  protocol: 0xa7c4ff,
-  function: 0xe8eef2,
-  property: 0x9fb0ba,
-  module: 0x6d7b84
+  repository: 0x45d9ff,
+  file: 0x263746,
+  swiftui_view: 0x18ff9a,
+  service: 0xffc928,
+  class: 0xff8a2a,
+  model: 0xbd7bff,
+  struct: 0xa970ff,
+  enum: 0xff5ec4,
+  protocol: 0x5aa8ff,
+  function: 0xf6fbff,
+  property: 0xff7ad9,
+  module: 0x7d8cff
 };
 
 const geometryCache = new Map();
@@ -60,7 +60,7 @@ const arrowHeadGeometry = new THREE.ConeGeometry(4.5, 11, 14);
 const largeGraphNodeThreshold = 1200;
 const largeGraphEdgeThreshold = 2500;
 const edgeGeometryCacheLimit = 4000;
-const fileChildGap = 28;
+const fileChildGap = 4;
 const lastProjectPathKey = "codeUniverse.lastProjectPath";
 const parserModeKey = "codeUniverse.parserMode";
 const clientIdKey = "codeUniverse.clientId";
@@ -87,13 +87,13 @@ const state = {
   performanceMode: false,
   edgeFilters: {
     uses: true,
-    imports: true,
-    conforms_to: true,
-    defines: true,
-    owns_state: true,
-    uses_member: true,
-    inferred: true,
-    "xcode-index": true
+    imports: false,
+    conforms_to: false,
+    defines: false,
+    owns_state: false,
+    uses_member: false,
+    inferred: false,
+    "xcode-index": false
   },
   pressedKeys: new Set(),
   pointer: new THREE.Vector2(),
@@ -123,8 +123,8 @@ scene.background = new THREE.Color(0x0a1218);
 scene.fog = new THREE.Fog(0x0a1218, 2600, 6200);
 
 const camera = new THREE.PerspectiveCamera(48, 1, 0.1, 12000);
-const defaultCameraPosition = new THREE.Vector3(0, 530, 760);
-const defaultControlsTarget = new THREE.Vector3(0, 120, 0);
+const defaultCameraPosition = new THREE.Vector3(0, 360, 520);
+const defaultControlsTarget = new THREE.Vector3(0, 70, 0);
 camera.position.copy(defaultCameraPosition);
 camera.lookAt(0, 0, 0);
 
@@ -310,7 +310,7 @@ async function scanPath(path, descriptor) {
 
 async function compareParsers() {
   const sourceRoot = state.graph?.project?.sourceRoot || localStorage.getItem(lastProjectPathKey);
-  if (!sourceRoot || sourceRoot === "examples/SampleSwiftApp") {
+  if (!sourceRoot) {
     parserDiff.innerHTML = "<p>Choose a real Xcode project first, then compare parsers.</p>";
     return;
   }
@@ -431,21 +431,34 @@ function buildLayout(graph) {
   const definesByFrom = groupEdgesByFrom(graph.edges, "defines");
   const layout = [];
   const layoutById = new Map();
-  const fileSpacing = spacingForNodes(files, 260, 225, 28);
+  const fileChildTypesById = mapFileChildTypes(files, types, definesByFrom);
+  const fileDistricts = packFileDistricts(files, fileChildTypesById);
 
   addLayoutNode(layout, layoutById, {
     ...graph.nodes.find((node) => node.kind === "repository"),
-    ...gridPosition(0, 1, 170, 150, 0, -230),
+    ...gridPosition(0, 1, 170, 150, 0, -150),
     y: 0,
     ...dimensionsForNode({ kind: "repository" })
   });
 
   files.forEach((file, index) => {
+    const dimensions = dimensionsForNode(file);
+    const district = fileDistricts.get(file.id) || {
+      ...fileDistrictDimensions(file, fileChildTypesById.get(file.id) || []),
+      ...gridPosition(index, Math.max(1, files.length), 130, 110, 0, 20)
+    };
     addLayoutNode(layout, layoutById, {
       ...file,
-      ...gridPosition(index, Math.max(1, files.length), fileSpacing.x, fileSpacing.z, 0, 20),
+      ...dimensions,
+      locWidth: dimensions.width,
+      locDepth: dimensions.depth,
+      width: Math.max(dimensions.width, district.width),
+      depth: Math.max(dimensions.depth, district.depth),
+      x: district.x,
+      z: district.z,
       y: 0,
-      ...dimensionsForNode(file)
+      visualWidth: Math.max(dimensions.width, district.width),
+      visualDepth: Math.max(dimensions.depth, district.depth)
     });
   });
 
@@ -465,11 +478,10 @@ function buildLayout(graph) {
         y: typeBaseYOnFile(parent),
         parentId: parent?.id || null
       };
-      clampNodeToParentFootprint(layoutNode, parent, 5);
       addLayoutNode(layout, layoutById, layoutNode);
       childLayouts.push(layoutNode);
     });
-    separateContainedObjects(childLayouts, parent, 7, fileChildGap);
+    separateSiblingObjects(childLayouts, fileChildGap);
   });
 
   types
@@ -486,11 +498,11 @@ function buildLayout(graph) {
     });
 
   const fileBounds = boundsForLayout(layout.filter((item) => item.kind === "file"));
-  const moduleOriginZ = fileBounds.minZ - 180;
+  const moduleOriginZ = fileBounds.minZ - 85;
   modules.forEach((moduleNode, index) => {
     addLayoutNode(layout, layoutById, {
       ...moduleNode,
-      ...gridPosition(index, Math.max(1, modules.length), 125, 105, 0, moduleOriginZ),
+      ...gridPosition(index, Math.max(1, modules.length), 92, 76, 0, moduleOriginZ),
       y: 72,
       ...dimensionsForNode(moduleNode)
     });
@@ -544,6 +556,84 @@ function groupEdgesByFrom(edges, kind = null) {
   }, new Map());
 }
 
+function mapFileChildTypes(files, types, definesByFrom) {
+  const typesById = new Map(types.map((type) => [type.id, type]));
+  return files.reduce((groups, file) => {
+    const childTypes = (definesByFrom.get(file.id) || [])
+      .map((edge) => typesById.get(edge.to))
+      .filter(Boolean);
+    groups.set(file.id, childTypes);
+    return groups;
+  }, new Map());
+}
+
+function packFileDistricts(files, fileChildTypesById) {
+  if (files.length === 0) return new Map();
+  const gap = 18;
+  const districts = files.map((file) => ({
+    file,
+    ...fileDistrictDimensions(file, fileChildTypesById.get(file.id) || [])
+  }));
+  const totalArea = districts.reduce((sum, district) => sum + (district.width + gap) * (district.depth + gap), 0);
+  const maxWidth = districts.reduce((value, district) => Math.max(value, district.width), 0);
+  const targetWidth = Math.max(maxWidth, Math.sqrt(totalArea) * 1.08);
+  const rows = [];
+  let currentRow = [];
+  let currentWidth = 0;
+  let currentDepth = 0;
+
+  districts.forEach((district) => {
+    const nextWidth = currentRow.length === 0 ? district.width : currentWidth + gap + district.width;
+    if (currentRow.length > 0 && nextWidth > targetWidth) {
+      rows.push({ items: currentRow, width: currentWidth, depth: currentDepth });
+      currentRow = [];
+      currentWidth = 0;
+      currentDepth = 0;
+    }
+    currentRow.push(district);
+    currentWidth = currentWidth === 0 ? district.width : currentWidth + gap + district.width;
+    currentDepth = Math.max(currentDepth, district.depth);
+  });
+  if (currentRow.length > 0) rows.push({ items: currentRow, width: currentWidth, depth: currentDepth });
+
+  const totalDepth = rows.reduce((sum, row, index) => sum + row.depth + (index > 0 ? gap : 0), 0);
+  let rowTop = 20 - totalDepth / 2;
+  const positions = new Map();
+  rows.forEach((row) => {
+    let left = -row.width / 2;
+    const centerZ = rowTop + row.depth / 2;
+    row.items.forEach((district) => {
+      const centerX = left + district.width / 2;
+      positions.set(district.file.id, {
+        x: centerX,
+        z: centerZ,
+        width: district.width,
+        depth: district.depth
+      });
+      left += district.width + gap;
+    });
+    rowTop += row.depth + gap;
+  });
+  return positions;
+}
+
+function fileDistrictDimensions(file, childTypes = []) {
+  const fileDimensions = dimensionsForNode(file);
+  if (childTypes.length === 0) {
+    return { width: fileDimensions.width, depth: fileDimensions.depth };
+  }
+  const columns = Math.max(1, Math.ceil(Math.sqrt(childTypes.length)));
+  const rows = Math.max(1, Math.ceil(childTypes.length / columns));
+  const spacing = spacingForNodes(childTypes, 38, 36, fileChildGap);
+  const childDimensions = childTypes.map((type) => dimensionsForNode(type));
+  const maxChildWidth = childDimensions.reduce((value, item) => Math.max(value, item.width || 0), 0);
+  const maxChildDepth = childDimensions.reduce((value, item) => Math.max(value, item.depth || 0), 0);
+  return {
+    width: Math.max(fileDimensions.width, spacing.x * Math.max(1, columns - 1) + maxChildWidth + fileChildGap * 2),
+    depth: Math.max(fileDimensions.depth, spacing.z * Math.max(1, rows - 1) + maxChildDepth + fileChildGap * 2)
+  };
+}
+
 function separateLargeObjects(layout) {
   const movable = layout.filter((node) => !["repository", "file"].includes(node.kind) && !node.parentId);
   for (let iteration = 0; iteration < 5; iteration += 1) {
@@ -564,6 +654,17 @@ function separateContainedObjects(children, parent, padding = 4, gap = 18) {
       }
     }
     children.forEach((child) => clampNodeToParentFootprint(child, parent, padding));
+  }
+}
+
+function separateSiblingObjects(children, gap = 18) {
+  if (children.length < 2) return;
+  for (let iteration = 0; iteration < 4; iteration += 1) {
+    for (let leftIndex = 0; leftIndex < children.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < children.length; rightIndex += 1) {
+        pushApartIfOverlapping(children[leftIndex], children[rightIndex], gap);
+      }
+    }
   }
 }
 
@@ -644,12 +745,13 @@ function buildScene() {
     if (node.kind === "function" || node.kind === "property") continue;
     const material = new THREE.MeshStandardMaterial({
       color: colorForNode(node),
-      roughness: 0.64,
-      metalness: node.kind === "swiftui_view" ? 0.24 : 0.12,
+      roughness: node.kind === "file" ? 0.78 : 0.48,
+      metalness: node.kind === "swiftui_view" ? 0.28 : 0.16,
       emissive: emissiveForNode(node),
-      emissiveIntensity: node.kind === "swiftui_view" ? 0.08 : 0.02,
+      emissiveIntensity: node.kind === "file" ? 0.04 : 0.18,
       transparent: isTranslucentCityObject(node.kind),
-      opacity: cityObjectOpacity(node.kind)
+      opacity: cityObjectOpacity(node.kind),
+      depthWrite: !isTranslucentCityObject(node.kind)
     });
     if (node.kind === "file") {
       material.polygonOffset = true;
@@ -948,11 +1050,11 @@ function addCityBuildingDetails(mesh, node) {
 }
 
 function addCityObjectOutline(mesh, node) {
-  if (!isTranslucentCityObject(node.kind)) return;
+  if (node.kind === "file" || node.kind === "module") return;
   const outlineMaterial = new THREE.LineBasicMaterial({
-    color: complexityTintForNode(node) > 0.72 ? 0xffdf8a : 0x8fd8ff,
+    color: complexityTintForNode(node) > 0.72 ? 0xfff1a8 : 0xbff8ff,
     transparent: true,
-    opacity: isStructuralBuilding(node.kind) ? 0.52 : 0.38,
+    opacity: isStructuralBuilding(node.kind) ? 0.72 : 0.48,
     depthWrite: false
   });
   const outline = new THREE.LineSegments(
@@ -1013,30 +1115,28 @@ function isStructuralBuilding(kind) {
 }
 
 function isTranslucentCityObject(kind) {
-  return isStructuralBuilding(kind) || kind === "function" || kind === "protocol" || kind === "property";
+  return kind === "file";
 }
 
 function cityObjectOpacity(kind) {
-  if (kind === "property") return 0.9;
-  if (kind === "function" || kind === "protocol") return 0.84;
-  if (isStructuralBuilding(kind)) return 0.82;
+  if (kind === "file") return 0.52;
   return 1;
 }
 
 function colorForNode(node) {
-  const base = new THREE.Color(node.kind === "file" ? 0x252b31 : colors[node.kind] || 0x95a4ad);
+  const base = new THREE.Color(colors[node.kind] || 0x95a4ad);
+  if (node.kind === "file") return base.getHex();
   const complexityTint = complexityTintForNode(node);
   const spectrum = spectrumColorForComplexity(complexityTint);
-  const blend = isStructuralBuilding(node.kind) ? 0.28 + complexityTint * 0.48 : 0.38 + complexityTint * 0.58;
-  const shadowedBase = isStructuralBuilding(node.kind) ? base.clone().lerp(new THREE.Color(0x071017), 0.38) : base;
-  return shadowedBase.lerp(spectrum, blend).getHex();
+  const blend = isStructuralBuilding(node.kind) ? 0.12 + complexityTint * 0.24 : 0.14 + complexityTint * 0.28;
+  return base.lerp(spectrum, blend).getHex();
 }
 
 function emissiveForNode(node) {
-  const base = new THREE.Color(node.kind === "file" ? 0x05080a : colors[node.kind] || 0x000000);
+  const base = new THREE.Color(node.kind === "file" ? 0x03090d : colors[node.kind] || 0x000000);
   const complexityTint = complexityTintForNode(node);
   const spectrum = spectrumColorForComplexity(complexityTint);
-  return base.lerp(spectrum, complexityTint * 0.62).getHex();
+  return base.lerp(spectrum, node.kind === "file" ? 0.08 : 0.24 + complexityTint * 0.22).getHex();
 }
 
 function spectrumColorForComplexity(value) {
@@ -1312,7 +1412,7 @@ function bindEvents() {
     state.parserMode = ["xcode-index", "merged", "swiftsyntax", "heuristic"].includes(parserSelect.value) ? parserSelect.value : "merged";
     localStorage.setItem(parserModeKey, state.parserMode);
     const lastProjectPath = localStorage.getItem(lastProjectPathKey);
-    if (!lastProjectPath || state.graph?.project?.sourceRoot === "examples/SampleSwiftApp") {
+    if (!lastProjectPath) {
       pickerStatus.textContent = `Parser set to ${describeParser(state.parserMode)}.`;
       return;
     }
@@ -1620,7 +1720,7 @@ function computeLayoutRadius() {
     const distance = Math.hypot(node.x || 0, node.z || 0);
     const footprint = Math.max(node.width || 0, node.depth || 0);
     return Math.max(radius, distance + footprint);
-  }, 900);
+  }, 520);
 }
 
 function homeCameraPosition() {
@@ -1869,6 +1969,7 @@ function renderDetails(node) {
   const incoming = state.edgesByTo.get(node.id) || [];
   const kindMeaning = describeKind(node.kind);
   const memberIds = getInspectableMemberIds(node.id);
+  const popupContentIds = getPopupContentIds(node.id);
   const externalUses = getExternalUses(node);
   const ownedState = getOwnedState(node);
   const axis = axisMetricsForNode(node);
@@ -1909,7 +2010,7 @@ function renderDetails(node) {
     ${node.file ? `<section class="source-card"><div class="source-card-header"><div><span class="eyebrow">Source view</span><strong>${escapeHtml(node.file)}:${node.line}</strong></div><div class="source-control-group"><button class="button button-compact source-button-primary" type="button" data-source-node-id="${escapeHtml(node.id)}">View source</button><button class="button button-compact" type="button" data-source-context="${escapeHtml(node.id)}" data-delta="-6">− Context</button><button class="button button-compact" type="button" data-source-context="${escapeHtml(node.id)}" data-delta="6">+ Context</button><button class="button button-compact" type="button" data-xcode-node-id="${escapeHtml(node.id)}">Open in Xcode</button></div></div><div id="sourcePreview" class="source-preview"><p>Loading source...</p></div></section>` : ""}
     <div class="detail-grid">
       <p><strong>Axis mapping</strong><br>${axisDetails}</p>
-      <p><strong>Inside this object</strong><br>${memberIds.length > 0 ? `${memberIds.length} functions / properties / vars in the 3D popup.` : "No inspectable members yet."}</p>
+      <p><strong>Inside this object</strong><br>${popupContentIds.length > 0 ? `${popupContentIds.length} contained objects in the 3D popup.` : "No inspectable members yet."}</p>
       ${ownedState.length > 0 ? `<p><strong>State it owns</strong><br>${names(ownedState, "out")}</p>` : ""}
       ${node.kind === "function" ? `<p><strong>Uses outside parent</strong><br>${names(externalUses, "out") || "No external type usage detected."}</p>` : ""}
       <p><strong>Uses</strong><br>${names(outgoing.filter((edge) => edge.kind !== "owns_state"), "out") || "No outgoing relationships yet."}</p>
@@ -2043,7 +2144,8 @@ function describeAxisDrivers(node) {
   const tint = complexityTintForNode(node);
   const axisDescription = node.kind === "file"
     ? [
-        `district plot: X/Z footprint = lines of code <code>${formatNumber(axis.lines)}</code>`,
+        `district plot: outer plane contains this file’s structs, views, models, and services`,
+        `inner LOC inlay = lines of code <code>${formatNumber(axis.lines)}</code>`,
         `Y height = fixed thin floor`,
         `complexity tint = file activity around the district`
       ]
@@ -2255,25 +2357,31 @@ function makeLabel(text, color, width = 92, height = 18) {
 
 function makeFileMarker(node) {
   const marker = new THREE.Group();
-  const width = clamp((node.width || 54) * 0.28, 14, 26);
-  const depth = clamp((node.depth || 40) * 0.38, 12, 22);
+  const width = clamp(node.locWidth || node.width || 54, 18, Math.max(18, (node.width || 54) * 0.92));
+  const depth = clamp(node.locDepth || node.depth || 40, 14, Math.max(14, (node.depth || 40) * 0.92));
   const thickness = 0.9;
   const baseMaterial = getStandardMaterial("file-marker-base", {
     color: 0x9fb0ba,
     roughness: 0.5,
     metalness: 0.04,
     emissive: 0x1f3038,
-    emissiveIntensity: 0.08
+    emissiveIntensity: 0.08,
+    transparent: true,
+    opacity: 0.72
   });
   const foldMaterial = getStandardMaterial("file-marker-fold", {
     color: 0x8fb8ca,
     roughness: 0.55,
-    metalness: 0.04
+    metalness: 0.04,
+    transparent: true,
+    opacity: 0.82
   });
   const lineMaterial = getStandardMaterial("file-marker-lines", {
     color: 0x20323c,
     roughness: 0.7,
-    metalness: 0.02
+    metalness: 0.02,
+    transparent: true,
+    opacity: 0.74
   });
 
   const plate = new THREE.Mesh(new THREE.BoxGeometry(width, thickness, depth), baseMaterial);
@@ -2329,9 +2437,11 @@ function childPositionOnFilePlane(index, total, fileNode, childNodes = []) {
   const rows = Math.max(1, Math.ceil(total / columns));
   const column = index % columns;
   const row = Math.floor(index / columns);
-  const spacing = spacingForNodes(childNodes, 66, 62, fileChildGap);
-  const usableWidth = Math.max(fileNode.width * 0.78, spacing.x * Math.max(1, columns - 1));
-  const usableDepth = Math.max(fileNode.depth * 0.72, spacing.z * Math.max(1, rows - 1));
+  const spacing = spacingForNodes(childNodes, 38, 36, fileChildGap);
+  const districtWidth = fileNode.visualWidth || fileNode.width;
+  const districtDepth = fileNode.visualDepth || fileNode.depth;
+  const usableWidth = Math.max(districtWidth * 0.25, spacing.x * Math.max(1, columns - 1));
+  const usableDepth = Math.max(districtDepth * 0.25, spacing.z * Math.max(1, rows - 1));
   return {
     x: (column - (columns - 1) / 2) * Math.max(spacing.x, usableWidth / Math.max(1, columns)),
     z: (row - (rows - 1) / 2) * Math.max(spacing.z, usableDepth / Math.max(1, rows))
@@ -2342,7 +2452,7 @@ function spacingForNodes(nodes, minimumX, minimumZ, padding = 18) {
   const dimensions = nodes.map((node) => dimensionsForNode(node));
   const maxWidth = dimensions.reduce((value, item) => Math.max(value, item.width || 0), 0);
   const maxDepth = dimensions.reduce((value, item) => Math.max(value, item.depth || 0), 0);
-  const sizePadding = Math.max(padding, Math.max(maxWidth, maxDepth) * 0.28);
+  const sizePadding = Math.max(padding, Math.max(maxWidth, maxDepth) * 0.18);
   return {
     x: Math.max(minimumX, maxWidth + sizePadding),
     z: Math.max(minimumZ, maxDepth + sizePadding)
@@ -2388,9 +2498,9 @@ function dimensionsForNode(node) {
     };
   }
 
-  const width = clamp(base.width * 0.62 + city.widthScore * 5.5, base.width * 0.75, 190);
-  const height = clamp(base.height * 0.62 + city.heightScore * 7.5, base.height * 0.85, 280);
-  const depth = clamp(base.depth * 0.62 + city.depthScore * 5.5, base.depth * 0.75, 190);
+  const width = clamp(base.width * 0.55 + city.widthScore * 4.2, base.width * 0.75, 170);
+  const height = clamp(base.height * 0.55 + city.heightScore * 2.4, base.height * 0.85, 440);
+  const depth = clamp(base.depth * 0.55 + city.depthScore * 4.2, base.depth * 0.75, 170);
 
   return {
     width: Math.round(width),
@@ -2406,13 +2516,12 @@ function axisLengthForMetric(value, minimum) {
 function cityMetricsForNode(node) {
   const axis = axisMetricsForNode(node);
   const complexity = complexityForNode(node);
-  const maxComplexity = node.kind === "function" ? 18 : node.kind === "property" ? 5 : 14;
-  const normalizedComplexity = clamp(complexity / maxComplexity, 0, 1);
+  const normalizedComplexity = normalizedComplexityScore(complexity, node.kind);
   const loc = Math.max(1, axis.lines);
   const vars = Math.max(0, axis.variables);
   const funcs = Math.max(0, axis.functions);
-  const complexityBoost = 1 + normalizedComplexity * 0.78;
-  const footprintBoost = 1 + normalizedComplexity * 0.35;
+  const complexityBoost = 1 + normalizedComplexity * 0.42;
+  const footprintBoost = 1 + normalizedComplexity * 0.18;
   const volumeScore = (loc + vars * 18 + funcs * 22) * complexityBoost;
 
   return {
@@ -2422,10 +2531,16 @@ function cityMetricsForNode(node) {
     complexity,
     complexityBoost,
     volumeScore,
-    widthScore: Math.sqrt(loc * 0.18 + vars * 12 + funcs * 3) * footprintBoost,
-    heightScore: (Math.sqrt(loc) + Math.log1p(vars + funcs) * 2.2) * complexityBoost,
-    depthScore: Math.sqrt(loc * 0.18 + funcs * 12 + vars * 3) * footprintBoost
+    widthScore: (Math.pow(loc, 0.45) * 0.9 + Math.pow(vars + 1, 0.62) * 2.5 + Math.pow(funcs + 1, 0.42) * 1.2) * footprintBoost,
+    heightScore: (Math.pow(loc, 0.72) * 0.9 + Math.log1p(vars + funcs) * 4) * complexityBoost,
+    depthScore: (Math.pow(loc, 0.45) * 0.9 + Math.pow(funcs + 1, 0.62) * 2.5 + Math.pow(vars + 1, 0.42) * 1.2) * footprintBoost
   };
+}
+
+function normalizedComplexityScore(complexity, kind) {
+  if (kind === "property") return clamp(complexity / 8, 0, 1);
+  if (kind === "function") return clamp(complexity / 28, 0, 1);
+  return clamp(complexity / 42, 0, 1);
 }
 
 function axisMetricsForNode(node) {
@@ -2478,11 +2593,13 @@ function complexityForNode(node) {
   if (node.kind === "module") return 0.85;
   if (node.kind === "repository") return 2.2;
 
-  const methodWeight = (node.metrics?.methods || 0) * 1.05;
-  const propertyWeight = (node.metrics?.properties || 0) * 0.6;
-  const structuralWeight = edgeCounts.definedMembers * 0.35 + edgeCounts.outgoingUses * 0.5 + edgeCounts.incoming * 0.2;
+  const lines = Math.max(1, node.metrics?.lines || 1);
+  const methodWeight = Math.log1p(node.metrics?.methods || 0) * 2.4;
+  const propertyWeight = Math.log1p(node.metrics?.properties || 0) * 2;
+  const lineWeight = Math.log1p(lines) * 1.4;
+  const structuralWeight = Math.log1p(edgeCounts.definedMembers + edgeCounts.outgoingUses + edgeCounts.incoming) * 1.6;
   const kindWeight = node.kind === "swiftui_view" ? 1.35 : 1;
-  return clamp((1 + methodWeight + propertyWeight + structuralWeight) * kindWeight, 0.9, 14);
+  return clamp((lineWeight + methodWeight + propertyWeight + structuralWeight) * kindWeight, 0.9, 100);
 }
 
 function graphEdgeCountsForNode(nodeId) {
@@ -2631,6 +2748,12 @@ function getInspectableMemberIds(nodeId) {
     });
 }
 
+function getPopupContentIds(nodeId) {
+  const node = state.nodeById.get(nodeId);
+  if (node?.kind === "file") return getXrayContentIds(nodeId);
+  return getInspectableMemberIds(nodeId);
+}
+
 function getXrayContentIds(nodeId) {
   if (!state.graph) return [];
   const shell = state.nodeById.get(nodeId);
@@ -2649,12 +2772,12 @@ function getXrayContentIds(nodeId) {
 }
 
 function isOpenedShell(nodeId) {
-  return nodeId === state.openShellId && getInspectableMemberIds(nodeId).length > 0;
+  return nodeId === state.openShellId && getPopupContentIds(nodeId).length > 0;
 }
 
 function resolveOpenShellId(nodeId) {
-  const memberIds = getInspectableMemberIds(nodeId);
-  if (memberIds.length > 0) return nodeId;
+  const popupContentIds = getPopupContentIds(nodeId);
+  if (popupContentIds.length > 0) return nodeId;
 
   const node = state.nodeById.get(nodeId);
   if (node?.kind === "function" || node?.kind === "property") {
@@ -3030,14 +3153,15 @@ function buildMemberPopup() {
   popupXrayRoot.clear();
   state.popupFocusTarget = null;
 
-  const memberIds = getInspectableMemberIds(state.openShellId);
-  if (memberIds.length === 0) return;
-
   const shellNode = state.layoutById.get(state.openShellId);
   if (!shellNode) return;
+  const isFilePopup = shellNode.kind === "file";
+  const contentIds = getPopupContentIds(state.openShellId);
+  if (contentIds.length === 0) return;
 
-  const visibleMemberIds = memberIds.filter((memberId) => {
+  const visibleMemberIds = contentIds.filter((memberId) => {
     const member = state.nodeById.get(memberId);
+    if (isFilePopup && member?.kind === "protocol" && !state.showProtocols) return false;
     return member?.kind !== "property" || state.showProperties;
   });
   if (visibleMemberIds.length === 0) return;
@@ -3047,10 +3171,15 @@ function buildMemberPopup() {
   const dependencyNodes = dependencyIds
     .map((dependencyId) => state.layoutById.get(dependencyId) || state.nodeById.get(dependencyId))
     .filter(Boolean);
-  const memberLayout = popupGridLayout(memberNodes, popupDimensionsForMember);
+  const parentDimensions = popupDimensionsForParent(shellNode, visibleMemberIds.length);
+  const memberLayout = isFilePopup
+    ? popupFileChildLayout(shellNode, memberNodes, parentDimensions)
+    : popupContainedChildLayout(memberNodes, parentDimensions);
   const dependencyLayout = popupGridLayout(dependencyNodes, popupDimensionsForDependency);
-  const parentDimensions = popupDimensionsForParent(shellNode);
-  const maxMemberHeight = memberNodes.reduce((value, node) => Math.max(value, popupDimensionsForMember(node).height), 0);
+  const maxMemberHeight = memberNodes.reduce((value, node, index) => {
+    const dimensions = isFilePopup ? memberLayout.dimensions[index] : popupDimensionsForMember(node);
+    return Math.max(value, dimensions?.height || 0);
+  }, 0);
   const maxDependencyHeight = dependencyNodes.reduce((value, node) => Math.max(value, popupDimensionsForDependency(node).height), 0);
   const contentWidth = Math.max(memberLayout.width, dependencyLayout.width, Math.max(44, shellNode.width * 0.42));
   const contentDepth = Math.max(memberLayout.depth + dependencyLayout.depth + 96, 180);
@@ -3120,15 +3249,57 @@ function buildMemberPopup() {
   parentMesh.position.copy(parentPosition);
   parentMesh.userData.nodeId = shellNode.id;
   popupRoot.add(parentMesh);
+  if (shellNode.kind === "file") {
+    addPopupFileLocInlay(parentMesh, shellNode, parentDimensions);
+  }
   positions.set(shellNode.id, parentPosition.clone());
   const parentLabel = makeLabel(shellNode.name, "#e6fbff", 66, 10);
   parentLabel.position.set(parentPosition.x, parentPosition.y + Math.max(14, shellNode.height * 0.2 + 14), parentPosition.z);
   popupRoot.add(parentLabel);
 
-  placePopupMembers(visibleMemberIds, origin, frameHeight, positions, memberLayout);
+  if (isFilePopup) {
+    placePopupFileChildren(visibleMemberIds, parentPosition, parentDimensions, shellNode, positions, memberLayout);
+  } else {
+    placePopupContainedMembers(visibleMemberIds, parentPosition, parentDimensions, positions, memberLayout);
+  }
   placePopupDependencies(dependencyIds, origin, frameHeight, positions, dependencyLayout);
 
   getPopupEdges(shellNode.id, visibleMemberIds, dependencyIds).forEach((edge) => drawPopupEdge(edge, positions));
+}
+
+function placePopupFileChildren(childIds, parentPosition, parentDimensions, shellNode, positions, layoutInfo) {
+  childIds.forEach((childId, index) => {
+    const node = state.layoutById.get(childId);
+    if (!node) return;
+    const base = layoutInfo.positions[index] || { x: 0, z: 0 };
+    const dimensions = layoutInfo.dimensions[index] || popupDimensionsForFileChild(node, layoutInfo.scale);
+    const position = new THREE.Vector3(
+      parentPosition.x + base.x,
+      parentPosition.y + parentDimensions.height / 2 + 8 + dimensions.height / 2,
+      parentPosition.z + base.z
+    );
+    const material = getNodeMaterial(node.kind, "popup-file-child", {
+      color: colorForNode(node),
+      roughness: 0.56,
+      metalness: node.kind === "swiftui_view" ? 0.18 : 0.1,
+      emissive: emissiveForNode(node),
+      emissiveIntensity: 0.16,
+      transparent: false,
+      opacity: cityObjectOpacity(node.kind),
+      depthWrite: true
+    });
+    const mesh = new THREE.Mesh(makeNodeGeometry(node.kind, dimensions.width, dimensions.height, dimensions.depth), material);
+    mesh.position.copy(position);
+    applyKindRotation(mesh, node.kind);
+    mesh.userData.nodeId = childId;
+    mesh.castShadow = true;
+    popupRoot.add(mesh);
+    positions.set(childId, position.clone());
+
+    const label = makeLabel(node.name, node.kind === "swiftui_view" ? "#dfffee" : "#ffffff", 58, 10);
+    label.position.set(position.x, position.y + dimensions.height / 2 + 13, position.z);
+    popupRoot.add(label);
+  });
 }
 
 function placePopupMembers(memberIds, origin, frameHeight, positions, layoutInfo) {
@@ -3144,14 +3315,14 @@ function placePopupMembers(memberIds, origin, frameHeight, positions, layoutInfo
       origin.z + base.z + layoutInfo.depth * 0.22
     );
     const material = getNodeMaterial(node.kind, "popup-member", {
-      color: colors[node.kind] || 0x95a4ad,
+      color: colorForNode(node),
       roughness: 0.56,
       metalness: 0.1,
-      emissive: colors[node.kind] || 0x000000,
-      emissiveIntensity: 0.08,
-      transparent: true,
+      emissive: emissiveForNode(node),
+      emissiveIntensity: 0.16,
+      transparent: false,
       opacity: cityObjectOpacity(node.kind),
-      depthWrite: false
+      depthWrite: true
     });
     const boxWidth = dimensions.width;
     const boxHeight = dimensions.height;
@@ -3166,6 +3337,45 @@ function placePopupMembers(memberIds, origin, frameHeight, positions, layoutInfo
     const label = makeLabel(node.name, node.kind === "property" ? "#d7e3ea" : "#ffffff", 56, 10);
     label.position.set(position.x, position.y + boxHeight / 2 + 13, position.z);
     popupRoot.add(label);
+  });
+}
+
+function placePopupContainedMembers(memberIds, parentPosition, parentDimensions, positions, layoutInfo) {
+  memberIds.forEach((memberId, index) => {
+    const node = state.layoutById.get(memberId);
+    if (!node) return;
+    const base = layoutInfo.positions[index] || { x: 0, z: 0, y: 0.5 };
+    const dimensions = layoutInfo.dimensions[index] || popupDimensionsForContainedMember(node, layoutInfo.itemSize || 8);
+    const minY = parentPosition.y - parentDimensions.height / 2 + dimensions.height / 2 + 6;
+    const maxY = parentPosition.y + parentDimensions.height / 2 - dimensions.height / 2 - 6;
+    const position = new THREE.Vector3(
+      parentPosition.x + base.x,
+      clamp(parentPosition.y + base.y, minY, Math.max(minY, maxY)),
+      parentPosition.z + base.z
+    );
+    const material = getNodeMaterial(node.kind, "popup-contained-member", {
+      color: colorForNode(node),
+      roughness: 0.56,
+      metalness: 0.1,
+      emissive: emissiveForNode(node),
+      emissiveIntensity: 0.14,
+      transparent: false,
+      opacity: cityObjectOpacity(node.kind),
+      depthWrite: true
+    });
+    const mesh = new THREE.Mesh(makeNodeGeometry(node.kind, dimensions.width, dimensions.height, dimensions.depth), material);
+    mesh.position.copy(position);
+    applyKindRotation(mesh, node.kind);
+    mesh.userData.nodeId = memberId;
+    mesh.castShadow = true;
+    popupRoot.add(mesh);
+    positions.set(memberId, position.clone());
+
+    if (index < 80) {
+      const label = makeLabel(node.name, node.kind === "property" ? "#d7e3ea" : "#ffffff", 44, 8);
+      label.position.set(position.x, position.y + dimensions.height / 2 + 9, position.z);
+      popupRoot.add(label);
+    }
   });
 }
 
@@ -3202,6 +3412,70 @@ function placePopupDependencies(dependencyIds, origin, frameHeight, positions, l
   });
 }
 
+function popupFileChildLayout(shellNode, childNodes, parentDimensions) {
+  const scaleX = parentDimensions.width / Math.max(1, shellNode.width || parentDimensions.width);
+  const scaleZ = parentDimensions.depth / Math.max(1, shellNode.depth || parentDimensions.depth);
+  const scale = Math.min(scaleX, scaleZ);
+  const positions = childNodes.map((node, index) => {
+    if (!Number.isFinite(node.x) || !Number.isFinite(node.z)) {
+      return gridPosition(index, childNodes.length, 42, 38);
+    }
+    return {
+      x: (node.x - shellNode.x) * scaleX,
+      z: (node.z - shellNode.z) * scaleZ
+    };
+  });
+  const dimensions = childNodes.map((node) => popupDimensionsForFileChild(node, scale));
+  const bounds = positions.reduce((result, position, index) => {
+    const dimensionsForNode = dimensions[index] || { width: 0, depth: 0 };
+    return {
+      minX: Math.min(result.minX, position.x - dimensionsForNode.width / 2),
+      maxX: Math.max(result.maxX, position.x + dimensionsForNode.width / 2),
+      minZ: Math.min(result.minZ, position.z - dimensionsForNode.depth / 2),
+      maxZ: Math.max(result.maxZ, position.z + dimensionsForNode.depth / 2)
+    };
+  }, { minX: 0, maxX: 0, minZ: 0, maxZ: 0 });
+  return {
+    width: Math.max(parentDimensions.width, bounds.maxX - bounds.minX),
+    depth: Math.max(parentDimensions.depth, bounds.maxZ - bounds.minZ),
+    positions,
+    dimensions,
+    scale
+  };
+}
+
+function popupContainedChildLayout(nodes, parentDimensions) {
+  if (nodes.length === 0) {
+    return { width: parentDimensions.width, depth: parentDimensions.depth, positions: [], dimensions: [], itemSize: 8 };
+  }
+  const columns = Math.max(1, Math.ceil(Math.sqrt(nodes.length)));
+  const rows = Math.max(1, Math.ceil(nodes.length / columns));
+  const usableWidth = Math.max(20, parentDimensions.width * 0.76);
+  const usableDepth = Math.max(20, parentDimensions.depth * 0.76);
+  const spacingX = columns <= 1 ? 0 : usableWidth / (columns - 1);
+  const spacingZ = rows <= 1 ? 0 : usableDepth / (rows - 1);
+  const itemSize = clamp(Math.min(usableWidth / Math.max(1, columns), usableDepth / Math.max(1, rows)) * 0.72, 3.5, 14);
+  const minY = -parentDimensions.height * 0.32;
+  const maxY = parentDimensions.height * 0.32;
+  const positions = nodes.map((_, index) => {
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    const verticalT = nodes.length === 1 ? 0.5 : index / Math.max(1, nodes.length - 1);
+    return {
+      x: columns === 1 ? 0 : column * spacingX - usableWidth / 2,
+      z: rows === 1 ? 0 : row * spacingZ - usableDepth / 2,
+      y: minY + (maxY - minY) * verticalT
+    };
+  });
+  return {
+    width: parentDimensions.width,
+    depth: parentDimensions.depth,
+    positions,
+    dimensions: nodes.map((node) => popupDimensionsForContainedMember(node, itemSize)),
+    itemSize
+  };
+}
+
 function popupGridLayout(nodes, dimensionsForPopupNode) {
   if (nodes.length === 0) {
     return { columns: 1, rows: 0, width: 0, depth: 0, cellWidth: 0, cellDepth: 0, positions: [] };
@@ -3224,6 +3498,14 @@ function popupGridLayout(nodes, dimensionsForPopupNode) {
   };
 }
 
+function popupDimensionsForFileChild(node, scale) {
+  return {
+    width: Math.max(12, (node.width || 24) * scale),
+    height: Math.max(14, (node.height || 24) * 0.48),
+    depth: Math.max(12, (node.depth || 24) * scale)
+  };
+}
+
 function popupDimensionsForMember(node) {
   const sizeBoost = node.kind === "function" ? 1.65 : 1.38;
   return {
@@ -3233,12 +3515,44 @@ function popupDimensionsForMember(node) {
   };
 }
 
-function popupDimensionsForParent(node) {
+function popupDimensionsForContainedMember(node, itemSize) {
+  return {
+    width: Math.max(4, itemSize * (node.kind === "property" ? 0.92 : 1.25)),
+    height: Math.max(4, itemSize * (node.kind === "function" ? 1.7 : node.kind === "property" ? 0.92 : 1.35)),
+    depth: Math.max(4, itemSize * (node.kind === "property" ? 0.92 : 1.25))
+  };
+}
+
+function popupDimensionsForParent(node, childCount = 0) {
+  if (node.kind !== "file") {
+    const childFootprint = Math.sqrt(Math.max(1, childCount)) * 24;
+    return {
+      width: Math.max(44, node.width * 0.82, childFootprint),
+      height: Math.max(54, node.height * 0.72, Math.sqrt(Math.max(1, childCount)) * 10),
+      depth: Math.max(44, node.depth * 0.82, childFootprint)
+    };
+  }
   return {
     width: Math.max(28, node.width * 0.38),
     height: Math.max(18, node.height * 0.38),
     depth: Math.max(28, node.depth * 0.38)
   };
+}
+
+function addPopupFileLocInlay(parentMesh, shellNode, parentDimensions) {
+  const scaleX = parentDimensions.width / Math.max(1, shellNode.width || parentDimensions.width);
+  const scaleZ = parentDimensions.depth / Math.max(1, shellNode.depth || parentDimensions.depth);
+  const inlayNode = {
+    ...shellNode,
+    width: Math.max(10, (shellNode.locWidth || shellNode.width || 36) * scaleX),
+    depth: Math.max(8, (shellNode.locDepth || shellNode.depth || 28) * scaleZ),
+    locWidth: Math.max(10, (shellNode.locWidth || shellNode.width || 36) * scaleX),
+    locDepth: Math.max(8, (shellNode.locDepth || shellNode.depth || 28) * scaleZ)
+  };
+  const inlay = makeFileMarker(inlayNode);
+  inlay.position.set(0, parentDimensions.height / 2 + 0.8, 0);
+  inlay.userData = { role: "popup-file-loc-inlay" };
+  parentMesh.add(inlay);
 }
 
 function popupDimensionsForDependency(node) {
@@ -3252,7 +3566,7 @@ function popupDimensionsForDependency(node) {
 function getPopupDependencyIds(parentId, memberIds) {
   const memberSet = new Set(memberIds);
   return uniqueValues((state.edgesByFrom.get(parentId) || [])
-    .filter((edge) => ["uses", "conforms_to"].includes(edge.kind))
+    .filter((edge) => ["uses", "conforms_to", "imports"].includes(edge.kind))
     .map((edge) => edge.to)
     .filter((nodeId) => nodeId !== parentId && !memberSet.has(nodeId)));
 }
@@ -3271,7 +3585,7 @@ function getPopupEdges(parentId, memberIds, dependencyIds) {
     edge.__renderKey = edge.__renderKey || edgeKey(edge, edgeIndex);
     if (edge.kind === "defines" && edge.from === parentId && visibleIds.has(edge.to)) edges.push(edge);
     if (edge.kind === "owns_state" && edge.from === parentId && visibleIds.has(edge.to)) edges.push(edge);
-    if (["uses", "conforms_to"].includes(edge.kind) && edge.from === parentId && visibleIds.has(edge.to)) edges.push(edge);
+    if (["uses", "conforms_to", "imports"].includes(edge.kind) && edge.from === parentId && visibleIds.has(edge.to)) edges.push(edge);
     if (edge.kind === "uses_member" && visibleIds.has(edge.from) && visibleIds.has(edge.to)) edges.push(edge);
   });
 

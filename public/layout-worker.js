@@ -8,7 +8,7 @@ self.onmessage = (event) => {
   }
 };
 
-const fileChildGap = 28;
+const fileChildGap = 4;
 
 function buildLayout(graph) {
   const files = graph.nodes.filter((node) => node.kind === "file");
@@ -19,21 +19,34 @@ function buildLayout(graph) {
   const definesByFrom = groupEdgesByFrom(graph.edges, "defines");
   const layout = [];
   const layoutById = new Map();
-  const fileSpacing = spacingForNodes(files, edgesByFrom, graph.nodes, 260, 225, 28);
+  const fileChildTypesById = mapFileChildTypes(files, types, definesByFrom);
+  const fileDistricts = packFileDistricts(files, fileChildTypesById, edgesByFrom, graph.nodes);
 
   addLayoutNode(layout, layoutById, {
     ...graph.nodes.find((node) => node.kind === "repository"),
-    ...gridPosition(0, 1, 170, 150, 0, -230),
+    ...gridPosition(0, 1, 170, 150, 0, -150),
     y: 0,
     ...dimensionsForNode({ kind: "repository" }, edgesByFrom, graph.nodes)
   });
 
   files.forEach((file, index) => {
+    const dimensions = dimensionsForNode(file, edgesByFrom, graph.nodes);
+    const district = fileDistricts.get(file.id) || {
+      ...fileDistrictDimensions(file, fileChildTypesById.get(file.id) || [], edgesByFrom, graph.nodes),
+      ...gridPosition(index, Math.max(1, files.length), 130, 110, 0, 20)
+    };
     addLayoutNode(layout, layoutById, {
       ...file,
-      ...gridPosition(index, Math.max(1, files.length), fileSpacing.x, fileSpacing.z, 0, 20),
+      ...dimensions,
+      locWidth: dimensions.width,
+      locDepth: dimensions.depth,
+      width: Math.max(dimensions.width, district.width),
+      depth: Math.max(dimensions.depth, district.depth),
+      x: district.x,
+      z: district.z,
       y: 0,
-      ...dimensionsForNode(file, edgesByFrom, graph.nodes)
+      visualWidth: Math.max(dimensions.width, district.width),
+      visualDepth: Math.max(dimensions.depth, district.depth)
     });
   });
 
@@ -53,11 +66,10 @@ function buildLayout(graph) {
         y: typeBaseYOnFile(parent),
         parentId: parent?.id || null
       };
-      clampNodeToParentFootprint(layoutNode, parent, 5);
       addLayoutNode(layout, layoutById, layoutNode);
       childLayouts.push(layoutNode);
     });
-    separateContainedObjects(childLayouts, parent, 7, fileChildGap);
+    separateSiblingObjects(childLayouts, fileChildGap);
   });
 
   types
@@ -74,11 +86,11 @@ function buildLayout(graph) {
     });
 
   const fileBounds = boundsForLayout(layout.filter((item) => item.kind === "file"));
-  const moduleOriginZ = fileBounds.minZ - 180;
+  const moduleOriginZ = fileBounds.minZ - 85;
   modules.forEach((moduleNode, index) => {
     addLayoutNode(layout, layoutById, {
       ...moduleNode,
-      ...gridPosition(index, Math.max(1, modules.length), 125, 105, 0, moduleOriginZ),
+      ...gridPosition(index, Math.max(1, modules.length), 92, 76, 0, moduleOriginZ),
       y: 72,
       ...dimensionsForNode(moduleNode, edgesByFrom, graph.nodes)
     });
@@ -122,6 +134,84 @@ function groupEdgesByFrom(edges, kind = null) {
   }, new Map());
 }
 
+function mapFileChildTypes(files, types, definesByFrom) {
+  const typesById = new Map(types.map((type) => [type.id, type]));
+  return files.reduce((groups, file) => {
+    const childTypes = (definesByFrom.get(file.id) || [])
+      .map((edge) => typesById.get(edge.to))
+      .filter(Boolean);
+    groups.set(file.id, childTypes);
+    return groups;
+  }, new Map());
+}
+
+function packFileDistricts(files, fileChildTypesById, edgesByFrom, allNodes) {
+  if (files.length === 0) return new Map();
+  const gap = 18;
+  const districts = files.map((file) => ({
+    file,
+    ...fileDistrictDimensions(file, fileChildTypesById.get(file.id) || [], edgesByFrom, allNodes)
+  }));
+  const totalArea = districts.reduce((sum, district) => sum + (district.width + gap) * (district.depth + gap), 0);
+  const maxWidth = districts.reduce((value, district) => Math.max(value, district.width), 0);
+  const targetWidth = Math.max(maxWidth, Math.sqrt(totalArea) * 1.08);
+  const rows = [];
+  let currentRow = [];
+  let currentWidth = 0;
+  let currentDepth = 0;
+
+  districts.forEach((district) => {
+    const nextWidth = currentRow.length === 0 ? district.width : currentWidth + gap + district.width;
+    if (currentRow.length > 0 && nextWidth > targetWidth) {
+      rows.push({ items: currentRow, width: currentWidth, depth: currentDepth });
+      currentRow = [];
+      currentWidth = 0;
+      currentDepth = 0;
+    }
+    currentRow.push(district);
+    currentWidth = currentWidth === 0 ? district.width : currentWidth + gap + district.width;
+    currentDepth = Math.max(currentDepth, district.depth);
+  });
+  if (currentRow.length > 0) rows.push({ items: currentRow, width: currentWidth, depth: currentDepth });
+
+  const totalDepth = rows.reduce((sum, row, index) => sum + row.depth + (index > 0 ? gap : 0), 0);
+  let rowTop = 20 - totalDepth / 2;
+  const positions = new Map();
+  rows.forEach((row) => {
+    let left = -row.width / 2;
+    const centerZ = rowTop + row.depth / 2;
+    row.items.forEach((district) => {
+      const centerX = left + district.width / 2;
+      positions.set(district.file.id, {
+        x: centerX,
+        z: centerZ,
+        width: district.width,
+        depth: district.depth
+      });
+      left += district.width + gap;
+    });
+    rowTop += row.depth + gap;
+  });
+  return positions;
+}
+
+function fileDistrictDimensions(file, childTypes, edgesByFrom, allNodes) {
+  const fileDimensions = dimensionsForNode(file, edgesByFrom, allNodes);
+  if (childTypes.length === 0) {
+    return { width: fileDimensions.width, depth: fileDimensions.depth };
+  }
+  const columns = Math.max(1, Math.ceil(Math.sqrt(childTypes.length)));
+  const rows = Math.max(1, Math.ceil(childTypes.length / columns));
+  const spacing = spacingForNodes(childTypes, edgesByFrom, allNodes, 38, 36, fileChildGap);
+  const childDimensions = childTypes.map((type) => dimensionsForNode(type, edgesByFrom, allNodes));
+  const maxChildWidth = childDimensions.reduce((value, item) => Math.max(value, item.width || 0), 0);
+  const maxChildDepth = childDimensions.reduce((value, item) => Math.max(value, item.depth || 0), 0);
+  return {
+    width: Math.max(fileDimensions.width, spacing.x * Math.max(1, columns - 1) + maxChildWidth + fileChildGap * 2),
+    depth: Math.max(fileDimensions.depth, spacing.z * Math.max(1, rows - 1) + maxChildDepth + fileChildGap * 2)
+  };
+}
+
 function gridPosition(index, total, spacingX, spacingZ, originX = 0, originZ = 0) {
   const columns = Math.max(1, Math.ceil(Math.sqrt(total)));
   const rows = Math.max(1, Math.ceil(total / columns));
@@ -139,9 +229,11 @@ function childPositionOnFilePlane(index, total, fileNode, childNodes, edgesByFro
   const rows = Math.max(1, Math.ceil(total / columns));
   const column = index % columns;
   const row = Math.floor(index / columns);
-  const spacing = spacingForNodes(childNodes, edgesByFrom, nodes, 66, 62, fileChildGap);
-  const usableWidth = Math.max(fileNode.width * 0.78, spacing.x * Math.max(1, columns - 1));
-  const usableDepth = Math.max(fileNode.depth * 0.72, spacing.z * Math.max(1, rows - 1));
+  const spacing = spacingForNodes(childNodes, edgesByFrom, nodes, 38, 36, fileChildGap);
+  const districtWidth = fileNode.visualWidth || fileNode.width;
+  const districtDepth = fileNode.visualDepth || fileNode.depth;
+  const usableWidth = Math.max(districtWidth * 0.25, spacing.x * Math.max(1, columns - 1));
+  const usableDepth = Math.max(districtDepth * 0.25, spacing.z * Math.max(1, rows - 1));
   return {
     x: (column - (columns - 1) / 2) * Math.max(spacing.x, usableWidth / Math.max(1, columns)),
     z: (row - (rows - 1) / 2) * Math.max(spacing.z, usableDepth / Math.max(1, rows))
@@ -152,7 +244,7 @@ function spacingForNodes(nodes, edgesByFrom, allNodes, minimumX, minimumZ, paddi
   const dimensions = nodes.map((node) => dimensionsForNode(node, edgesByFrom, allNodes));
   const maxWidth = dimensions.reduce((value, item) => Math.max(value, item.width || 0), 0);
   const maxDepth = dimensions.reduce((value, item) => Math.max(value, item.depth || 0), 0);
-  const sizePadding = Math.max(padding, Math.max(maxWidth, maxDepth) * 0.28);
+  const sizePadding = Math.max(padding, Math.max(maxWidth, maxDepth) * 0.18);
   return {
     x: Math.max(minimumX, maxWidth + sizePadding),
     z: Math.max(minimumZ, maxDepth + sizePadding)
@@ -185,32 +277,39 @@ function dimensionsForNode(node, edgesByFrom, allNodes) {
     const diameter = clamp(10 + Math.sqrt(city.volumeScore) * 1.8, 10, 58);
     return { width: Math.round(diameter), height: Math.round(diameter), depth: Math.round(diameter) };
   }
-  const width = clamp(base.width * 0.62 + city.widthScore * 5.5, base.width * 0.75, 190);
-  const height = clamp(base.height * 0.62 + city.heightScore * 7.5, base.height * 0.85, 280);
-  const depth = clamp(base.depth * 0.62 + city.depthScore * 5.5, base.depth * 0.75, 190);
+  const width = clamp(base.width * 0.55 + city.widthScore * 4.2, base.width * 0.75, 170);
+  const height = clamp(base.height * 0.55 + city.heightScore * 2.4, base.height * 0.85, 440);
+  const depth = clamp(base.depth * 0.55 + city.depthScore * 4.2, base.depth * 0.75, 170);
   return { width: Math.round(width), height: Math.round(height), depth: Math.round(depth) };
 }
 
 function cityMetricsForNode(node, edgesByFrom, allNodes) {
   const axis = axisMetricsForNode(node, edgesByFrom, allNodes);
   const complexity = complexityForNode(node, edgesByFrom);
-  const maxComplexity = node.kind === "function" ? 18 : node.kind === "property" ? 5 : 14;
-  const normalizedComplexity = clamp(complexity / maxComplexity, 0, 1);
+  const normalizedComplexity = normalizedComplexityScore(complexity, node.kind);
   const loc = Math.max(1, axis.lines);
   const vars = Math.max(0, axis.variables);
   const funcs = Math.max(0, axis.functions);
-  const complexityBoost = 1 + normalizedComplexity * 0.78;
-  const footprintBoost = 1 + normalizedComplexity * 0.35;
+  const complexityBoost = 1 + normalizedComplexity * 0.42;
+  const footprintBoost = 1 + normalizedComplexity * 0.18;
   const volumeScore = (loc + vars * 18 + funcs * 22) * complexityBoost;
   return {
     loc,
     vars,
     funcs,
+    complexity,
+    complexityBoost,
     volumeScore,
-    widthScore: Math.sqrt(loc * 0.18 + vars * 12 + funcs * 3) * footprintBoost,
-    heightScore: (Math.sqrt(loc) + Math.log1p(vars + funcs) * 2.2) * complexityBoost,
-    depthScore: Math.sqrt(loc * 0.18 + funcs * 12 + vars * 3) * footprintBoost
+    widthScore: (Math.pow(loc, 0.45) * 0.9 + Math.pow(vars + 1, 0.62) * 2.5 + Math.pow(funcs + 1, 0.42) * 1.2) * footprintBoost,
+    heightScore: (Math.pow(loc, 0.72) * 0.9 + Math.log1p(vars + funcs) * 4) * complexityBoost,
+    depthScore: (Math.pow(loc, 0.45) * 0.9 + Math.pow(funcs + 1, 0.62) * 2.5 + Math.pow(vars + 1, 0.42) * 1.2) * footprintBoost
   };
+}
+
+function normalizedComplexityScore(complexity, kind) {
+  if (kind === "property") return clamp(complexity / 8, 0, 1);
+  if (kind === "function") return clamp(complexity / 28, 0, 1);
+  return clamp(complexity / 42, 0, 1);
 }
 
 function axisMetricsForNode(node, edgesByFrom, allNodes) {
@@ -249,11 +348,13 @@ function complexityForNode(node, edgesByFrom) {
   if (node.kind === "property") return clamp(0.72 + edgeCounts.incoming * 0.45 + edgeCounts.outgoingUses * 0.35, 0.65, 5);
   if (node.kind === "module") return 0.85;
   if (node.kind === "repository") return 2.2;
-  const methodWeight = (node.metrics?.methods || 0) * 1.05;
-  const propertyWeight = (node.metrics?.properties || 0) * 0.6;
-  const structuralWeight = edgeCounts.definedMembers * 0.35 + edgeCounts.outgoingUses * 0.5 + edgeCounts.incoming * 0.2;
+  const lines = Math.max(1, node.metrics?.lines || 1);
+  const methodWeight = Math.log1p(node.metrics?.methods || 0) * 2.4;
+  const propertyWeight = Math.log1p(node.metrics?.properties || 0) * 2;
+  const lineWeight = Math.log1p(lines) * 1.4;
+  const structuralWeight = Math.log1p(edgeCounts.definedMembers + edgeCounts.outgoingUses + edgeCounts.incoming) * 1.6;
   const kindWeight = node.kind === "swiftui_view" ? 1.35 : 1;
-  return clamp((1 + methodWeight + propertyWeight + structuralWeight) * kindWeight, 0.9, 14);
+  return clamp((lineWeight + methodWeight + propertyWeight + structuralWeight) * kindWeight, 0.9, 100);
 }
 
 function graphEdgeCountsForNode(nodeId, edgesByFrom) {
@@ -304,6 +405,17 @@ function separateContainedObjects(children, parent, padding = 4, gap = 18) {
       }
     }
     children.forEach((child) => clampNodeToParentFootprint(child, parent, padding));
+  }
+}
+
+function separateSiblingObjects(children, gap = 18) {
+  if (children.length < 2) return;
+  for (let iteration = 0; iteration < 4; iteration += 1) {
+    for (let leftIndex = 0; leftIndex < children.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < children.length; rightIndex += 1) {
+        pushApartIfOverlapping(children[leftIndex], children[rightIndex], gap);
+      }
+    }
   }
 }
 

@@ -17,11 +17,12 @@
           </div>
         </div>
 
-        <section class="welcome-card" aria-label="Getting started">
-          <span class="eyebrow">Start here</span>
-          <h2>Pick a project, then follow the bright paths.</h2>
-          <p>Use the map for structure, search for symbols, and click any object to see source, dependencies, and Xcode actions.</p>
-        </section>
+        <div class="control-row">
+          <button id="viewAllButton" class="button is-active" type="button">Home</button>
+          <button id="focusButton" class="button" type="button">Focus</button>
+          <button id="edgesButton" class="button" type="button">Paths</button>
+          <button id="shareMapButton" class="button" type="button">Share PNG</button>
+        </div>
 
         <section class="panel panel-accent">
           <h2>Project</h2>
@@ -34,13 +35,6 @@
             <p id="scanSummary" class="status-copy">The sample universe is available immediately.</p>
           </div>
         </section>
-
-        <div class="control-row">
-          <button id="viewAllButton" class="button is-active" type="button">Home</button>
-          <button id="focusButton" class="button" type="button">Focus</button>
-          <button id="edgesButton" class="button" type="button">Paths</button>
-          <button id="shareMapButton" class="button" type="button">Share PNG</button>
-        </div>
 
         <section class="panel panel-map-layers">
           <h2>Map layers</h2>
@@ -86,34 +80,40 @@
               <span>Uses</span>
             </label>
             <label class="toggle-row">
-              <input id="edgeImportsToggle" type="checkbox" checked />
+              <input id="edgeImportsToggle" type="checkbox" />
               <span>Imports</span>
             </label>
             <label class="toggle-row">
-              <input id="edgeConformsToggle" type="checkbox" checked />
+              <input id="edgeConformsToggle" type="checkbox" />
               <span>Conforms</span>
             </label>
             <label class="toggle-row">
-              <input id="edgeDefinesToggle" type="checkbox" checked />
+              <input id="edgeDefinesToggle" type="checkbox" />
               <span>Defines</span>
             </label>
             <label class="toggle-row">
-              <input id="edgeStateToggle" type="checkbox" checked />
+              <input id="edgeStateToggle" type="checkbox" />
               <span>State</span>
             </label>
             <label class="toggle-row">
-              <input id="edgeMembersToggle" type="checkbox" checked />
+              <input id="edgeMembersToggle" type="checkbox" />
               <span>Member usage</span>
             </label>
             <label class="toggle-row">
-              <input id="edgeInferredToggle" type="checkbox" checked />
+              <input id="edgeInferredToggle" type="checkbox" />
               <span>Inferred hints</span>
             </label>
             <label class="toggle-row">
-              <input id="edgeIndexToggle" type="checkbox" checked />
+              <input id="edgeIndexToggle" type="checkbox" />
               <span>Xcode index links</span>
             </label>
           </div>
+        </section>
+
+        <section class="welcome-card" aria-label="Getting started">
+          <span class="eyebrow">Start here</span>
+          <h2>Pick a project, then follow the bright paths.</h2>
+          <p>Use the map for structure, search for symbols, and click any object to see source, dependencies, and Xcode actions.</p>
         </section>
 
       </aside>

@@ -1,40 +1,47 @@
 # Code Universe
 
-A 3D architecture map for exploring Swift macOS and iOS codebases alongside Xcode.
+Code Universe is a local 3D architecture map for Swift projects. It turns an Xcode project into a navigable city where files, views, structs, models, services, functions, properties, imports, and usage relationships can be inspected visually.
 
-Code Universe turns a Swift project into an interactive spatial map: files become planes, SwiftUI views and services get distinct shapes, functions and properties sit inside their owning types, and dependency paths show how objects relate. It is built for fast orientation when a codebase feels too large to hold in your head.
+The app runs on your Mac. Source code is scanned locally and stays local.
 
-It runs locally. Your source stays on your Mac.
+![Code Universe current IVE project screenshot](docs/screenshots/code-universe-ive-current.png)
 
-## Who It Is For
+## Current Sample
 
-- Swift developers who want a quick architecture overview before editing.
-- Teams onboarding to an unfamiliar iOS or macOS codebase.
-- Solo builders who want to spot dense files, services, and dependency hotspots.
-- Xcode users who want a visual companion, not a replacement IDE.
-
-## What It Does
-
-- Scans `.xcodeproj`, `project.pbxproj`, folders, or single `.swift` files.
-- Extracts files, types, functions, properties, imports, and basic relationships.
-- Detects SwiftUI `View` types, services, stores, and simple models.
-- Displays the graph as an interactive 3D map in the browser.
-- Opens selected source locations back in Xcode.
-- Offers parser modes from fast heuristic scanning to SwiftSyntax and Xcode index-assisted maps.
-
-## Repository Topics
-
-Suggested GitHub topics:
+The bundled sample graph is generated from:
 
 ```text
-swift xcode ios macos architecture visualization threejs swiftsyntax code-analysis developer-tools
+/Users/raymundvorwerk/Development/forme/ive
 ```
 
-## Screenshot
+The current bundled IVE sample contains:
 
-![Code Universe browser screenshot](docs/screenshots/code-universe-browser.png)
+- `2060` graph nodes
+- `5286` relationships
+- `16` Swift files
+- `134` top-level Swift types
 
-## Run It
+Regenerate it with:
+
+```sh
+npm run scan:sample
+```
+
+## Visual Model
+
+Code Universe uses a consistent spatial model:
+
+- **File plane**: the flat bottom lot for a Swift file.
+- **File lot**: the outer file plane contains that file’s structs, views, models, services, enums, and protocols.
+- **LOC inlay**: the smaller translucent inlay on a file plane represents original file size / lines of code.
+- **Type object**: a view, struct, enum, model, service, or class sits above its file plane.
+- **Object popup**: clicking a type opens its functions, properties, vars, and state inside that object’s popup shell.
+- **File popup**: clicking a file opens its top-level contained objects using the same file-lot rule.
+- **Connections**: relationship paths show usage, imports, conformances, state ownership, and member usage.
+
+By default, most code objects are bright and opaque for readability. File lots, x-ray shells, labels, and relationship overlays remain translucent where seeing through the scene is useful.
+
+## Run
 
 ```sh
 npm start
@@ -52,75 +59,120 @@ If the port is occupied:
 PORT=4174 npm start
 ```
 
-Inside the app, click `Choose Project or File`, then select an `.xcodeproj`, `project.pbxproj`, folder, or `.swift` file in the native macOS picker. The local server resolves the scan root and scans the Swift source files on disk.
+## Use
 
-Use `Load Sample Universe` any time to return to the bundled sample graph.
+The left control column is ordered for quick work:
 
-## Map Controls
+1. `Home`, `Focus`, `Paths`, `Share PNG`
+2. `Project`
+3. `Map layers`
+4. `Connection detail`
 
-- `Density`: switch edges between `Clean`, `Normal`, and `Everything`.
-- `Share PNG`: exports the current 3D map as a screenshot. Browsers with Web Share support open the native share sheet; others download a PNG.
-- `Search`: type a symbol and press `Enter`; matching objects are highlighted.
-- `W/A/S/D` or arrow keys: move across the map. `PageUp/PageDown` or `E/Q` move vertically.
+Connection detail defaults to only `Uses` checked so the map starts readable. Enable imports, conforms, defines, state, member usage, inferred hints, or Xcode index links when you need more detail.
 
-## Mac App Shell
+### Project Panel
 
-A small SwiftPM macOS WebKit shell is available in `mac/CodeUniverseMac`.
+- `Choose Project or File`: scan an `.xcodeproj`, `project.pbxproj`, folder, or single `.swift` file.
+- `Compare Parsers`: compare heuristic, SwiftSyntax, merged, and Xcode-index analysis for the selected project.
+- `Load Sample Universe`: reload the bundled IVE sample graph.
+
+### Map Layers
+
+- `Show files`: toggles file lots.
+- `Show imported modules`: toggles module rings.
+- `Show protocols`: toggles protocol objects.
+- `Show properties`: toggles properties / vars.
+- `Selected object edges only`: reduces paths to the current selection.
+- `Performance mode`: lowers render cost for large graphs.
+
+### Navigation
+
+- Drag: orbit the 3D map.
+- Scroll: zoom.
+- `W/A/S/D` or arrow keys: move across the map.
+- `PageUp/PageDown` or `E/Q`: move vertically.
+- Click an object: inspect it and open the source preview.
+- Search and press `Enter`: jump to a matching symbol.
+
+## Parser Modes
+
+The default parser is `Fast overview` for quick large-project scanning.
+
+Available modes:
+
+- `Fast overview`: fast heuristic scanner.
+- `Best combined view`: SwiftSyntax structure plus heuristic relationship hints.
+- `Accurate Swift parse`: SwiftSyntax structural scan.
+- `Xcode Index map`: local Xcode index relationships when available.
+
+Regenerate the sample with SwiftSyntax:
+
+```sh
+npm run scan:sample:swiftsyntax
+```
+
+The first SwiftSyntax run may resolve Swift package dependencies.
+
+You can set the server default scanner:
+
+```sh
+CODE_UNIVERSE_SCANNER=swiftsyntax npm start
+```
+
+Supported values are:
+
+```text
+heuristic
+merged
+swiftsyntax
+xcode-index
+```
+
+## macOS WebKit Shell
+
+A small SwiftPM macOS shell lives in:
+
+```text
+mac/CodeUniverseMac
+```
+
+Build or run it with:
 
 ```sh
 npm run mac:build
 npm run mac:run
 ```
 
-For URL-scheme integration with Xcode, build the bundled app once:
+Build the app bundle:
 
 ```sh
 npm run mac:bundle
 ```
 
-In Xcode, add it under `Xcode > Settings > Behaviors` as a custom script and choose:
-
-```text
-scripts/open-code-universe-from-xcode.sh
-```
-
-The script first uses Xcode's active workspace/project document. If Xcode does not expose one, it falls back to `$PROJECT_DIR`, `$SRCROOT`, then a folder picker. It opens the bundled app directly with `--scan-path`, so it does not depend on LaunchServices choosing the right URL-scheme handler.
-
-The shell opens `http://127.0.0.1:4174` and tries to start the local Node server from the repo root. You can override the URL:
+Open the bundle:
 
 ```sh
-CODE_UNIVERSE_URL=http://127.0.0.1:4174 npm run mac:run
+npm run mac:open
 ```
 
-## Parser Modes
+The shell starts the local Node server, waits for `/api/health`, then loads the browser UI. It is designed to work when opened from Xcode behaviors as well as from the command line.
 
-The default app view is `Fast heuristic` so larger projects open quickly. Switch to `Best combined view`, `Accurate Swift parse`, or `Xcode Index map` when you want deeper analysis.
-
-Available modes:
-
-- `Fast heuristic`: fast scanner for quick architecture overviews.
-- `Best combined view`: SwiftSyntax structure plus heuristic dependency hints.
-- `SwiftSyntax accurate`: syntax-accurate declarations and structural relationships.
-- `Xcode Index map`: best local semantic links when Xcode has indexed the project.
+## Scripts
 
 ```sh
+npm start
+npm run scan:sample
 npm run scan:sample:swiftsyntax
+npm run test:scan
+npm run mac:build
+npm run mac:run
+npm run mac:bundle
+npm run mac:open
 ```
 
-The first run resolves the `swift-syntax` Swift package dependency, so it needs network access. After that, it emits the same graph JSON shape as the app scanner.
+## Notes
 
-To force one scanner mode from the running app:
-
-```sh
-CODE_UNIVERSE_SCANNER=swiftsyntax npm start
-```
-
-Supported values are `xcode-index`, `merged`, `swiftsyntax`, and `heuristic`. Use the parser selector in the Project panel to switch modes per scan. The environment variable only sets the server default.
-
-The Xcode index mode reads local `~/Library/Developer/Xcode/DerivedData/*/Index.noindex/DataStore` records. If no matching index store exists, build the app in Xcode once and scan again.
-
-## Analysis Notes
-
-Code Universe starts with a fast heuristic scan so large projects open quickly. Use `Best combined view`, `Accurate Swift parse`, or `Xcode Index map` when you need stronger structural or semantic evidence.
-
-The viewer is shell-independent. The browser view, macOS shell, scanners, and future storage layers all use the same graph JSON contract.
+- The app is a visual companion for Xcode, not a replacement IDE.
+- Large graphs automatically enable performance mode.
+- Relationship filters are intentionally conservative by default.
+- Object sizing now uses non-saturated complexity and stronger LOC-based height scaling, so large objects read as visibly larger than small ones.
