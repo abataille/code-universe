@@ -8,11 +8,13 @@ The app runs on your Mac. Source code is scanned locally and stays local.
 
 ## Current Sample
 
-The bundled sample graph is generated from:
+The bundled sample graph is generated from the included, sanitized IVE source snapshot:
 
 ```text
-/Users/raymundvorwerk/Development/forme/ive
+samples/ive
 ```
+
+The snapshot contains the 16 Swift files used by the graph. Git history, build output, user data, assets, the Xcode project, and remote package resolution metadata are intentionally excluded.
 
 The current bundled IVE sample contains:
 
