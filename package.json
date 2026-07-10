@@ -6,8 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "test:scan": "node scripts/test-scan-fixtures.js",
-    "scan:sample": "node scripts/scan-swift.js /Users/raymundvorwerk/Development/forme/ive public/sample-graph.json",
-    "scan:sample:swiftsyntax": "node scripts/scan-swift-syntax.js /Users/raymundvorwerk/Development/forme/ive public/sample-graph.json",
+    "scan:sample": "node scripts/scan-swift.js samples/ive public/sample-graph.json",
+    "scan:sample:swiftsyntax": "node scripts/scan-swift-syntax.js samples/ive public/sample-graph.json",
     "mac:build": "swift build --package-path mac/CodeUniverseMac",
     "mac:run": "swift run --package-path mac/CodeUniverseMac CodeUniverseMac",
     "mac:bundle": "zsh scripts/build-mac-app-bundle.sh",

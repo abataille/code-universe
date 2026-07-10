@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "project": {
     "name": "ive",
-    "scannedAt": "2026-07-08T11:02:18.087Z",
-    "sourceRoot": "/Users/raymundvorwerk/Development/forme/ive"
+    "scannedAt": "2026-07-10T11:57:56.245Z",
+    "sourceRoot": "samples/ive"
   },
   "nodes": [
     {
