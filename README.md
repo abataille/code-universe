@@ -4,24 +4,24 @@ Code Universe is a local 3D architecture map for Swift projects. It turns an Xco
 
 The app runs on your Mac. Source code is scanned locally and stays local.
 
-![Code Universe current IVE project screenshot](docs/screenshots/code-universe-ive-current.png)
+![Code Universe screenshot](docs/screenshots/code-universe-ive-current.png)
 
 ## Current Sample
 
-The bundled sample graph is generated from the included, sanitized IVE source snapshot:
+The bundled sample graph is generated from the included SampleSwiftApp fixture:
 
 ```text
-samples/ive
+examples/SampleSwiftApp
 ```
 
-The snapshot contains the 16 Swift files used by the graph. Git history, build output, user data, assets, the Xcode project, and remote package resolution metadata are intentionally excluded.
+This compact seven-file SwiftUI sample is included in the repository and is intended for reproducing the bundled graph.
 
-The current bundled IVE sample contains:
+The current bundled SampleSwiftApp graph contains:
 
-- `2060` graph nodes
-- `5286` relationships
-- `16` Swift files
-- `134` top-level Swift types
+- `45` graph nodes
+- `75` relationships
+- `7` Swift files
+- `14` top-level Swift types
 
 Regenerate it with:
 
@@ -76,7 +76,7 @@ Connection detail defaults to only `Uses` checked so the map starts readable. En
 
 - `Choose Project or File`: scan an `.xcodeproj`, `project.pbxproj`, folder, or single `.swift` file.
 - `Compare Parsers`: compare heuristic, SwiftSyntax, merged, and Xcode-index analysis for the selected project.
-- `Load Sample Universe`: reload the bundled IVE sample graph.
+- `Load Sample Universe`: reload the bundled SampleSwiftApp graph.
 
 ### Map Layers
 
