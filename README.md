@@ -4,7 +4,7 @@ Code Universe is a local 3D architecture map for Swift projects. It turns an Xco
 
 The app runs on your Mac. Source code is scanned locally and stays local.
 
-![Code Universe screenshot](docs/screenshots/code-universe-ive-current.png)
+![Code Universe screenshot](docs/screenshots/code-universe-current.png)
 
 ## Current Sample
 
