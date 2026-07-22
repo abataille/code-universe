@@ -37,6 +37,24 @@ const mapPresetButtons = document.querySelectorAll("[data-view-preset]");
 const appShell = document.querySelector(".app-shell");
 const toggleLeftRailButton = document.querySelector("#toggleLeftRailButton");
 const toggleRightRailButton = document.querySelector("#toggleRightRailButton");
+const reviewTitleInput = document.querySelector("#reviewTitleInput");
+const reviewModeSelect = document.querySelector("#reviewModeSelect");
+const startReviewButton = document.querySelector("#startReviewButton");
+const loadLatestReviewButton = document.querySelector("#loadLatestReviewButton");
+const importReviewButton = document.querySelector("#importReviewButton");
+const clearReviewButton = document.querySelector("#clearReviewButton");
+const reviewFileInput = document.querySelector("#reviewFileInput");
+const reviewStatus = document.querySelector("#reviewStatus");
+const reviewTimelineTitle = document.querySelector("#reviewTimelineTitle");
+const reviewTimeline = document.querySelector("#reviewTimeline");
+const reviewReplayButton = document.querySelector("#reviewReplayButton");
+const reviewReplaySpeed = document.querySelector("#reviewReplaySpeed");
+const sourceViewer = document.querySelector("#sourceViewer");
+const sourceViewerTitle = document.querySelector("#sourceViewerTitle");
+const sourceViewerLocation = document.querySelector("#sourceViewerLocation");
+const sourceViewerContent = document.querySelector("#sourceViewerContent");
+const sourceViewerXcodeButton = document.querySelector("#sourceViewerXcodeButton");
+const sourceViewerCloseButton = document.querySelector("#sourceViewerCloseButton");
 
 const colors = {
   repository: 0x45d9ff,
@@ -115,7 +133,19 @@ const state = {
   filtersDirty: true,
   renderRequested: false,
   sourceContext: 12,
-  mapRadius: 900
+  sourceRequestId: 0,
+  sourceViewerNodeId: null,
+  mapRadius: 900,
+  review: null,
+  reviewSignature: null,
+  reviewEnabled: false,
+  reviewEvents: [],
+  reviewNodeEvents: new Map(),
+  selectedReviewEventId: null,
+  reviewDismissedId: null,
+  reviewReplayIndex: null,
+  reviewReplayPlaying: false,
+  reviewReplayTimer: null
 };
 
 const scene = new THREE.Scene();
@@ -154,7 +184,8 @@ const xrayRoot = new THREE.Group();
 const edgeRoot = new THREE.Group();
 const popupRoot = new THREE.Group();
 const popupXrayRoot = new THREE.Group();
-universe.add(root, xrayRoot, edgeRoot, popupRoot, popupXrayRoot);
+const reviewRoot = new THREE.Group();
+universe.add(root, xrayRoot, edgeRoot, reviewRoot, popupRoot, popupXrayRoot);
 scene.add(universe);
 
 scene.add(new THREE.AmbientLight(0xb7c8d2, 0.85));
@@ -188,6 +219,7 @@ async function bootstrap() {
   bindEvents();
   resize();
   await loadInitialUniverse();
+  window.setInterval(refreshActiveReview, 2000);
   requestRender();
 }
 
@@ -368,6 +400,7 @@ async function loadGraph(graph, descriptor) {
   markFiltersDirty();
   selectNode(state.layout.find((item) => item.kind === "repository")?.id || state.layout[0]?.id);
   syncButtons();
+  await refreshActiveReview(true);
 }
 
 function isLargeGraph(graph) {
@@ -1234,20 +1267,26 @@ function applyFilters() {
       const hovered = nodeId === state.hoveredId;
       const selected = nodeId === state.selectedId;
       const xrayShell = (selected || hovered || isOpenShell) && shouldShowMesh(nodeId);
+      const reviewEvent = state.reviewEnabled ? latestReviewEventForNode(nodeId) : null;
+      const reviewDim = state.reviewEnabled && state.reviewNodeEvents.size > 0 && !reviewEvent && !selected && !hovered;
       object.material.wireframe = xrayShell;
-      const opacity = dim ? 0.24 : xrayShell ? Math.min(object.userData.defaultOpacity ?? 1, 0.36) : object.userData.defaultOpacity ?? 1;
+      const opacity = dim ? 0.24 : xrayShell ? Math.min(object.userData.defaultOpacity ?? 1, 0.36) : reviewDim ? Math.min(object.userData.defaultOpacity ?? 1, 0.44) : object.userData.defaultOpacity ?? 1;
       object.material.opacity = opacity;
-      object.material.transparent = xrayShell || dim || Boolean(object.userData.defaultTransparent);
+      object.material.transparent = xrayShell || dim || reviewDim || Boolean(object.userData.defaultTransparent);
       object.material.depthWrite = xrayShell ? false : object.userData.defaultDepthWrite ?? true;
       if (xrayShell) {
         object.material.color.setHex(0x8fd8ff);
         object.material.emissive.setHex(0x63d2ff);
+      } else if (reviewEvent) {
+        const reviewColor = reviewColorForEvent(reviewEvent);
+        object.material.color.setHex(reviewColor);
+        object.material.emissive.setHex(reviewColor);
       } else if (node) {
         object.material.color.setHex(colorForNode(node));
         object.material.emissive.setHex(emissiveForNode(node));
       }
       object.material.needsUpdate = true;
-      object.material.emissiveIntensity = nodeId === state.selectedId ? 0.45 : hovered ? 0.34 : matched ? 0.28 : node?.kind === "swiftui_view" ? 0.08 : 0.02;
+      object.material.emissiveIntensity = nodeId === state.selectedId ? 0.45 : hovered ? 0.34 : reviewEvent ? 0.52 : matched ? 0.28 : node?.kind === "swiftui_view" ? 0.08 : 0.02;
     }
   });
   buildHoverXray(neighborhood);
@@ -1256,6 +1295,7 @@ function applyFilters() {
   buildPopupHoverXray();
 
   edgeRoot.visible = state.showEdges;
+  reviewRoot.visible = state.reviewEnabled;
   edgeRoot.children.forEach((edgeObject) => {
     const edge = edgeObject.userData.edge;
     const isSelectedEdge = edgeKey(edge) === state.selectedEdgeKey;
@@ -1314,7 +1354,7 @@ function bindEvents() {
   });
 
   window.addEventListener("keydown", (event) => {
-    if (event.target instanceof HTMLInputElement) return;
+    if (event.target instanceof Element && event.target.closest("input, textarea, select, button, [contenteditable='true']")) return;
     const key = event.key.toLowerCase();
     if (!["w", "a", "s", "d", "q", "e", "pageup", "pagedown", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(key)) return;
     event.preventDefault();
@@ -1388,6 +1428,58 @@ function bindEvents() {
 
   shareMapButton.addEventListener("click", async () => {
     await shareMapScreenshot();
+  });
+
+  startReviewButton.addEventListener("click", async () => {
+    try {
+      await startBehaviorReview();
+    } catch (error) {
+      reviewStatus.textContent = error.message;
+    }
+  });
+
+  reviewTitleInput.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || (!event.metaKey && !event.ctrlKey)) return;
+    event.preventDefault();
+    startReviewButton.click();
+  });
+
+  loadLatestReviewButton.addEventListener("click", loadLatestReviewForProject);
+
+  importReviewButton.addEventListener("click", () => reviewFileInput.click());
+
+  reviewFileInput.addEventListener("change", async () => {
+    const [file] = reviewFileInput.files;
+    reviewFileInput.value = "";
+    if (!file) return;
+    try {
+      await importBehaviorReview(file);
+    } catch (error) {
+      reviewStatus.textContent = error.message;
+    }
+  });
+
+  clearReviewButton.addEventListener("click", () => {
+    state.reviewDismissedId = state.review?.id || null;
+    setReviewOverlay(null);
+  });
+
+  reviewTimeline.addEventListener("click", (event) => {
+    const copyButton = event.target.closest("[data-copy-review-result]");
+    if (copyButton) {
+      copyReviewResult();
+      return;
+    }
+    const button = event.target.closest("[data-review-event-id]");
+    if (!button) return;
+    selectReviewEvent(button.dataset.reviewEventId);
+  });
+
+  reviewReplayButton.addEventListener("click", toggleReviewReplay);
+  reviewReplaySpeed.addEventListener("change", () => {
+    if (!state.reviewReplayPlaying) return;
+    clearReviewReplayTimer();
+    scheduleReviewReplayStep();
   });
 
   toggleLeftRailButton.addEventListener("click", () => {
@@ -1488,7 +1580,7 @@ function bindEvents() {
     if (sourceButton) {
       const node = state.nodeById.get(sourceButton.dataset.sourceNodeId);
       if (!node) return;
-      await showSourcePreview(node);
+      await openSourceViewer(node);
       return;
     }
 
@@ -1507,6 +1599,18 @@ function bindEvents() {
       if (!node) return;
       await openSourceInXcode(node);
     }
+  });
+
+  sourceViewerCloseButton.addEventListener("click", closeSourceViewer);
+  sourceViewerXcodeButton.addEventListener("click", async () => {
+    const node = state.nodeById.get(state.sourceViewerNodeId);
+    if (node) await openSourceInXcode(node);
+  });
+  sourceViewer.addEventListener("close", () => {
+    state.sourceViewerNodeId = null;
+  });
+  sourceViewer.addEventListener("click", (event) => {
+    if (event.target === sourceViewer) closeSourceViewer();
   });
 
   parserDiff.addEventListener("click", async (event) => {
@@ -1542,6 +1646,575 @@ function bindEdgeFilter(toggle, kind) {
     buildMemberPopup();
     markFiltersDirty();
   });
+}
+
+async function startBehaviorReview() {
+  const sourceRoot = state.graph?.project?.sourceRoot;
+  if (!sourceRoot) throw new Error("Choose a project before starting a review.");
+  reviewStatus.textContent = "Launching Codex review...";
+  startReviewButton.disabled = true;
+  const response = await fetch("/api/reviews/launch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sourceRoot,
+      title: reviewTitleInput.value.trim() || "Codex behavior review",
+      behavior: reviewTitleInput.value.trim(),
+      mode: reviewModeSelect.value === "fix" ? "fix" : "inspect"
+    })
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    startReviewButton.disabled = false;
+    throw new Error(payload.error || "Codex review could not be launched.");
+  }
+  setReviewOverlay(payload.review);
+}
+
+async function importBehaviorReview(file) {
+  const sourceRoot = state.graph?.project?.sourceRoot;
+  if (!sourceRoot) throw new Error("Choose the reviewed project before importing its trace.");
+  const review = JSON.parse(await file.text());
+  const response = await fetch("/api/reviews/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ review, sourceRoot })
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || "Review trace could not be imported.");
+  setReviewOverlay(payload.review);
+}
+
+async function refreshActiveReview(force = false) {
+  const sourceRoot = state.graph?.project?.sourceRoot;
+  if (!sourceRoot) return;
+  try {
+    const response = await fetch(`/api/reviews/active?sourceRoot=${encodeURIComponent(sourceRoot)}`);
+    const payload = await response.json();
+    if (!response.ok) return;
+    if (!payload.review) {
+      if (force && state.review && normalizeReviewPath(state.review.sourceRoot) !== normalizeReviewPath(sourceRoot)) {
+        setReviewOverlay(null);
+      }
+      return;
+    }
+    if (payload.review.id === state.reviewDismissedId) return;
+    const signature = reviewSignature(payload.review);
+    if (signature !== state.reviewSignature) setReviewOverlay(payload.review);
+  } catch {
+    return;
+  }
+}
+
+async function loadLatestReviewForProject() {
+  const sourceRoot = state.graph?.project?.sourceRoot;
+  if (!sourceRoot) {
+    reviewStatus.textContent = "Choose a project before loading its latest trace.";
+    return;
+  }
+
+  loadLatestReviewButton.disabled = true;
+  reviewStatus.textContent = "Loading the latest trace for this project...";
+  try {
+    const response = await fetch(`/api/reviews/active?sourceRoot=${encodeURIComponent(sourceRoot)}`);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Latest trace could not be loaded.");
+    if (!payload.review) {
+      setReviewOverlay(null);
+      reviewStatus.textContent = "No saved trace exists for this project yet.";
+      return;
+    }
+    state.reviewDismissedId = null;
+    setReviewOverlay(payload.review);
+    reviewStatus.textContent = `Loaded latest trace: ${payload.review.title}`;
+  } catch (error) {
+    reviewStatus.textContent = error.message;
+  } finally {
+    loadLatestReviewButton.disabled = false;
+  }
+}
+
+function setReviewOverlay(review) {
+  stopReviewReplay({ showAll: true, render: false });
+  if (review) state.reviewDismissedId = null;
+  state.review = review;
+  state.reviewSignature = review ? reviewSignature(review) : null;
+  state.reviewEnabled = Boolean(review);
+  state.selectedReviewEventId = null;
+  state.reviewEvents = review ? resolveReviewEvents(compactReviewEvents(review.events || [], review.sourceRoot)) : [];
+  rebuildReviewNodeEvents(state.reviewEvents);
+
+  buildReviewOverlay();
+  renderReviewTimeline();
+  markFiltersDirty();
+}
+
+function resolveReviewEvents(events) {
+  let previousNodeId = null;
+  return events.map((event) => {
+    const resolvedNodeId = resolveReviewEventNode(event) || previousNodeId;
+    if (resolvedNodeId) previousNodeId = resolvedNodeId;
+    return {
+      ...event,
+      resolvedNodeId,
+      anchorNodeId: visibleReviewAnchor(resolvedNodeId)
+    };
+  });
+}
+
+function compactReviewEvents(events, sourceRoot) {
+  const compacted = [];
+  let phaseKeys = new Set();
+  const inventoryCommands = new Set();
+
+  for (const original of events) {
+    if (isGeneratedReviewFile(original.file)) continue;
+    if (original.command?.includes("/.agents/skills/") && !original.command.includes(sourceRoot || "__missing_root__")) continue;
+    if (isFalseExecutionEvent(original)) continue;
+
+    if (isReviewInventoryCommand(original.command)) {
+      if (inventoryCommands.has(original.command)) continue;
+      inventoryCommands.add(original.command);
+      compacted.push({ ...original, file: null, line: null, summary: "Indexed project source files" });
+      continue;
+    }
+
+    const file = original.file ? canonicalReviewFile(original.file, sourceRoot) : null;
+    if (original.file && !file) continue;
+    const event = { ...original, file };
+    if (["edit", "build", "test", "suspect", "conclusion"].includes(event.kind)) {
+      phaseKeys = new Set();
+      compacted.push(event);
+      continue;
+    }
+    const key = `${event.kind}:${event.file || "project"}:${event.summary}`;
+    if (phaseKeys.has(key)) continue;
+    phaseKeys.add(key);
+    compacted.push(event);
+  }
+  return compacted;
+}
+
+function canonicalReviewFile(file, sourceRoot) {
+  const normalized = normalizeReviewPath(file);
+  const normalizedRoot = normalizeReviewPath(sourceRoot);
+  const projectRelative = normalizedRoot && normalized.startsWith(`${normalizedRoot}/`)
+    ? normalized.slice(normalizedRoot.length + 1)
+    : normalized;
+  const variants = [projectRelative];
+  if (projectRelative.startsWith("n") && projectRelative.length > 1) variants.push(projectRelative.slice(1));
+  const graphFiles = uniqueValues([...state.nodeById.values()].map((node) => node.file).filter(Boolean));
+  return graphFiles.find((candidate) => {
+    const normalizedCandidate = normalizeReviewPath(candidate);
+    return variants.some((variant) => variant === normalizedCandidate || variant.endsWith(`/${normalizedCandidate}`));
+  }) || null;
+}
+
+function isGeneratedReviewFile(file) {
+  const normalized = normalizeReviewPath(file);
+  return /(^|\/)(?:\.build|build|DerivedData|\.git)(?:\/|$)/.test(normalized) || normalized.startsWith(".../");
+}
+
+function isReviewInventoryCommand(command) {
+  return typeof command === "string" && /(?:rg\s+--files|find\b[^\n]*(?:-name|-path)[^\n]*\*\.swift)/i.test(command);
+}
+
+function isFalseExecutionEvent(event) {
+  const command = event.command || "";
+  if (event.kind === "test" && /swift\s+test\s+--help/i.test(command)) return true;
+  if (event.kind === "build" && /xcodebuild/i.test(command) && !/xcodebuild\b[^;&|]*(?:\s|^)(?:build|archive)(?:\s|$)/i.test(command) && !/swift\s+build/i.test(command)) return true;
+  return false;
+}
+
+function resolveReviewEventNode(event) {
+  if (event.nodeId && state.nodeById.has(event.nodeId)) return event.nodeId;
+  if (!event.file) return null;
+  const targetFile = normalizeReviewPath(event.file);
+  const candidates = [...state.nodeById.values()].filter((node) => node.file && reviewFilesMatch(normalizeReviewPath(node.file), targetFile));
+  if (candidates.length === 0) return null;
+
+  if (event.line) {
+    const declarations = candidates
+      .filter((node) => node.kind !== "file" && Number(node.line || 0) <= event.line)
+      .sort((left, right) => {
+        const lineDelta = Number(right.line || 0) - Number(left.line || 0);
+        if (lineDelta !== 0) return lineDelta;
+        return reviewKindSpecificity(right.kind) - reviewKindSpecificity(left.kind);
+      });
+    if (declarations.length > 0) return declarations[0].id;
+  }
+
+  return candidates.find((node) => node.kind === "file")?.id || candidates[0].id;
+}
+
+function visibleReviewAnchor(nodeId) {
+  let currentId = nodeId;
+  const visited = new Set();
+  while (currentId && !visited.has(currentId)) {
+    visited.add(currentId);
+    if (state.meshById.has(currentId)) return currentId;
+    currentId = (state.edgesByTo.get(currentId) || []).find((edge) => edge.kind === "defines")?.from || null;
+  }
+  return null;
+}
+
+function reviewKindSpecificity(kind) {
+  if (kind === "function" || kind === "property") return 4;
+  if (kind === "file") return 0;
+  return 2;
+}
+
+function normalizeReviewPath(path) {
+  return String(path || "").replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/+$/, "");
+}
+
+function reviewFilesMatch(left, right) {
+  return left === right || left.endsWith(`/${right}`) || right.endsWith(`/${left}`);
+}
+
+function latestReviewEventForNode(nodeId) {
+  const events = state.reviewNodeEvents.get(nodeId) || [];
+  return events[events.length - 1] || null;
+}
+
+function reviewColorForEvent(event) {
+  if (event?.outcome === "failed") return 0xff4f64;
+  if (event?.outcome === "passed") return 0x58f29a;
+  if (event?.kind === "suspect") return 0xffb13b;
+  if (event?.kind === "edit") return 0x46e58a;
+  if (event?.kind === "search") return 0xc477ff;
+  if (event?.kind === "build" || event?.kind === "test") return 0x52e6ff;
+  if (event?.kind === "conclusion") return 0xf4f8ff;
+  return 0x5c9dff;
+}
+
+function reviewColorCss(event) {
+  return `#${reviewColorForEvent(event).toString(16).padStart(6, "0")}`;
+}
+
+function buildReviewOverlay() {
+  disposeReviewOverlay();
+  if (!state.reviewEnabled) return;
+  const routeEvents = activeReviewEvents().filter((event) => event.anchorNodeId && state.layoutById.has(event.anchorNodeId));
+
+  routeEvents.forEach((event, index) => {
+    const node = state.layoutById.get(event.anchorNodeId);
+    const color = reviewColorForEvent(event);
+    const markerGeometry = new THREE.SphereGeometry(index === routeEvents.length - 1 ? 5.5 : 4, 12, 8);
+    const markerMaterial = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.96, depthWrite: false });
+    const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+    marker.position.set(node.x, Math.max(8, (node.y || 0) + (node.height || 0) + 8), node.z);
+    marker.renderOrder = 18;
+    reviewRoot.add(marker);
+
+    if (index === 0) return;
+    const previous = state.layoutById.get(routeEvents[index - 1].anchorNodeId);
+    if (!previous || previous.id === node.id) return;
+    const curve = streetCurveForEdge(previous, node);
+    const road = new THREE.Mesh(
+      new THREE.TubeGeometry(curve, 28, 5.4, 6, false),
+      new THREE.MeshBasicMaterial({ color: 0x0b1218, transparent: true, opacity: 0.82, depthWrite: false })
+    );
+    const line = new THREE.Mesh(
+      new THREE.TubeGeometry(curve, 28, 1.8, 6, false),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1, depthWrite: false })
+    );
+    road.renderOrder = 16;
+    line.renderOrder = 17;
+    reviewRoot.add(road, line);
+  });
+}
+
+function disposeReviewOverlay() {
+  reviewRoot.traverse((object) => {
+    object.geometry?.dispose?.();
+    const materials = Array.isArray(object.material) ? object.material : object.material ? [object.material] : [];
+    materials.forEach((material) => material.dispose?.());
+  });
+  reviewRoot.clear();
+}
+
+function selectReviewEvent(eventId) {
+  const event = state.reviewEvents.find((candidate) => candidate.id === eventId);
+  if (!event) return;
+  if (state.reviewReplayIndex !== null) {
+    clearReviewReplayTimer();
+    state.reviewReplayPlaying = false;
+    state.reviewReplayIndex = state.reviewEvents.indexOf(event) + 1;
+    updateReviewReplayPresentation();
+  }
+  state.selectedReviewEventId = event.id;
+  renderReviewTimeline();
+  if (event.resolvedNodeId) selectNode(event.resolvedNodeId, { openPopup: false, focus: false });
+}
+
+function activeReviewEvents() {
+  if (state.reviewReplayIndex === null) return state.reviewEvents;
+  return state.reviewEvents.slice(0, clamp(state.reviewReplayIndex, 0, state.reviewEvents.length));
+}
+
+function rebuildReviewNodeEvents(events) {
+  state.reviewNodeEvents = new Map();
+  for (const event of events) {
+    for (const nodeId of uniqueValues([event.resolvedNodeId, event.anchorNodeId].filter(Boolean))) {
+      if (!state.reviewNodeEvents.has(nodeId)) state.reviewNodeEvents.set(nodeId, []);
+      state.reviewNodeEvents.get(nodeId).push(event);
+    }
+  }
+}
+
+function toggleReviewReplay() {
+  if (state.reviewEvents.length === 0) return;
+  if (state.reviewReplayPlaying) {
+    pauseReviewReplay();
+    return;
+  }
+  if (state.reviewReplayIndex !== null && state.reviewReplayIndex > 0 && state.reviewReplayIndex < state.reviewEvents.length) {
+    state.reviewReplayPlaying = true;
+    renderReviewTimeline();
+    scheduleReviewReplayStep();
+    return;
+  }
+  state.reviewReplayIndex = 0;
+  state.reviewReplayPlaying = true;
+  state.selectedReviewEventId = null;
+  updateReviewReplayPresentation();
+  advanceReviewReplay();
+}
+
+function advanceReviewReplay() {
+  clearReviewReplayTimer();
+  if (!state.reviewReplayPlaying) return;
+  if (state.reviewReplayIndex >= state.reviewEvents.length) {
+    state.reviewReplayPlaying = false;
+    renderReviewTimeline();
+    return;
+  }
+
+  const event = state.reviewEvents[state.reviewReplayIndex];
+  state.reviewReplayIndex += 1;
+  state.selectedReviewEventId = event.id;
+  updateReviewReplayPresentation();
+  if (event.resolvedNodeId) selectNode(event.resolvedNodeId, { openPopup: false, focus: false });
+
+  if (state.reviewReplayIndex >= state.reviewEvents.length) {
+    state.reviewReplayPlaying = false;
+    renderReviewTimeline();
+    return;
+  }
+  scheduleReviewReplayStep();
+}
+
+function scheduleReviewReplayStep() {
+  clearReviewReplayTimer();
+  state.reviewReplayTimer = window.setTimeout(advanceReviewReplay, Number(reviewReplaySpeed.value) || 850);
+}
+
+function pauseReviewReplay() {
+  clearReviewReplayTimer();
+  state.reviewReplayPlaying = false;
+  renderReviewTimeline();
+}
+
+function stopReviewReplay({ showAll = true, render = true } = {}) {
+  clearReviewReplayTimer();
+  state.reviewReplayPlaying = false;
+  state.reviewReplayIndex = showAll ? null : state.reviewReplayIndex;
+  if (render) updateReviewReplayPresentation();
+}
+
+function clearReviewReplayTimer() {
+  if (state.reviewReplayTimer !== null) window.clearTimeout(state.reviewReplayTimer);
+  state.reviewReplayTimer = null;
+}
+
+function updateReviewReplayPresentation() {
+  rebuildReviewNodeEvents(activeReviewEvents());
+  buildReviewOverlay();
+  renderReviewTimeline();
+  markFiltersDirty();
+}
+
+function renderReviewTimeline() {
+  if (!state.review) {
+    startReviewButton.disabled = false;
+    reviewReplayButton.disabled = true;
+    reviewReplayButton.textContent = "Replay";
+    reviewTimelineTitle.textContent = "No active review";
+    reviewTimeline.innerHTML = "<p>Start or import a review to see Codex activity on the city.</p>";
+    reviewStatus.textContent = "No review overlay is active.";
+    return;
+  }
+
+  const mappedCount = state.reviewEvents.filter((event) => event.resolvedNodeId).length;
+  const codexStatus = state.review.codex?.status;
+  const usage = codexUsageBreakdown(state.review.codex?.usage);
+  const replaying = state.reviewReplayIndex !== null;
+  const replayComplete = replaying && state.reviewReplayIndex >= state.reviewEvents.length;
+  const replayProgress = replaying ? `${state.reviewReplayIndex}/${state.reviewEvents.length}` : null;
+  startReviewButton.disabled = codexStatus === "starting" || codexStatus === "running";
+  reviewReplayButton.disabled = state.reviewEvents.length === 0 || codexStatus === "starting" || codexStatus === "running";
+  reviewReplayButton.textContent = state.reviewReplayPlaying ? "Pause" : replayComplete ? "Replay again" : replaying ? "Resume" : "Replay";
+  reviewTimelineTitle.textContent = state.review.title;
+  const usageStatus = usage?.totalTokens ? ` · ${formatTokenCount(usage.inputTokens)} in / ${formatTokenCount(usage.outputTokens)} out` : "";
+  const rawEventCount = state.review.events.length;
+  const replayStatus = replaying ? ` · replay ${replayProgress}${state.reviewReplayPlaying ? "" : replayComplete ? " complete" : " paused"}` : "";
+  reviewStatus.textContent = `${codexStatus ? `Codex ${codexStatus}` : state.review.status} · ${state.reviewEvents.length} useful events · ${mappedCount} mapped${usageStatus}${replayStatus}`;
+  const replayWindowStart = Math.max(0, state.reviewReplayIndex - 5);
+  const visibleEvents = replaying && !replayComplete
+    ? state.reviewEvents.slice(replayWindowStart, replayWindowStart + 40)
+    : state.reviewEvents;
+  const activeEvents = activeReviewEvents();
+  const finalResult = (!replaying || activeEvents.some((event) => event.kind === "conclusion")) ? reviewFinalResult() : "";
+  const items = visibleEvents.map((event) => {
+    const eventIndex = state.reviewEvents.indexOf(event);
+    const future = replaying && eventIndex >= state.reviewReplayIndex;
+    const location = event.file ? `${event.file}${event.line ? `:${event.line}` : ""}` : event.outcome || "review event";
+    const summary = event.kind === "conclusion" && finalResult ? "Final review result" : event.summary;
+    return `
+      <button class="review-event ${event.kind === "conclusion" ? "is-conclusion" : ""} ${future ? "is-future" : ""} ${event.id === state.selectedReviewEventId ? "is-active" : ""}" type="button" data-review-event-id="${escapeHtml(event.id)}" style="--review-color:${reviewColorCss(event)}">
+        <span class="review-event-index">${event.sequence}</span>
+        <span class="review-event-copy"><strong>${escapeHtml(summary)}</strong><span>${escapeHtml(event.kind)} · ${escapeHtml(location)}${event.resolvedNodeId ? "" : " · unmapped"}</span></span>
+      </button>`;
+  }).join("");
+  const gitChanges = state.review.git?.after?.changes || state.review.git?.before?.changes || [];
+  reviewTimeline.innerHTML = `
+    <div class="review-summary">
+      <span>${mappedCount}/${state.reviewEvents.length} mapped</span>
+      ${rawEventCount > state.reviewEvents.length ? `<span>${rawEventCount - state.reviewEvents.length} noise hidden</span>` : ""}
+      <span>${gitChanges.length} Git files</span>
+      ${usage ? `<span>${formatTokenCount(usage.totalTokens)} total tokens</span><span>${usage.turns} model ${usage.turns === 1 ? "turn" : "turns"}</span>` : ""}
+      ${state.review.codex?.mode ? `<span>${state.review.codex.mode === "fix" ? "edits allowed" : "inspect only"}</span>` : ""}
+      <span>${escapeHtml(state.review.status)}</span>
+    </div>
+    ${finalResult ? renderReviewResult(finalResult) : ""}
+    ${usage ? renderTokenUsage(usage) : ""}
+    ${items || "<p>The session is ready. Codex events will appear here.</p>"}
+  `;
+  if (state.reviewReplayPlaying) {
+    requestAnimationFrame(() => reviewTimeline.querySelector(".review-event.is-active")?.scrollIntoView({ block: "nearest" }));
+  }
+}
+
+function reviewFinalResult() {
+  return state.review?.codex?.lastMessage
+    || [...state.reviewEvents].reverse().find((event) => event.kind === "conclusion")?.summary
+    || "";
+}
+
+function renderReviewResult(result) {
+  const lines = String(result).replaceAll("\r\n", "\n").split("\n");
+  const blocks = [];
+  let codeLines = null;
+
+  for (const line of lines) {
+    if (line.trim().startsWith("```")) {
+      if (codeLines) {
+        blocks.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+        codeLines = null;
+      } else {
+        codeLines = [];
+      }
+      continue;
+    }
+    if (codeLines) {
+      codeLines.push(line);
+      continue;
+    }
+    if (!line.trim()) {
+      blocks.push('<div class="review-result-space" aria-hidden="true"></div>');
+      continue;
+    }
+    const heading = line.match(/^#{1,4}\s+(.+)$/);
+    if (heading) {
+      blocks.push(`<h4>${formatReviewInline(heading[1])}</h4>`);
+      continue;
+    }
+    const bullet = line.match(/^\s*[-*]\s+(.+)$/);
+    if (bullet) {
+      blocks.push(`<div class="review-result-list"><span>•</span><p>${formatReviewInline(bullet[1])}</p></div>`);
+      continue;
+    }
+    const numbered = line.match(/^\s*(\d+)[.)]\s+(.+)$/);
+    if (numbered) {
+      blocks.push(`<div class="review-result-list"><span>${numbered[1]}.</span><p>${formatReviewInline(numbered[2])}</p></div>`);
+      continue;
+    }
+    blocks.push(`<p>${formatReviewInline(line)}</p>`);
+  }
+  if (codeLines) blocks.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+
+  return `
+    <section class="review-result" aria-label="Final review result">
+      <div class="review-result-heading"><div><span class="eyebrow">Codex</span><strong>Final result</strong></div><button class="button button-compact" type="button" data-copy-review-result>Copy</button></div>
+      <div class="review-result-body">${blocks.join("")}</div>
+    </section>`;
+}
+
+function formatReviewInline(value) {
+  return escapeHtml(value)
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<span class="review-reference" title="$2">$1</span>')
+    .replace(/`([^`]+)`/g, "<code>$1</code>");
+}
+
+async function copyReviewResult() {
+  const result = reviewFinalResult();
+  if (!result) return;
+  try {
+    await navigator.clipboard.writeText(result);
+    reviewStatus.textContent = "Final result copied to the clipboard.";
+  } catch {
+    reviewStatus.textContent = "Could not copy the final result.";
+  }
+}
+
+function codexUsageBreakdown(usage) {
+  if (!usage) return null;
+  const inputTokens = Number(usage.inputTokens) || 0;
+  const cachedInputTokens = Math.min(inputTokens, Number(usage.cachedInputTokens) || 0);
+  const outputTokens = Number(usage.outputTokens) || 0;
+  const reasoningOutputTokens = Math.min(outputTokens, Number(usage.reasoningOutputTokens) || 0);
+  return {
+    inputTokens,
+    cachedInputTokens,
+    uncachedInputTokens: Math.max(0, Number(usage.uncachedInputTokens) || inputTokens - cachedInputTokens),
+    outputTokens,
+    reasoningOutputTokens,
+    visibleOutputTokens: Math.max(0, Number(usage.visibleOutputTokens) || outputTokens - reasoningOutputTokens),
+    totalTokens: Number(usage.totalTokens) || inputTokens + outputTokens,
+    turns: Number(usage.turns) || 0
+  };
+}
+
+function renderTokenUsage(usage) {
+  const rows = [
+    ["Total", usage.totalTokens, "Input total + output total"],
+    ["Input total", usage.inputTokens, "All context sent to the model"],
+    ["Uncached input", usage.uncachedInputTokens, "New input processed"],
+    ["Cached input", usage.cachedInputTokens, "Reused input; included in input total"],
+    ["Output total", usage.outputTokens, "Visible output + reasoning output"],
+    ["Visible output", usage.visibleOutputTokens, "Model text and structured output"],
+    ["Reasoning output", usage.reasoningOutputTokens, "Included in output total"]
+  ];
+  return `
+    <section class="token-usage" aria-label="Complete Codex token usage">
+      <div class="token-usage-heading"><strong>Token usage</strong><span>${usage.turns} metered ${usage.turns === 1 ? "turn" : "turns"}</span></div>
+      <div class="token-usage-grid">
+        ${rows.map(([label, value, meaning]) => `<div title="${escapeHtml(meaning)}"><span>${escapeHtml(label)}</span><strong>${formatTokenCount(value)}</strong></div>`).join("")}
+      </div>
+      <p>Cached input and reasoning are listed as subsets, not added twice. Tool results are counted when they return to the model as input.</p>
+    </section>`;
+}
+
+function reviewSignature(review) {
+  return `${review.id}:${review.updatedAt}:${review.status}:${review.events?.length || 0}`;
+}
+
+function formatTokenCount(value) {
+  return new Intl.NumberFormat(undefined, {
+    notation: Number(value) >= 10000 ? "compact" : "standard",
+    maximumFractionDigits: 1
+  }).format(Number(value) || 0);
 }
 
 function describeParser(mode) {
@@ -1930,16 +2603,22 @@ function applyCameraAnimation() {
   if (progress >= 1) state.cameraAnimation = null;
 }
 
-function selectNode(id) {
+function selectNode(id, options = {}) {
+  const openPopup = options.openPopup !== false;
+  const focus = options.focus !== false;
   state.selectedId = id;
   state.selectedEdgeKey = null;
   const node = state.nodeById.get(id);
   if (!node) return;
-  state.openShellId = resolveOpenShellId(id);
+  if (openPopup) {
+    state.openShellId = resolveOpenShellId(id);
+  } else {
+    hidePopup();
+  }
   selectedDetails.innerHTML = renderDetails(node);
-  buildMemberPopup();
+  if (openPopup) buildMemberPopup();
   markFiltersDirty();
-  focusCameraOnNode(node);
+  if (focus) focusCameraOnNode(node);
   if (node.file) {
     showSourcePreview(node);
   }
@@ -2063,8 +2742,8 @@ function describeEdge(edge) {
   return "A detected relationship between two code objects.";
 }
 
-async function openSourceInXcode(node) {
-  const preview = document.querySelector("#sourcePreview");
+async function openSourceInXcode(node, targetPreview = null) {
+  const preview = targetPreview || document.querySelector("#sourcePreview");
   if (preview) preview.innerHTML = "<p>Opening in Xcode...</p>";
   try {
     const response = await fetch("/api/open-source", {
@@ -2091,26 +2770,58 @@ async function showSourcePreview(node) {
   const preview = document.querySelector("#sourcePreview");
   if (!preview) return;
 
+  const requestId = ++state.sourceRequestId;
   preview.innerHTML = "<p>Loading source...</p>";
   try {
-    const response = await fetch("/api/source", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sourceRoot: state.graph.project.sourceRoot,
-        file: node.file,
-        line: node.line,
-        context: state.sourceContext
-      })
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || "Source preview failed.");
-    }
+    const payload = await fetchSource(node, { context: state.sourceContext });
+    if (requestId !== state.sourceRequestId || state.selectedId !== node.id || !preview.isConnected) return;
     preview.innerHTML = renderSourceSnippet(payload);
   } catch (error) {
+    if (requestId !== state.sourceRequestId || !preview.isConnected) return;
     preview.innerHTML = `<p><strong>Source error</strong><br><code>${escapeHtml(error.message)}</code></p>`;
   }
+}
+
+async function openSourceViewer(node) {
+  state.sourceViewerNodeId = node.id;
+  sourceViewerTitle.textContent = node.name;
+  sourceViewerLocation.textContent = `${node.file}:${node.line || 1}`;
+  sourceViewerContent.innerHTML = "<p>Loading complete Swift file...</p>";
+  if (!sourceViewer.open) sourceViewer.showModal();
+
+  try {
+    const payload = await fetchSource(node, { fullFile: true });
+    if (state.sourceViewerNodeId !== node.id || !sourceViewer.open) return;
+    sourceViewerLocation.textContent = `${payload.file}:${payload.line} · ${payload.code.length} lines`;
+    sourceViewerContent.innerHTML = renderSourceSnippet(payload);
+    requestAnimationFrame(() => {
+      sourceViewerContent.querySelector(".is-target")?.scrollIntoView({ block: "center" });
+    });
+  } catch (error) {
+    sourceViewerContent.innerHTML = `<p><strong>Source error</strong><br><code>${escapeHtml(error.message)}</code></p>`;
+  }
+}
+
+function closeSourceViewer() {
+  state.sourceViewerNodeId = null;
+  if (sourceViewer.open) sourceViewer.close();
+}
+
+async function fetchSource(node, options = {}) {
+  const response = await fetch("/api/source", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sourceRoot: state.graph?.project?.sourceRoot,
+      file: node.file,
+      line: node.line,
+      context: options.context,
+      fullFile: options.fullFile === true
+    })
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || "Source preview failed.");
+  return payload;
 }
 
 function renderSourceSnippet(payload) {
@@ -2925,12 +3636,26 @@ function applyPopupHoverMaterials() {
       object.userData.defaultPopupTransparent = Boolean(object.material.transparent);
       object.userData.defaultPopupDepthWrite = object.material.depthWrite ?? true;
       object.userData.defaultPopupWireframe = Boolean(object.material.wireframe);
+      object.userData.defaultPopupColor = object.material.color?.getHex();
+      object.userData.defaultPopupEmissive = object.material.emissive?.getHex();
+      object.userData.defaultPopupEmissiveIntensity = object.material.emissiveIntensity ?? 0;
     }
     const hovered = object.userData.nodeId === state.hoveredId;
+    const reviewEvent = state.reviewEnabled ? latestReviewEventForNode(object.userData.nodeId) : null;
     object.material.wireframe = hovered || object.userData.defaultPopupWireframe;
     object.material.opacity = hovered ? Math.min(object.userData.defaultPopupOpacity, 0.34) : object.userData.defaultPopupOpacity;
     object.material.transparent = hovered || object.userData.defaultPopupTransparent;
     object.material.depthWrite = hovered ? false : object.userData.defaultPopupDepthWrite;
+    if (reviewEvent && !hovered) {
+      const reviewColor = reviewColorForEvent(reviewEvent);
+      object.material.color?.setHex(reviewColor);
+      object.material.emissive?.setHex(reviewColor);
+      object.material.emissiveIntensity = 0.52;
+    } else {
+      if (object.userData.defaultPopupColor !== undefined) object.material.color?.setHex(object.userData.defaultPopupColor);
+      if (object.userData.defaultPopupEmissive !== undefined) object.material.emissive?.setHex(object.userData.defaultPopupEmissive);
+      object.material.emissiveIntensity = object.userData.defaultPopupEmissiveIntensity;
+    }
     object.material.needsUpdate = true;
   });
 }

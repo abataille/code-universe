@@ -66,6 +66,28 @@
           </div>
         </section>
 
+        <section class="panel panel-review">
+          <span class="eyebrow">Codex</span>
+          <h2>Behavior review</h2>
+          <p class="panel-copy">Overlay the files Codex inspected, suspected, changed, and verified.</p>
+          <div class="stack">
+            <textarea id="reviewTitleInput" class="search review-prompt" rows="5" placeholder="Describe the behavior, expected result, relevant screen, and how to reproduce it..."></textarea>
+            <label class="field-label" for="reviewModeSelect">Codex permission</label>
+            <select id="reviewModeSelect" class="search selection-field">
+              <option value="inspect" selected>Inspect only — no source changes</option>
+              <option value="fix">Inspect and fix — allow edits</option>
+            </select>
+            <div class="review-actions">
+              <button id="startReviewButton" class="button button-primary" type="button">Run Codex Review</button>
+              <button id="loadLatestReviewButton" class="button review-latest-button" type="button">Load Latest Trace</button>
+              <button id="importReviewButton" class="button" type="button">Import Trace</button>
+              <button id="clearReviewButton" class="button" type="button">Hide Overlay</button>
+            </div>
+            <input id="reviewFileInput" type="file" accept="application/json,.json" hidden />
+            <p id="reviewStatus" class="status-copy">No review overlay is active.</p>
+          </div>
+        </section>
+
         <section class="panel panel-streets">
           <h2>Connection detail</h2>
           <div class="stack">
@@ -187,6 +209,23 @@
       </section>
 
       <aside class="sidebar inspector-rail">
+        <section class="panel panel-review-timeline">
+          <span class="eyebrow">Review path</span>
+          <h2 id="reviewTimelineTitle">No active review</h2>
+          <div class="review-replay-controls" aria-label="Review replay controls">
+            <button id="reviewReplayButton" class="button button-compact" type="button" disabled>Replay</button>
+            <label for="reviewReplaySpeed">Speed</label>
+            <select id="reviewReplaySpeed" class="selection-field" aria-label="Replay speed">
+              <option value="1500">0.5×</option>
+              <option value="850" selected>1×</option>
+              <option value="425">2×</option>
+            </select>
+          </div>
+          <div id="reviewTimeline" class="review-timeline">
+            <p>Start or import a review to see Codex activity on the city.</p>
+          </div>
+        </section>
+
         <section class="panel panel-inspector">
           <span class="eyebrow">Inspector</span>
           <h2>Selected object</h2>
@@ -215,6 +254,25 @@
         </section>
       </aside>
     </main>
+
+    <dialog id="sourceViewer" class="source-viewer" aria-labelledby="sourceViewerTitle">
+      <div class="source-viewer-shell">
+        <header class="source-viewer-header">
+          <div>
+            <span class="eyebrow">Source code</span>
+            <h2 id="sourceViewerTitle">Swift source</h2>
+            <p id="sourceViewerLocation" class="status-copy"></p>
+          </div>
+          <div class="source-viewer-actions">
+            <button id="sourceViewerXcodeButton" class="button" type="button">Open in Xcode</button>
+            <button id="sourceViewerCloseButton" class="button button-primary" type="button">Close</button>
+          </div>
+        </header>
+        <div id="sourceViewerContent" class="source-preview source-viewer-content">
+          <p>Choose an object with a source location.</p>
+        </div>
+      </div>
+    </dialog>
 
     <script type="importmap">
       {

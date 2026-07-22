@@ -6,8 +6,10 @@
   "scripts": {
     "start": "node server.js",
     "test:scan": "node scripts/test-scan-fixtures.js",
+    "test:review": "node scripts/test-review-flow.js",
     "scan:sample": "node scripts/scan-swift.js examples/SampleSwiftApp public/sample-graph.json",
     "scan:sample:swiftsyntax": "node scripts/scan-swift-syntax.js examples/SampleSwiftApp public/sample-graph.json",
+    "review": "node scripts/code-universe-review.js",
     "mac:build": "swift build --package-path mac/CodeUniverseMac",
     "mac:run": "swift run --package-path mac/CodeUniverseMac CodeUniverseMac",
     "mac:bundle": "zsh scripts/build-mac-app-bundle.sh",

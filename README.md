@@ -68,7 +68,8 @@ The left control column is ordered for quick work:
 1. `Home`, `Focus`, `Paths`, `Share PNG`
 2. `Project`
 3. `Map layers`
-4. `Connection detail`
+4. `Behavior review`
+5. `Connection detail`
 
 Connection detail defaults to only `Uses` checked so the map starts readable. Enable imports, conforms, defines, state, member usage, inferred hints, or Xcode index links when you need more detail.
 
@@ -130,6 +131,37 @@ swiftsyntax
 xcode-index
 ```
 
+## Codex Behavior Reviews
+
+Review Mode overlays observable Codex activity on the existing source city. Inspected code is blue, searches purple, suspected causes amber, edits and successful verification green, and failures red. Bright rectangular streets show the order of the investigation.
+
+Choose the project in Code Universe, enter the behavior in the `Behavior review` panel, choose a permission mode, and select `Run Codex Review`.
+
+- `Inspect only` launches Codex in a read-only sandbox and cannot change source files.
+- `Inspect and fix` allows Codex to edit the selected project and run focused verification.
+
+Code Universe launches the Codex runtime bundled with the ChatGPT desktop app, consumes its JSONL event stream, and automatically maps observable searches, source inspections, file changes, builds, tests, and the final report onto the city. The review summary lists total, input, uncached input, cached input, output, visible output, reasoning-output tokens, and metered model turns without double-counting subsets. Private reasoning is neither requested nor stored.
+
+Trace extraction is project-scoped: generated build folders and external files are ignored, project-wide source inventories are collapsed, repeated inspection/search events are deduplicated within each review phase, and build/test commands use concise outcome labels.
+
+Completed and imported traces can be replayed from the `Review path` panel. Replay progressively reveals mapped nodes and route streets, supports pause/resume and 0.5×, 1×, or 2× speed, and reveals the final report only when the conclusion step is reached.
+
+When a different project is scanned, Code Universe automatically requests that project's latest saved trace. `Load Latest Trace` repeats the lookup explicitly and can restore a trace after its overlay was hidden.
+
+The command-line bridge remains available for adding events from another Codex task or from a manual workflow:
+
+```sh
+npm --prefix /path/to/code-universe run review -- inspect Sources/ScannerService.swift 84 "Inspect scanner entry point"
+npm --prefix /path/to/code-universe run review -- suspect Sources/ScannerService.swift 112 "Synchronous process blocks the caller"
+npm --prefix /path/to/code-universe run review -- edit Sources/ScannerService.swift 112 "Move scan work off the main actor"
+npm --prefix /path/to/code-universe run review -- test passed "Large-project scan completes"
+npm --prefix /path/to/code-universe run review -- finish passed "Freeze no longer reproduced"
+```
+
+The npm bridge preserves the directory from which it was invoked. Set `CODE_UNIVERSE_SOURCE_ROOT` explicitly when another tool changes that directory, and set `CODE_UNIVERSE_URL` when Code Universe uses a port other than `4173`. Set `CODE_UNIVERSE_CODEX_PATH` if the desktop Codex runtime is installed in a nonstandard location.
+
+Completed JSON traces can also be loaded with `Import Trace`. The format is documented in `docs/review-schema.md`.
+
 ## macOS WebKit Shell
 
 A small SwiftPM macOS shell lives in:
@@ -166,6 +198,8 @@ npm start
 npm run scan:sample
 npm run scan:sample:swiftsyntax
 npm run test:scan
+npm run test:review
+npm run review -- help
 npm run mac:build
 npm run mac:run
 npm run mac:bundle

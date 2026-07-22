@@ -1,7 +1,10 @@
 import { createServer } from "node:http";
-import { mkdir, readdir, readFile, stat } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import { basename, extname, dirname, join, normalize, relative, resolve } from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { createInterface } from "node:readline";
+import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { scanSwiftFolder } from "./scripts/scan-swift-core.js";
 import { enrichGraphWithXcodeIndex } from "./scripts/scan-xcode-index.js";
@@ -16,6 +19,13 @@ const activeClients = new Map();
 let shutdownTimer = null;
 let pruneTimer = null;
 const sourceFileIndexCache = new Map();
+const reviewDataRoot = process.env.CODE_UNIVERSE_DATA_ROOT
+  ? resolve(process.env.CODE_UNIVERSE_DATA_ROOT)
+  : join(process.cwd(), ".code-universe-data", "reviews");
+const reviewCache = new Map();
+const activeCodexRuns = new Map();
+const reviewWriteQueues = new Map();
+const reviewEventKinds = new Set(["inspect", "search", "suspect", "edit", "build", "test", "conclusion"]);
 
 const contentTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -86,6 +96,41 @@ const server = createServer(async (request, response) => {
       const body = await readJsonBody(request);
       const payload = await openSourceInXcode(body);
       sendJson(response, 200, payload);
+      return;
+    }
+
+    if (url.pathname === "/api/reviews/start" && request.method === "POST") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await startReview(body));
+      return;
+    }
+
+    if (url.pathname === "/api/reviews/launch" && request.method === "POST") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await launchCodexReview(body));
+      return;
+    }
+
+    if (url.pathname === "/api/reviews/event" && request.method === "POST") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await appendReviewEvent(body));
+      return;
+    }
+
+    if (url.pathname === "/api/reviews/finish" && request.method === "POST") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await finishReview(body));
+      return;
+    }
+
+    if (url.pathname === "/api/reviews/active" && request.method === "GET") {
+      sendJson(response, 200, { review: await findLatestReview(url.searchParams.get("sourceRoot")) });
+      return;
+    }
+
+    if (url.pathname === "/api/reviews/import" && request.method === "POST") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await importReview(body));
       return;
     }
 
@@ -569,8 +614,9 @@ async function readSourceSnippet(body) {
   const lines = source.split(/\r?\n/);
   const clampedLine = Math.max(1, Math.min(lines.length, targetLine));
   const context = Math.max(4, Math.min(80, Number(body?.context || 12)));
-  const startLine = Math.max(1, clampedLine - context);
-  const endLine = Math.min(lines.length, clampedLine + context);
+  const fullFile = body?.fullFile === true;
+  const startLine = fullFile ? 1 : Math.max(1, clampedLine - context);
+  const endLine = fullFile ? lines.length : Math.min(lines.length, clampedLine + context);
 
   return {
     file: relativeFile,
@@ -592,6 +638,526 @@ async function openSourceInXcode(body) {
     file: relativeFile,
     line: targetLine
   };
+}
+
+async function startReview(body) {
+  const sourceRoot = await validatedReviewRoot(body?.sourceRoot);
+  const now = new Date().toISOString();
+  const existing = await findActiveReview(sourceRoot);
+  if (existing) {
+    activeCodexRuns.get(existing.id)?.kill("SIGTERM");
+    activeCodexRuns.delete(existing.id);
+    existing.status = "completed";
+    existing.finishedAt = now;
+    existing.updatedAt = now;
+    await saveReview(existing);
+  }
+  const review = {
+    version: 1,
+    id: randomUUID(),
+    title: cleanReviewText(body?.title, "Code review"),
+    behavior: cleanReviewText(body?.behavior, ""),
+    sourceRoot,
+    status: "running",
+    startedAt: now,
+    updatedAt: now,
+    finishedAt: null,
+    events: [],
+    codex: null,
+    git: {
+      before: await captureGitEvidence(sourceRoot),
+      after: null
+    }
+  };
+  await saveReview(review);
+  return { review };
+}
+
+async function launchCodexReview(body) {
+  const sourceRoot = await validatedReviewRoot(body?.sourceRoot);
+  const mode = body?.mode === "fix" ? "fix" : "inspect";
+  const codex = await resolveCodexCommand();
+  const { review } = await startReview({
+    ...body,
+    sourceRoot,
+    title: cleanReviewText(body?.title, "Codex behavior review")
+  });
+  review.codex = {
+    status: "starting",
+    mode,
+    command: codex.displayName,
+    threadId: null,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    exitCode: null,
+    error: null,
+    lastMessage: null,
+    usage: emptyCodexUsage()
+  };
+  await saveReview(review);
+
+  const prompt = codexReviewPrompt(review, mode);
+  const args = [
+    ...codex.argsPrefix,
+    "exec",
+    "--json",
+    "--ephemeral",
+    "--sandbox",
+    mode === "fix" ? "workspace-write" : "read-only",
+    "--cd",
+    sourceRoot,
+    prompt
+  ];
+  const child = spawn(codex.command, args, {
+    cwd: sourceRoot,
+    env: process.env,
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  activeCodexRuns.set(review.id, child);
+  review.codex.status = "running";
+  review.updatedAt = new Date().toISOString();
+  await saveReview(review);
+
+  const stdout = createInterface({ input: child.stdout });
+  stdout.on("line", (line) => queueReviewUpdate(review.id, () => consumeCodexJsonLine(review.id, line)));
+  let stderrTail = "";
+  child.stderr.on("data", (chunk) => {
+    stderrTail = `${stderrTail}${String(chunk)}`.slice(-4000);
+  });
+  child.on("error", (error) => {
+    queueReviewUpdate(review.id, () => completeCodexReview(review.id, 1, error.message));
+  });
+  child.on("close", (exitCode) => {
+    queueReviewUpdate(review.id, () => completeCodexReview(review.id, exitCode ?? 1, exitCode ? stderrTail.trim() : null));
+  });
+
+  return { review };
+}
+
+async function resolveCodexCommand() {
+  const configured = process.env.CODE_UNIVERSE_CODEX_PATH;
+  const candidates = [
+    configured,
+    "/Applications/ChatGPT.app/Contents/Resources/codex",
+    "/Applications/Codex.app/Contents/Resources/codex"
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    try {
+      await access(candidate, candidate.endsWith(".js") ? fsConstants.R_OK : fsConstants.X_OK);
+      if (candidate.endsWith(".js")) {
+        return { command: process.execPath, argsPrefix: [candidate], displayName: candidate };
+      }
+      return { command: candidate, argsPrefix: [], displayName: candidate };
+    } catch {
+      continue;
+    }
+  }
+
+  try {
+    const { stdout } = await execFileAsync("which", ["codex"]);
+    const candidate = stdout.trim();
+    if (candidate) return { command: candidate, argsPrefix: [], displayName: candidate };
+  } catch {
+    // Fall through to the actionable error below.
+  }
+  throw new Error("Codex CLI was not found. Install it or set CODE_UNIVERSE_CODEX_PATH.");
+}
+
+function codexReviewPrompt(review, mode) {
+  const behavior = review.behavior || review.title;
+  const action = mode === "fix"
+    ? "Find the root cause, implement the smallest safe fix, and run focused verification."
+    : "Investigate only. Do not modify source files. Find the most likely root cause and gather concrete evidence.";
+  return [
+    `Review this behavior: ${behavior}`,
+    action,
+    "Inspect the relevant source code instead of guessing.",
+    "Run only focused, non-destructive commands and tests that help establish the behavior.",
+    "In the final response, name the relevant Swift files and symbols, explain the evidence, and clearly separate confirmed facts from hypotheses."
+  ].join("\n");
+}
+
+function queueReviewUpdate(reviewId, update) {
+  const previous = reviewWriteQueues.get(reviewId) || Promise.resolve();
+  const next = previous.catch(() => {}).then(update);
+  reviewWriteQueues.set(reviewId, next);
+  next.finally(() => {
+    if (reviewWriteQueues.get(reviewId) === next) reviewWriteQueues.delete(reviewId);
+  });
+  return next;
+}
+
+async function consumeCodexJsonLine(reviewId, line) {
+  let record;
+  try {
+    record = JSON.parse(line);
+  } catch {
+    return;
+  }
+  const review = await loadReview(reviewId);
+  if (!review || review.status !== "running") return;
+
+  if (record.type === "thread.started") {
+    review.codex.threadId = record.thread_id || null;
+    review.updatedAt = new Date().toISOString();
+    await saveReview(review);
+    return;
+  }
+
+  if (record.type === "turn.failed" || record.type === "error") {
+    addCodexUsage(review, record.usage);
+    review.codex.error = cleanReviewText(record.error?.message || record.message, "Codex review failed");
+    review.codex.status = "failed";
+    review.updatedAt = new Date().toISOString();
+    await saveReview(review);
+    return;
+  }
+
+  if (record.type === "turn.completed") {
+    addCodexUsage(review, record.usage);
+    review.updatedAt = new Date().toISOString();
+    await saveReview(review);
+    return;
+  }
+
+  if (record.type !== "item.completed" || !record.item) return;
+  const item = record.item;
+  if (item.type === "agent_message") {
+    review.codex.lastMessage = cleanReviewResultText(item.text) || null;
+    review.updatedAt = new Date().toISOString();
+    await saveReview(review);
+    return;
+  }
+  const events = reviewEventsFromCodexItem(item, review.sourceRoot);
+  if (events.length === 0) return;
+  appendNormalizedReviewEvents(review, events);
+  await saveReview(review);
+}
+
+function reviewEventsFromCodexItem(item, sourceRoot) {
+  const command = cleanReviewText(item.command, "");
+  const failed = item.status === "failed" || Number(item.exit_code) > 0;
+  const outcome = failed ? "failed" : "passed";
+
+  if (["file_change", "file_changes"].includes(item.type)) {
+    return swiftFilesInText(JSON.stringify(item), sourceRoot)
+      .map((file) => ({ kind: "edit", outcome: "changed", file: file.file, line: file.line, summary: `Changed ${basename(file.file)}` }));
+  }
+  if (item.type !== "command_execution") return [];
+
+  const kind = classifyCodexCommand(command);
+  if (kind === "test" || kind === "build") {
+    return [{ kind, outcome, summary: summarizeCodexCommand(command, kind, outcome), command }];
+  }
+  if (isSourceInventoryCommand(command)) {
+    return [{ kind: "search", outcome: failed ? "failed" : "info", summary: "Indexed project source files", command }];
+  }
+  const files = swiftFilesInText(command, sourceRoot);
+  if (kind === "edit") {
+    return files.map((file) => ({ kind, outcome: "changed", file: file.file, line: file.line, summary: `Changed ${basename(file.file)}`, command }));
+  }
+  if (files.length > 0) {
+    return files.map((file) => ({ kind, outcome: failed ? "failed" : "info", file: file.file, line: file.line, summary: `${kind === "search" ? "Searched" : "Inspected"} ${basename(file.file)}`, command }));
+  }
+  return [];
+}
+
+function classifyCodexCommand(command) {
+  if (/\b(xcodebuild\b.*(?:^|\s)test(?:\s|$)|swift\s+test\b(?![^\n]*--help)|npm\s+(?:run\s+)?test\b|pytest\b|cargo\s+test\b)/i.test(command)) return "test";
+  if (/\b(xcodebuild\b.*(?:^|\s)(?:build|archive)(?:\s|$)|swift\s+build\b(?![^\n]*--help)|npm\s+run\s+build\b|cargo\s+build\b)/i.test(command)) return "build";
+  if (/\b(apply_patch|perl\s+-i|sed\s+-i)\b/i.test(command)) return "edit";
+  if (/\b(rg|grep|find|fd|mdfind)\b/i.test(command)) return "search";
+  return "inspect";
+}
+
+function isSourceInventoryCommand(command) {
+  return /(?:rg\s+--files|find\b[^\n]*(?:-name|-path)[^\n]*\*\.swift)/i.test(command);
+}
+
+function summarizeCodexCommand(command, kind, outcome) {
+  if (kind === "test") {
+    if (/swift\s+test/i.test(command)) return `Swift package tests ${outcome}`;
+    if (/xcodebuild\b.*\btest\b/i.test(command)) return `Xcode tests ${outcome}`;
+    return `Tests ${outcome}`;
+  }
+  if (/swift\s+build/i.test(command)) return `Swift package build ${outcome}`;
+  if (/xcodebuild/i.test(command)) return `Xcode build ${outcome}`;
+  return `Build ${outcome}`;
+}
+
+function swiftFilesInText(text, sourceRoot) {
+  const matches = [];
+  const seen = new Set();
+  const pattern = /((?:\/?[A-Za-z0-9_@+.-]+\/)*[A-Za-z0-9_@+.-]+\.swift)(?::(\d+))?/g;
+  for (const match of String(text || "").matchAll(pattern)) {
+    const file = normalizeTraceSourceFile(match[1], sourceRoot);
+    const key = `${file}:${match[2] || ""}`;
+    if (!file || seen.has(key)) continue;
+    seen.add(key);
+    matches.push({ file, line: match[2] ? Number(match[2]) : null });
+    if (matches.length >= 8) break;
+  }
+  return matches;
+}
+
+function normalizeTraceSourceFile(candidate, sourceRoot) {
+  const cleaned = String(candidate || "").trim().replace(/^['"`]+|['"`,]+$/g, "");
+  if (!cleaned) return null;
+  const resolvedRoot = resolve(sourceRoot);
+  const resolvedFile = cleaned.startsWith("/") ? resolve(cleaned) : resolve(resolvedRoot, cleaned);
+  const projectFile = relative(resolvedRoot, resolvedFile);
+  if (!projectFile || projectFile.startsWith("..") || projectFile.startsWith("/")) return null;
+  const normalizedFile = normalize(projectFile).replaceAll("\\", "/");
+  if (/(^|\/)(?:\.build|build|DerivedData|\.git)(?:\/|$)/.test(normalizedFile)) return null;
+  return normalizedFile;
+}
+
+function appendNormalizedReviewEvents(review, events) {
+  events.forEach((event) => {
+    const normalized = normalizeReviewEvent(event, review.events.length + 1);
+    if (shouldAppendTraceEvent(review.events, normalized)) review.events.push(normalized);
+  });
+  review.updatedAt = new Date().toISOString();
+}
+
+function shouldAppendTraceEvent(existingEvents, candidate) {
+  if (!["inspect", "search"].includes(candidate.kind)) return true;
+  const lastMilestoneIndex = existingEvents.findLastIndex((event) => ["edit", "build", "test", "suspect", "conclusion"].includes(event.kind));
+  const phaseEvents = existingEvents.slice(lastMilestoneIndex + 1);
+  return !phaseEvents.some((event) => event.kind === candidate.kind && event.file === candidate.file && event.summary === candidate.summary);
+}
+
+function emptyCodexUsage() {
+  return {
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    uncachedInputTokens: 0,
+    outputTokens: 0,
+    reasoningOutputTokens: 0,
+    visibleOutputTokens: 0,
+    totalTokens: 0,
+    turns: 0
+  };
+}
+
+function addCodexUsage(review, usage) {
+  if (!usage || !review.codex) return;
+  const totals = review.codex.usage || emptyCodexUsage();
+  totals.inputTokens += numericUsage(usage.input_tokens ?? usage.inputTokens);
+  totals.cachedInputTokens += numericUsage(usage.cached_input_tokens ?? usage.cachedInputTokens);
+  totals.outputTokens += numericUsage(usage.output_tokens ?? usage.outputTokens);
+  totals.reasoningOutputTokens += numericUsage(usage.reasoning_output_tokens ?? usage.reasoningOutputTokens);
+  totals.uncachedInputTokens = Math.max(0, totals.inputTokens - totals.cachedInputTokens);
+  totals.visibleOutputTokens = Math.max(0, totals.outputTokens - totals.reasoningOutputTokens);
+  totals.totalTokens = totals.inputTokens + totals.outputTokens;
+  totals.turns += 1;
+  review.codex.usage = totals;
+}
+
+function numericUsage(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
+}
+
+async function completeCodexReview(reviewId, exitCode, explicitError = null) {
+  const review = await loadReview(reviewId);
+  if (!review || review.status !== "running") return;
+  activeCodexRuns.delete(reviewId);
+  const failed = exitCode !== 0 || review.codex?.status === "failed";
+  const finalMessage = review.codex?.lastMessage;
+  if (finalMessage) {
+    const suspectedFiles = swiftFilesInText(finalMessage, review.sourceRoot);
+    appendNormalizedReviewEvents(review, suspectedFiles.map((file) => ({
+      kind: "suspect",
+      file: file.file,
+      line: file.line,
+      summary: `Referenced in Codex conclusion: ${basename(file.file)}`
+    })));
+    appendNormalizedReviewEvents(review, [{
+      kind: "conclusion",
+      outcome: failed ? "failed" : "passed",
+      summary: "Final review result"
+    }]);
+  } else {
+    appendNormalizedReviewEvents(review, [{
+      kind: "conclusion",
+      outcome: failed ? "failed" : "passed",
+      summary: explicitError || review.codex?.error || (failed ? "Codex review failed" : "Codex review completed")
+    }]);
+  }
+  const now = new Date().toISOString();
+  review.status = failed ? "failed" : "completed";
+  review.finishedAt = now;
+  review.updatedAt = now;
+  review.codex.status = failed ? "failed" : "completed";
+  review.codex.finishedAt = now;
+  review.codex.exitCode = exitCode;
+  review.codex.error = explicitError || review.codex.error;
+  review.git.after = await captureGitEvidence(review.sourceRoot);
+  await saveReview(review);
+  scheduleShutdownIfIdle();
+}
+
+async function appendReviewEvent(body) {
+  const review = await resolveRequestedReview(body);
+  if (!review) throw new Error("No active Code Universe review found.");
+  if (review.status !== "running") throw new Error("This review is already finished.");
+  const event = normalizeReviewEvent(body?.event || body, review.events.length + 1);
+  review.events.push(event);
+  review.updatedAt = event.at;
+  await saveReview(review);
+  return { review, event };
+}
+
+async function finishReview(body) {
+  const review = await resolveRequestedReview(body);
+  if (!review) throw new Error("No active Code Universe review found.");
+  const now = new Date().toISOString();
+  if (body?.summary) {
+    review.events.push(normalizeReviewEvent({ kind: "conclusion", summary: body.summary, outcome: body.outcome }, review.events.length + 1));
+  }
+  review.status = body?.outcome === "failed" ? "failed" : "completed";
+  review.finishedAt = now;
+  review.updatedAt = now;
+  review.git.after = await captureGitEvidence(review.sourceRoot);
+  await saveReview(review);
+  return { review };
+}
+
+async function importReview(body) {
+  const candidate = body?.review || body;
+  if (!candidate || !Array.isArray(candidate.events)) throw new Error("Review import must contain an events array.");
+  const sourceRoot = await validatedReviewRoot(body?.sourceRoot || candidate.sourceRoot);
+  const now = new Date().toISOString();
+  const review = {
+    version: 1,
+    id: typeof candidate.id === "string" && /^[a-zA-Z0-9-]+$/.test(candidate.id) ? candidate.id : randomUUID(),
+    title: cleanReviewText(candidate.title, "Imported review"),
+    behavior: cleanReviewText(candidate.behavior, ""),
+    sourceRoot,
+    status: candidate.status === "running" ? "running" : candidate.status === "failed" ? "failed" : "completed",
+    startedAt: candidate.startedAt || now,
+    updatedAt: candidate.updatedAt || now,
+    finishedAt: candidate.finishedAt || (candidate.status === "running" ? null : now),
+    events: candidate.events.map((event, index) => normalizeReviewEvent(event, index + 1)),
+    codex: candidate.codex || null,
+    git: candidate.git || { before: null, after: null }
+  };
+  await saveReview(review);
+  return { review };
+}
+
+function normalizeReviewEvent(candidate, sequence) {
+  const kind = reviewEventKinds.has(candidate?.kind) ? candidate.kind : "inspect";
+  const outcome = ["passed", "failed", "changed", "info"].includes(candidate?.outcome) ? candidate.outcome : null;
+  const line = Number(candidate?.line);
+  return {
+    id: typeof candidate?.id === "string" && candidate.id ? candidate.id : randomUUID(),
+    sequence,
+    at: candidate?.at || new Date().toISOString(),
+    kind,
+    outcome,
+    file: cleanReviewText(candidate?.file, "") || null,
+    line: Number.isFinite(line) && line > 0 ? Math.floor(line) : null,
+    nodeId: cleanReviewText(candidate?.nodeId, "") || null,
+    summary: cleanReviewText(candidate?.summary, friendlyReviewEvent(kind)),
+    command: cleanReviewText(candidate?.command, "") || null,
+    durationMs: Number.isFinite(Number(candidate?.durationMs)) ? Math.max(0, Number(candidate.durationMs)) : null
+  };
+}
+
+function friendlyReviewEvent(kind) {
+  if (kind === "suspect") return "Possible cause identified";
+  if (kind === "edit") return "Source changed";
+  if (kind === "test") return "Test executed";
+  if (kind === "build") return "Build executed";
+  if (kind === "search") return "Source searched";
+  if (kind === "conclusion") return "Review concluded";
+  return "Source inspected";
+}
+
+async function validatedReviewRoot(sourceRoot) {
+  if (!sourceRoot || typeof sourceRoot !== "string") throw new Error("A sourceRoot is required for a review.");
+  const resolvedRoot = resolve(sourceRoot);
+  if (!(await stat(resolvedRoot)).isDirectory()) throw new Error("Review sourceRoot must be a directory.");
+  return resolvedRoot;
+}
+
+async function resolveRequestedReview(body) {
+  if (body?.reviewId) return loadReview(body.reviewId);
+  return findActiveReview(body?.sourceRoot);
+}
+
+async function findActiveReview(sourceRoot) {
+  return findLatestReview(sourceRoot, "running");
+}
+
+async function findLatestReview(sourceRoot, requiredStatus = null) {
+  const normalizedRoot = sourceRoot ? resolve(sourceRoot) : null;
+  const files = await reviewFiles();
+  let latest = null;
+  for (const file of files) {
+    const review = await loadReview(file.slice(0, -5));
+    if (!review || (requiredStatus && review.status !== requiredStatus)) continue;
+    if (normalizedRoot && resolve(review.sourceRoot) !== normalizedRoot) continue;
+    if (!latest || review.updatedAt > latest.updatedAt) latest = review;
+  }
+  return latest;
+}
+
+async function reviewFiles() {
+  await mkdir(reviewDataRoot, { recursive: true });
+  return (await readdir(reviewDataRoot)).filter((file) => file.endsWith(".json"));
+}
+
+async function loadReview(reviewId) {
+  if (!reviewId || typeof reviewId !== "string" || !/^[a-zA-Z0-9-]+$/.test(reviewId)) return null;
+  if (reviewCache.has(reviewId)) return reviewCache.get(reviewId);
+  try {
+    const review = JSON.parse(await readFile(join(reviewDataRoot, `${reviewId}.json`), "utf8"));
+    reviewCache.set(reviewId, review);
+    return review;
+  } catch {
+    return null;
+  }
+}
+
+async function saveReview(review) {
+  await mkdir(reviewDataRoot, { recursive: true });
+  reviewCache.set(review.id, review);
+  await writeFile(join(reviewDataRoot, `${review.id}.json`), `${JSON.stringify(review, null, 2)}\n`, "utf8");
+}
+
+async function captureGitEvidence(sourceRoot) {
+  try {
+    const [{ stdout: commit }, { stdout: status }, { stdout: numstat }] = await Promise.all([
+      execFileAsync("git", ["rev-parse", "HEAD"], { cwd: sourceRoot }),
+      execFileAsync("git", ["status", "--short"], { cwd: sourceRoot }),
+      execFileAsync("git", ["diff", "--numstat"], { cwd: sourceRoot })
+    ]);
+    return {
+      commit: commit.trim(),
+      status: status.trim().split("\n").filter(Boolean),
+      changes: numstat.trim().split("\n").filter(Boolean).map((line) => {
+        const [added, deleted, ...fileParts] = line.split("\t");
+        return { file: fileParts.join("\t"), added: Number(added) || 0, deleted: Number(deleted) || 0 };
+      })
+    };
+  } catch {
+    return null;
+  }
+}
+
+function cleanReviewText(value, fallback) {
+  if (typeof value !== "string") return fallback;
+  const text = value.trim();
+  return text ? text.slice(0, 2000) : fallback;
+}
+
+function cleanReviewResultText(value) {
+  if (typeof value !== "string") return "";
+  return value.trim().slice(0, 50_000);
 }
 
 async function resolveSourceLocation(body) {
@@ -776,9 +1342,9 @@ function scheduleClientPrune() {
 }
 
 function scheduleShutdownIfIdle() {
-  if (activeClients.size > 0 || shutdownTimer) return;
+  if (activeClients.size > 0 || activeCodexRuns.size > 0 || shutdownTimer) return;
   shutdownTimer = setTimeout(() => {
-    if (activeClients.size > 0) return;
+    if (activeClients.size > 0 || activeCodexRuns.size > 0) return;
     console.log("Code Universe: web app closed, shutting down server.");
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 1200).unref?.();
