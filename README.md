@@ -6,6 +6,18 @@ The app runs on your Mac. Source code is scanned locally and stays local.
 
 ![Code Universe screenshot](docs/screenshots/code-universe-current.png)
 
+[Watch the Code Universe demo](docs/export.mp4)
+
+## Highlights
+
+- Explore Swift projects as a navigable 3D code city.
+- Inspect files, types, functions, properties, dependencies, and source code.
+- Compare heuristic, SwiftSyntax, merged, and Xcode-index analysis.
+- Ask Codex to investigate or fix a specific application behavior.
+- Watch Codex activity appear as a project-scoped trace across the city.
+- Review complete token usage, readable conclusions, and verification results.
+- Replay investigations and reload the latest trace for each project.
+
 ## Current Sample
 
 The bundled sample graph is generated from the included SampleSwiftApp fixture:
@@ -134,6 +146,20 @@ xcode-index
 ## Codex Behavior Reviews
 
 Review Mode overlays observable Codex activity on the existing source city. Inspected code is blue, searches purple, suspected causes amber, edits and successful verification green, and failures red. Bright rectangular streets show the order of the investigation.
+
+### Codex Features
+
+- **Large behavior prompt**: describe reproduction steps, expected behavior, relevant screens, and constraints in a multiline prompt.
+- **Permission modes**: choose read-only investigation with `Inspect only` or allow focused source changes with `Inspect and fix`.
+- **Visual investigation trace**: see searches, inspections, suspected causes, edits, builds, tests, and conclusions mapped onto project objects.
+- **Clean project scope**: ignore generated folders and external files, normalize source paths, collapse file inventories, and remove repetitive trace noise.
+- **Node-focused navigation**: selecting a trace step highlights its mapped object without opening a popup or moving the camera.
+- **Complete token ledger**: view total, input, uncached input, cached input, output, visible output, reasoning-output tokens, and metered model turns without double-counting subsets.
+- **Readable final report**: preserve long conclusions and render headings, lists, source references, inline code, and code blocks in a copyable result panel.
+- **Integrated source view**: open the complete Swift file, highlight the relevant line, or jump directly to Xcode.
+- **Trace replay**: replay the investigation with progressive highlights and route streets, pause or resume it, and choose 0.5×, 1×, or 2× speed.
+- **Project trace history**: automatically load the latest saved trace for the selected project or restore it with `Load Latest Trace`.
+- **Import and automation**: import JSON traces or send review events through the command-line bridge.
 
 Choose the project in Code Universe, enter the behavior in the `Behavior review` panel, choose a permission mode, and select `Run Codex Review`.
 
