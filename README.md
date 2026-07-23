@@ -151,7 +151,9 @@ Review Mode overlays observable Codex activity on the existing source city. Insp
 
 - **Large behavior prompt**: describe reproduction steps, expected behavior, relevant screens, and constraints in a multiline prompt.
 - **Permission modes**: choose read-only investigation with `Inspect only` or allow focused source changes with `Inspect and fix`.
+- **Model and reasoning controls**: inherit the current Codex defaults or choose/edit a model and reasoning effort for each review; the effective values are stored with the trace.
 - **Visual investigation trace**: see searches, inspections, suspected causes, edits, builds, tests, and conclusions mapped onto project objects.
+- **Exact review diffs**: click an edit step to inspect the review-scoped unified patch with green additions, red removals, line counts, and a shortcut to the complete source file.
 - **Clean project scope**: ignore generated folders and external files, normalize source paths, collapse file inventories, and remove repetitive trace noise.
 - **Node-focused navigation**: selecting a trace step highlights its mapped object without opening a popup or moving the camera.
 - **Complete token ledger**: view total, input, uncached input, cached input, output, visible output, reasoning-output tokens, and metered model turns without double-counting subsets.

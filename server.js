@@ -5,6 +5,7 @@ import { basename, extname, dirname, join, normalize, relative, resolve } from "
 import { execFile, spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import { promisify } from "node:util";
 import { scanSwiftFolder } from "./scripts/scan-swift-core.js";
 import { enrichGraphWithXcodeIndex } from "./scripts/scan-xcode-index.js";
@@ -47,6 +48,11 @@ const server = createServer(async (request, response) => {
 
     if (url.pathname === "/api/health" && request.method === "GET") {
       sendJson(response, 200, { ok: true, port });
+      return;
+    }
+
+    if (url.pathname === "/api/codex-settings" && request.method === "GET") {
+      sendJson(response, 200, await codexSettings());
       return;
     }
 
@@ -652,6 +658,10 @@ async function startReview(body) {
     existing.updatedAt = now;
     await saveReview(existing);
   }
+  const [beforeEvidence, baseline] = await Promise.all([
+    captureGitEvidence(sourceRoot),
+    captureGitReviewBaseline(sourceRoot)
+  ]);
   const review = {
     version: 1,
     id: randomUUID(),
@@ -665,8 +675,10 @@ async function startReview(body) {
     events: [],
     codex: null,
     git: {
-      before: await captureGitEvidence(sourceRoot),
-      after: null
+      before: beforeEvidence,
+      after: null,
+      baseline,
+      diff: null
     }
   };
   await saveReview(review);
@@ -676,6 +688,17 @@ async function startReview(body) {
 async function launchCodexReview(body) {
   const sourceRoot = await validatedReviewRoot(body?.sourceRoot);
   const mode = body?.mode === "fix" ? "fix" : "inspect";
+  const defaults = await readCodexDefaults();
+  const requestedModel = cleanCodexModel(body?.model);
+  const requestedReasoningEffort = cleanReasoningEffort(body?.reasoningEffort);
+  if (typeof body?.model === "string" && body.model.trim() && !requestedModel) {
+    throw new Error("The selected Codex model contains unsupported characters.");
+  }
+  if (typeof body?.reasoningEffort === "string" && body.reasoningEffort.trim() && !requestedReasoningEffort) {
+    throw new Error("The selected Codex reasoning effort is not supported.");
+  }
+  const effectiveModel = requestedModel || defaults.model;
+  const effectiveReasoningEffort = requestedReasoningEffort || defaults.reasoningEffort;
   const codex = await resolveCodexCommand();
   const { review } = await startReview({
     ...body,
@@ -686,6 +709,10 @@ async function launchCodexReview(body) {
     status: "starting",
     mode,
     command: codex.displayName,
+    model: effectiveModel,
+    reasoningEffort: effectiveReasoningEffort,
+    modelOverride: Boolean(requestedModel),
+    reasoningOverride: Boolean(requestedReasoningEffort),
     threadId: null,
     startedAt: new Date().toISOString(),
     finishedAt: null,
@@ -699,6 +726,8 @@ async function launchCodexReview(body) {
   const prompt = codexReviewPrompt(review, mode);
   const args = [
     ...codex.argsPrefix,
+    ...(requestedModel ? ["--model", requestedModel] : []),
+    ...(requestedReasoningEffort ? ["--config", `model_reasoning_effort="${requestedReasoningEffort}"`] : []),
     "exec",
     "--json",
     "--ephemeral",
@@ -800,6 +829,8 @@ async function consumeCodexJsonLine(reviewId, line) {
 
   if (record.type === "thread.started") {
     review.codex.threadId = record.thread_id || null;
+    review.codex.model = cleanCodexModel(record.model || record.model_id) || review.codex.model;
+    review.codex.reasoningEffort = cleanReasoningEffort(record.reasoning_effort || record.reasoningEffort) || review.codex.reasoningEffort;
     review.updatedAt = new Date().toISOString();
     await saveReview(review);
     return;
@@ -995,6 +1026,7 @@ async function completeCodexReview(reviewId, exitCode, explicitError = null) {
   review.codex.exitCode = exitCode;
   review.codex.error = explicitError || review.codex.error;
   review.git.after = await captureGitEvidence(review.sourceRoot);
+  review.git.diff = await captureReviewGitDiff(review.sourceRoot, reviewDiffBaseline(review));
   await saveReview(review);
   scheduleShutdownIfIdle();
 }
@@ -1021,6 +1053,7 @@ async function finishReview(body) {
   review.finishedAt = now;
   review.updatedAt = now;
   review.git.after = await captureGitEvidence(review.sourceRoot);
+  review.git.diff = await captureReviewGitDiff(review.sourceRoot, reviewDiffBaseline(review));
   await saveReview(review);
   return { review };
 }
@@ -1103,7 +1136,56 @@ async function findLatestReview(sourceRoot, requiredStatus = null) {
     if (normalizedRoot && resolve(review.sourceRoot) !== normalizedRoot) continue;
     if (!latest || review.updatedAt > latest.updatedAt) latest = review;
   }
+  if (latest) await backfillReviewGitDiff(latest);
   return latest;
+}
+
+async function backfillReviewGitDiff(review) {
+  if (review.status === "running" || review.git?.diff || !reviewDiffBaseline(review)) return;
+  const current = await captureGitEvidence(review.sourceRoot);
+  const fullEvidenceMatch = gitEvidenceMatches(current, review.git?.after);
+  const matchingReviewFiles = fullEvidenceMatch ? null : matchingReviewEditFiles(review, current, review.git?.after);
+  if (!fullEvidenceMatch && matchingReviewFiles.size === 0) return;
+  const diff = await captureReviewGitDiff(review.sourceRoot, reviewDiffBaseline(review));
+  if (!diff) return;
+  if (matchingReviewFiles) {
+    diff.files = diff.files.filter((file) => matchingReviewFiles.has(normalize(file.file).replaceAll("\\", "/")));
+    if (diff.files.length === 0) return;
+  }
+  review.git.diff = diff;
+  review.updatedAt = new Date().toISOString();
+  await saveReview(review);
+}
+
+function reviewDiffBaseline(review) {
+  if (review.git?.baseline?.commit) return review.git.baseline;
+  if (review.git?.before?.commit && (review.git.before.status || []).length === 0) {
+    return { commit: review.git.before.commit, untrackedFiles: [] };
+  }
+  return null;
+}
+
+function gitEvidenceMatches(left, right) {
+  if (!left || !right || left.commit !== right.commit) return false;
+  return JSON.stringify(left.status || []) === JSON.stringify(right.status || [])
+    && JSON.stringify(left.changes || []) === JSON.stringify(right.changes || []);
+}
+
+function matchingReviewEditFiles(review, current, recordedAfter) {
+  const matches = new Set();
+  if (!current || !recordedAfter || current.commit !== recordedAfter.commit) return matches;
+  const editedFiles = new Set(review.events
+    .filter((event) => event.kind === "edit" && event.file)
+    .map((event) => normalize(event.file).replaceAll("\\", "/")));
+  const currentChanges = new Map((current.changes || []).map((change) => [normalize(change.file).replaceAll("\\", "/"), change]));
+  const recordedChanges = new Map((recordedAfter.changes || []).map((change) => [normalize(change.file).replaceAll("\\", "/"), change]));
+  for (const file of editedFiles) {
+    const currentChange = currentChanges.get(file);
+    const recordedChange = recordedChanges.get(file);
+    if (!currentChange || !recordedChange) continue;
+    if (currentChange.added === recordedChange.added && currentChange.deleted === recordedChange.deleted) matches.add(file);
+  }
+  return matches;
 }
 
 async function reviewFiles() {
@@ -1147,6 +1229,132 @@ async function captureGitEvidence(sourceRoot) {
   } catch {
     return null;
   }
+}
+
+async function codexSettings() {
+  const defaults = await readCodexDefaults();
+  return {
+    defaults,
+    models: [...new Set([
+      defaults.model,
+      "gpt-5.6-sol",
+      "gpt-5.6",
+      "gpt-5.6-terra",
+      "gpt-5.4",
+      "gpt-5.3-codex-spark"
+    ].filter(Boolean))],
+    reasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+  };
+}
+
+async function readCodexDefaults() {
+  const configRoot = process.env.CODEX_HOME ? resolve(process.env.CODEX_HOME) : join(homedir(), ".codex");
+  try {
+    const config = await readFile(join(configRoot, "config.toml"), "utf8");
+    return {
+      model: tomlStringSetting(config, "model"),
+      reasoningEffort: cleanReasoningEffort(tomlStringSetting(config, "model_reasoning_effort"))
+    };
+  } catch {
+    return { model: null, reasoningEffort: null };
+  }
+}
+
+function tomlStringSetting(config, key) {
+  const match = String(config || "").match(new RegExp(`^\\s*${key}\\s*=\\s*["']([^"']+)["']\\s*$`, "m"));
+  return match?.[1]?.trim() || null;
+}
+
+function cleanCodexModel(value) {
+  if (typeof value !== "string") return null;
+  const model = value.trim();
+  return model && model.length <= 100 && /^[A-Za-z0-9._:/-]+$/.test(model) ? model : null;
+}
+
+function cleanReasoningEffort(value) {
+  const effort = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(effort) ? effort : null;
+}
+
+async function captureGitReviewBaseline(sourceRoot) {
+  try {
+    const [{ stdout: stashCommit }, { stdout: headCommit }, { stdout: untracked }] = await Promise.all([
+      execFileAsync("git", ["stash", "create", "code-universe-review-baseline"], { cwd: sourceRoot }),
+      execFileAsync("git", ["rev-parse", "HEAD"], { cwd: sourceRoot }),
+      execFileAsync("git", ["ls-files", "--others", "--exclude-standard"], { cwd: sourceRoot })
+    ]);
+    return {
+      commit: stashCommit.trim() || headCommit.trim(),
+      untrackedFiles: untracked.trim().split("\n").filter(Boolean)
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function captureReviewGitDiff(sourceRoot, baseline) {
+  if (!baseline?.commit) return null;
+  try {
+    const { stdout } = await execFileAsync("git", ["diff", "--no-ext-diff", "--no-color", "--unified=3", baseline.commit, "--"], {
+      cwd: sourceRoot,
+      maxBuffer: 1024 * 1024 * 4
+    });
+    const untrackedPatch = await patchesForNewUntrackedFiles(sourceRoot, new Set(baseline.untrackedFiles || []));
+    const completePatch = [stdout.trimEnd(), untrackedPatch].filter(Boolean).join("\n");
+    const maxPatchLength = 500_000;
+    const truncated = completePatch.length > maxPatchLength;
+    const patch = truncated ? completePatch.slice(0, maxPatchLength) : completePatch;
+    return {
+      truncated,
+      files: splitReviewGitPatch(patch)
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function patchesForNewUntrackedFiles(sourceRoot, untrackedBefore) {
+  const { stdout } = await execFileAsync("git", ["ls-files", "--others", "--exclude-standard"], { cwd: sourceRoot });
+  const newFiles = stdout.trim().split("\n")
+    .filter((file) => file && !untrackedBefore.has(file) && file.endsWith(".swift"))
+    .slice(0, 30);
+  const patches = [];
+  for (const file of newFiles) {
+    const resolvedFile = resolve(sourceRoot, file);
+    if (!isInsideRoot(sourceRoot, resolvedFile)) continue;
+    try {
+      const source = await readFile(resolvedFile, "utf8");
+      const lines = source.split(/\r?\n/);
+      patches.push([
+        `diff --git a/${file} b/${file}`,
+        "new file mode 100644",
+        "--- /dev/null",
+        `+++ b/${file}`,
+        `@@ -0,0 +1,${lines.length} @@`,
+        ...lines.map((line) => `+${line}`)
+      ].join("\n"));
+    } catch {
+      continue;
+    }
+  }
+  return patches.join("\n");
+}
+
+function splitReviewGitPatch(patch) {
+  if (!patch) return [];
+  return patch.split(/(?=^diff --git )/m).filter(Boolean).map((section) => {
+    const lines = section.split("\n");
+    const destination = lines.find((line) => line.startsWith("+++ b/"))?.slice(6);
+    const source = lines.find((line) => line.startsWith("--- a/"))?.slice(6);
+    const file = cleanGitPatchPath(destination || source || "Unknown file");
+    const added = lines.filter((line) => line.startsWith("+") && !line.startsWith("+++")).length;
+    const deleted = lines.filter((line) => line.startsWith("-") && !line.startsWith("---")).length;
+    return { file, added, deleted, patch: section.trimEnd() };
+  });
+}
+
+function cleanGitPatchPath(path) {
+  return String(path || "").replace(/^"|"$/g, "").replaceAll("\\", "/");
 }
 
 function cleanReviewText(value, fallback) {

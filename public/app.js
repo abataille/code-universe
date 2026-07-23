@@ -37,7 +37,14 @@ const mapPresetButtons = document.querySelectorAll("[data-view-preset]");
 const appShell = document.querySelector(".app-shell");
 const toggleLeftRailButton = document.querySelector("#toggleLeftRailButton");
 const toggleRightRailButton = document.querySelector("#toggleRightRailButton");
+const themeToggleButton = document.querySelector("#themeToggleButton");
 const reviewTitleInput = document.querySelector("#reviewTitleInput");
+const reviewModelSelect = document.querySelector("#reviewModelSelect");
+const reviewModelInput = document.querySelector("#reviewModelInput");
+const reviewCustomModelLabel = document.querySelector("#reviewCustomModelLabel");
+const reviewReasoningSelect = document.querySelector("#reviewReasoningSelect");
+const reviewReasoningDefaultOption = document.querySelector("#reviewReasoningDefaultOption");
+const reviewCodexSettingsHint = document.querySelector("#reviewCodexSettingsHint");
 const reviewModeSelect = document.querySelector("#reviewModeSelect");
 const startReviewButton = document.querySelector("#startReviewButton");
 const loadLatestReviewButton = document.querySelector("#loadLatestReviewButton");
@@ -49,12 +56,16 @@ const reviewTimelineTitle = document.querySelector("#reviewTimelineTitle");
 const reviewTimeline = document.querySelector("#reviewTimeline");
 const reviewReplayButton = document.querySelector("#reviewReplayButton");
 const reviewReplaySpeed = document.querySelector("#reviewReplaySpeed");
-const sourceViewer = document.querySelector("#sourceViewer");
-const sourceViewerTitle = document.querySelector("#sourceViewerTitle");
-const sourceViewerLocation = document.querySelector("#sourceViewerLocation");
-const sourceViewerContent = document.querySelector("#sourceViewerContent");
-const sourceViewerXcodeButton = document.querySelector("#sourceViewerXcodeButton");
-const sourceViewerCloseButton = document.querySelector("#sourceViewerCloseButton");
+const inspectorTabs = document.querySelectorAll("[data-inspector-tab]");
+const inspectorPanels = document.querySelectorAll("[data-inspector-panel]");
+const contentDrawer = document.querySelector("#contentDrawer");
+const contentDrawerEyebrow = document.querySelector("#contentDrawerEyebrow");
+const contentDrawerTitle = document.querySelector("#contentDrawerTitle");
+const contentDrawerMeta = document.querySelector("#contentDrawerMeta");
+const contentDrawerContent = document.querySelector("#contentDrawerContent");
+const contentDrawerCopyButton = document.querySelector("#contentDrawerCopyButton");
+const contentDrawerXcodeButton = document.querySelector("#contentDrawerXcodeButton");
+const contentDrawerCloseButton = document.querySelector("#contentDrawerCloseButton");
 
 const colors = {
   repository: 0x45d9ff,
@@ -82,6 +93,9 @@ const fileChildGap = 4;
 const lastProjectPathKey = "codeUniverse.lastProjectPath";
 const parserModeKey = "codeUniverse.parserMode";
 const clientIdKey = "codeUniverse.clientId";
+const reviewModelKey = "codeUniverse.reviewModel";
+const reviewReasoningKey = "codeUniverse.reviewReasoning";
+const uiThemeKey = "codeUniverse.uiTheme";
 
 const importantKinds = new Set(["file", "swiftui_view", "service", "class", "model", "struct", "enum", "protocol"]);
 
@@ -135,6 +149,9 @@ const state = {
   sourceContext: 12,
   sourceRequestId: 0,
   sourceViewerNodeId: null,
+  contentDrawerMode: null,
+  contentDrawerCopyText: "",
+  inspectorTab: "review",
   mapRadius: 900,
   review: null,
   reviewSignature: null,
@@ -215,9 +232,11 @@ bootstrap().catch(showStartupError);
 
 async function bootstrap() {
   registerWebClientLifecycle();
+  initializeUiTheme();
   initializeParserMode();
   bindEvents();
   resize();
+  await initializeCodexSettings();
   await loadInitialUniverse();
   window.setInterval(refreshActiveReview, 2000);
   requestRender();
@@ -259,6 +278,65 @@ function initializeParserMode() {
   state.parserMode = "heuristic";
   localStorage.setItem(parserModeKey, state.parserMode);
   parserSelect.value = state.parserMode;
+}
+
+function initializeUiTheme() {
+  applyUiTheme(localStorage.getItem(uiThemeKey) === "light" ? "light" : "dark");
+}
+
+function applyUiTheme(theme) {
+  const light = theme === "light";
+  document.body.classList.toggle("is-light-ui", light);
+  themeToggleButton.setAttribute("aria-pressed", String(light));
+  themeToggleButton.classList.toggle("is-active", light);
+  themeToggleButton.textContent = light ? "Dark UI" : "Light UI";
+}
+
+async function initializeCodexSettings() {
+  const savedModel = localStorage.getItem(reviewModelKey) || "";
+  reviewReasoningSelect.value = localStorage.getItem(reviewReasoningKey) || "";
+  try {
+    const response = await fetch("/api/codex-settings");
+    const settings = await response.json();
+    if (!response.ok) throw new Error(settings.error || "Codex defaults unavailable.");
+    const defaultModel = settings.defaults?.model || "automatic";
+    const defaultReasoning = settings.defaults?.reasoningEffort || "automatic";
+    reviewModelSelect.innerHTML = [
+      `<option id="reviewModelDefaultOption" value="">Default (${escapeHtml(defaultModel)})</option>`,
+      ...(settings.models || []).map((model) => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`),
+      '<option value="custom">Custom model…</option>'
+    ].join("");
+    reviewReasoningDefaultOption.textContent = `Default (${defaultReasoning})`;
+    reviewCodexSettingsHint.textContent = `Codex defaults: ${defaultModel} · ${defaultReasoning} reasoning. Choose Default to inherit them; availability depends on your account and model.`;
+    applySavedReviewModel(savedModel, settings.models || []);
+  } catch (error) {
+    reviewCodexSettingsHint.textContent = error.message;
+    applySavedReviewModel(savedModel, [...reviewModelSelect.options].map((option) => option.value));
+  }
+}
+
+function applySavedReviewModel(savedModel, models) {
+  if (!savedModel) {
+    reviewModelSelect.value = "";
+    reviewModelInput.value = "";
+  } else if (models.includes(savedModel)) {
+    reviewModelSelect.value = savedModel;
+    reviewModelInput.value = "";
+  } else {
+    reviewModelSelect.value = "custom";
+    reviewModelInput.value = savedModel;
+  }
+  syncCustomModelField();
+}
+
+function syncCustomModelField() {
+  const custom = reviewModelSelect.value === "custom";
+  reviewCustomModelLabel.hidden = !custom;
+  reviewModelInput.hidden = !custom;
+}
+
+function selectedReviewModel() {
+  return reviewModelSelect.value === "custom" ? reviewModelInput.value.trim() : reviewModelSelect.value;
 }
 
 async function loadInitialUniverse() {
@@ -1443,6 +1521,12 @@ function bindEvents() {
     event.preventDefault();
     startReviewButton.click();
   });
+  reviewModelSelect.addEventListener("change", () => {
+    syncCustomModelField();
+    localStorage.setItem(reviewModelKey, selectedReviewModel());
+  });
+  reviewModelInput.addEventListener("change", () => localStorage.setItem(reviewModelKey, selectedReviewModel()));
+  reviewReasoningSelect.addEventListener("change", () => localStorage.setItem(reviewReasoningKey, reviewReasoningSelect.value));
 
   loadLatestReviewButton.addEventListener("click", loadLatestReviewForProject);
 
@@ -1464,10 +1548,34 @@ function bindEvents() {
     setReviewOverlay(null);
   });
 
+  inspectorTabs.forEach((tab) => {
+    tab.addEventListener("click", () => selectInspectorTab(tab.dataset.inspectorTab));
+    tab.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+      event.preventDefault();
+      const tabs = [...inspectorTabs];
+      const index = tabs.indexOf(tab);
+      const offset = event.key === "ArrowRight" ? 1 : -1;
+      const nextTab = tabs[(index + offset + tabs.length) % tabs.length];
+      selectInspectorTab(nextTab.dataset.inspectorTab, { focus: true });
+    });
+  });
+
   reviewTimeline.addEventListener("click", (event) => {
-    const copyButton = event.target.closest("[data-copy-review-result]");
-    if (copyButton) {
-      copyReviewResult();
+    const resultButton = event.target.closest("[data-open-review-result]");
+    if (resultButton) {
+      openReviewResultDrawer();
+      return;
+    }
+    const diffButton = event.target.closest("[data-open-review-diff]");
+    if (diffButton) {
+      openReviewDiffDrawer(diffButton.dataset.openReviewDiff);
+      return;
+    }
+    const diffSourceButton = event.target.closest("[data-review-diff-source]");
+    if (diffSourceButton) {
+      const node = state.nodeById.get(diffSourceButton.dataset.reviewDiffSource);
+      if (node) openSourceViewer(node);
       return;
     }
     const button = event.target.closest("[data-review-event-id]");
@@ -1494,6 +1602,12 @@ function bindEvents() {
     syncRailButtons();
     resize();
     requestRender();
+  });
+
+  themeToggleButton.addEventListener("click", () => {
+    const theme = document.body.classList.contains("is-light-ui") ? "dark" : "light";
+    localStorage.setItem(uiThemeKey, theme);
+    applyUiTheme(theme);
   });
 
   mapPresetButtons.forEach((button) => {
@@ -1584,15 +1698,6 @@ function bindEvents() {
       return;
     }
 
-    const contextButton = event.target.closest("[data-source-context]");
-    if (contextButton) {
-      const node = state.nodeById.get(contextButton.dataset.sourceContext);
-      if (!node) return;
-      state.sourceContext = clamp(state.sourceContext + Number(contextButton.dataset.delta || 0), 4, 80);
-      await showSourcePreview(node);
-      return;
-    }
-
     const xcodeButton = event.target.closest("[data-xcode-node-id]");
     if (xcodeButton) {
       const node = state.nodeById.get(xcodeButton.dataset.xcodeNodeId);
@@ -1601,16 +1706,26 @@ function bindEvents() {
     }
   });
 
-  sourceViewerCloseButton.addEventListener("click", closeSourceViewer);
-  sourceViewerXcodeButton.addEventListener("click", async () => {
+  contentDrawerCloseButton.addEventListener("click", closeContentDrawer);
+  contentDrawerCopyButton.addEventListener("click", copyContentDrawerText);
+  contentDrawerXcodeButton.addEventListener("click", async () => {
     const node = state.nodeById.get(state.sourceViewerNodeId);
     if (node) await openSourceInXcode(node);
   });
-  sourceViewer.addEventListener("close", () => {
+  contentDrawer.addEventListener("close", () => {
     state.sourceViewerNodeId = null;
+    state.contentDrawerMode = null;
+    state.contentDrawerCopyText = "";
   });
-  sourceViewer.addEventListener("click", (event) => {
-    if (event.target === sourceViewer) closeSourceViewer();
+  contentDrawer.addEventListener("click", (event) => {
+    if (event.target === contentDrawer) {
+      closeContentDrawer();
+      return;
+    }
+    const sourceButton = event.target.closest("[data-review-diff-source]");
+    if (!sourceButton) return;
+    const node = state.nodeById.get(sourceButton.dataset.reviewDiffSource);
+    if (node) openSourceViewer(node);
   });
 
   parserDiff.addEventListener("click", async (event) => {
@@ -1648,9 +1763,28 @@ function bindEdgeFilter(toggle, kind) {
   });
 }
 
+function selectInspectorTab(tabName, options = {}) {
+  const nextTab = ["review", "object", "analysis"].includes(tabName) ? tabName : "object";
+  state.inspectorTab = nextTab;
+  inspectorTabs.forEach((tab) => {
+    const selected = tab.dataset.inspectorTab === nextTab;
+    tab.classList.toggle("is-active", selected);
+    tab.setAttribute("aria-selected", String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    if (selected && options.focus) tab.focus();
+  });
+  inspectorPanels.forEach((panel) => {
+    const selected = panel.dataset.inspectorPanel === nextTab;
+    panel.classList.toggle("is-active", selected);
+    panel.hidden = !selected;
+  });
+}
+
 async function startBehaviorReview() {
   const sourceRoot = state.graph?.project?.sourceRoot;
   if (!sourceRoot) throw new Error("Choose a project before starting a review.");
+  localStorage.setItem(reviewModelKey, selectedReviewModel());
+  localStorage.setItem(reviewReasoningKey, reviewReasoningSelect.value);
   reviewStatus.textContent = "Launching Codex review...";
   startReviewButton.disabled = true;
   const response = await fetch("/api/reviews/launch", {
@@ -1660,7 +1794,9 @@ async function startBehaviorReview() {
       sourceRoot,
       title: reviewTitleInput.value.trim() || "Codex behavior review",
       behavior: reviewTitleInput.value.trim(),
-      mode: reviewModeSelect.value === "fix" ? "fix" : "inspect"
+      mode: reviewModeSelect.value === "fix" ? "fix" : "inspect",
+      model: selectedReviewModel(),
+      reasoningEffort: reviewReasoningSelect.value
     })
   });
   const payload = await response.json();
@@ -1746,6 +1882,7 @@ function setReviewOverlay(review) {
 
   buildReviewOverlay();
   renderReviewTimeline();
+  if (review) selectInspectorTab("review");
   markFiltersDirty();
 }
 
@@ -1945,7 +2082,7 @@ function selectReviewEvent(eventId) {
   }
   state.selectedReviewEventId = event.id;
   renderReviewTimeline();
-  if (event.resolvedNodeId) selectNode(event.resolvedNodeId, { openPopup: false, focus: false });
+  if (event.resolvedNodeId) selectNode(event.resolvedNodeId, { openPopup: false, focus: false, revealInspector: false });
 }
 
 function activeReviewEvents() {
@@ -1995,7 +2132,7 @@ function advanceReviewReplay() {
   state.reviewReplayIndex += 1;
   state.selectedReviewEventId = event.id;
   updateReviewReplayPresentation();
-  if (event.resolvedNodeId) selectNode(event.resolvedNodeId, { openPopup: false, focus: false });
+  if (event.resolvedNodeId) selectNode(event.resolvedNodeId, { openPopup: false, focus: false, revealInspector: false });
 
   if (state.reviewReplayIndex >= state.reviewEvents.length) {
     state.reviewReplayPlaying = false;
@@ -2066,6 +2203,8 @@ function renderReviewTimeline() {
     : state.reviewEvents;
   const activeEvents = activeReviewEvents();
   const finalResult = (!replaying || activeEvents.some((event) => event.kind === "conclusion")) ? reviewFinalResult() : "";
+  const selectedEvent = state.reviewEvents.find((event) => event.id === state.selectedReviewEventId);
+  const gitDiff = state.review.git?.diff;
   const items = visibleEvents.map((event) => {
     const eventIndex = state.reviewEvents.indexOf(event);
     const future = replaying && eventIndex >= state.reviewReplayIndex;
@@ -2074,7 +2213,7 @@ function renderReviewTimeline() {
     return `
       <button class="review-event ${event.kind === "conclusion" ? "is-conclusion" : ""} ${future ? "is-future" : ""} ${event.id === state.selectedReviewEventId ? "is-active" : ""}" type="button" data-review-event-id="${escapeHtml(event.id)}" style="--review-color:${reviewColorCss(event)}">
         <span class="review-event-index">${event.sequence}</span>
-        <span class="review-event-copy"><strong>${escapeHtml(summary)}</strong><span>${escapeHtml(event.kind)} · ${escapeHtml(location)}${event.resolvedNodeId ? "" : " · unmapped"}</span></span>
+        <span class="review-event-copy"><strong>${escapeHtml(summary)}</strong><span>${escapeHtml(event.kind)} · ${escapeHtml(location)}${event.kind === "edit" && gitDiff?.files?.length ? " · click for diff" : ""}${event.resolvedNodeId ? "" : " · unmapped"}</span></span>
       </button>`;
   }).join("");
   const gitChanges = state.review.git?.after?.changes || state.review.git?.before?.changes || [];
@@ -2083,11 +2222,15 @@ function renderReviewTimeline() {
       <span>${mappedCount}/${state.reviewEvents.length} mapped</span>
       ${rawEventCount > state.reviewEvents.length ? `<span>${rawEventCount - state.reviewEvents.length} noise hidden</span>` : ""}
       <span>${gitChanges.length} Git files</span>
+      ${gitDiff?.files?.length ? `<span>${gitDiff.files.length} review changes</span>` : ""}
       ${usage ? `<span>${formatTokenCount(usage.totalTokens)} total tokens</span><span>${usage.turns} model ${usage.turns === 1 ? "turn" : "turns"}</span>` : ""}
+      ${state.review.codex?.model ? `<span>${escapeHtml(state.review.codex.model)}</span>` : ""}
+      ${state.review.codex?.reasoningEffort ? `<span>${escapeHtml(state.review.codex.reasoningEffort)} reasoning</span>` : ""}
       ${state.review.codex?.mode ? `<span>${state.review.codex.mode === "fix" ? "edits allowed" : "inspect only"}</span>` : ""}
       <span>${escapeHtml(state.review.status)}</span>
     </div>
-    ${finalResult ? renderReviewResult(finalResult) : ""}
+    ${selectedEvent?.kind === "edit" ? renderReviewDiffSummary(selectedEvent) : ""}
+    ${finalResult ? renderReviewResultSummary(finalResult) : ""}
     ${usage ? renderTokenUsage(usage) : ""}
     ${items || "<p>The session is ready. Codex events will appear here.</p>"}
   `;
@@ -2096,13 +2239,73 @@ function renderReviewTimeline() {
   }
 }
 
+function renderReviewDiffSummary(event) {
+  const files = state.review?.git?.diff?.files || [];
+  const fileDiff = files.find((candidate) => reviewFilesMatch(normalizeReviewPath(candidate.file), normalizeReviewPath(event.file)));
+  return `
+    <section class="review-drawer-card" aria-label="Selected source change">
+      <div>
+        <span class="eyebrow">Selected change</span>
+        <strong>${escapeHtml(fileDiff?.file || event.file || "Changed file")}</strong>
+        <p>${fileDiff ? `+${fileDiff.added} added · −${fileDiff.deleted} removed` : "This trace only contains the changed filename."}</p>
+      </div>
+      <button class="button button-compact" type="button" data-open-review-diff="${escapeHtml(event.id)}">View diff</button>
+    </section>`;
+}
+
+function renderReviewResultSummary(result) {
+  const preview = String(result)
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^#{1,4}\s+/, "").trim())
+    .find(Boolean) || "Open the complete Codex result.";
+  return `
+    <section class="review-drawer-card" aria-label="Final review result">
+      <div>
+        <span class="eyebrow">Codex</span>
+        <strong>Final result</strong>
+        <p>${escapeHtml(preview.slice(0, 180))}${preview.length > 180 ? "…" : ""}</p>
+      </div>
+      <button class="button button-compact" type="button" data-open-review-result>Read result</button>
+    </section>`;
+}
+
+function renderReviewDiff(event) {
+  const files = state.review?.git?.diff?.files || [];
+  const fileDiff = files.find((candidate) => reviewFilesMatch(normalizeReviewPath(candidate.file), normalizeReviewPath(event.file)));
+  if (!fileDiff) {
+    return `
+      <section class="review-diff" aria-label="Review source changes">
+        <div class="review-diff-heading"><div><span class="eyebrow">Source change</span><strong>${escapeHtml(event.file || "Changed file")}</strong></div></div>
+        <p>No isolated patch is available for this edit. Imported and older traces may only contain the changed filename.</p>
+      </section>`;
+  }
+
+  const lines = fileDiff.patch.split("\n").map((line) => {
+    let kind = "context";
+    if (line.startsWith("@@")) kind = "hunk";
+    else if (line.startsWith("+") && !line.startsWith("+++")) kind = "added";
+    else if (line.startsWith("-") && !line.startsWith("---")) kind = "removed";
+    else if (/^(diff --git|index |--- |\+\+\+ |new file mode|deleted file mode)/.test(line)) kind = "meta";
+    return `<span class="diff-line is-${kind}">${escapeHtml(line || " ")}</span>`;
+  }).join("");
+  return `
+    <section class="review-diff" aria-label="Review source changes">
+      <div class="review-diff-heading">
+        <div><span class="eyebrow">Source change</span><strong>${escapeHtml(fileDiff.file)}</strong></div>
+        ${event.resolvedNodeId ? `<button class="button button-compact" type="button" data-review-diff-source="${escapeHtml(event.resolvedNodeId)}">Open source</button>` : ""}
+      </div>
+      <div class="review-diff-stats"><span class="is-added">+${fileDiff.added}</span><span class="is-removed">−${fileDiff.deleted}</span>${state.review.git.diff.truncated ? "<span>Patch truncated</span>" : ""}</div>
+      <pre class="review-diff-code"><code>${lines}</code></pre>
+    </section>`;
+}
+
 function reviewFinalResult() {
   return state.review?.codex?.lastMessage
     || [...state.reviewEvents].reverse().find((event) => event.kind === "conclusion")?.summary
     || "";
 }
 
-function renderReviewResult(result) {
+function renderReviewResult(result, options = {}) {
   const lines = String(result).replaceAll("\r\n", "\n").split("\n");
   const blocks = [];
   let codeLines = null;
@@ -2146,7 +2349,7 @@ function renderReviewResult(result) {
 
   return `
     <section class="review-result" aria-label="Final review result">
-      <div class="review-result-heading"><div><span class="eyebrow">Codex</span><strong>Final result</strong></div><button class="button button-compact" type="button" data-copy-review-result>Copy</button></div>
+      ${options.drawer ? "" : '<div class="review-result-heading"><div><span class="eyebrow">Codex</span><strong>Final result</strong></div><button class="button button-compact" type="button" data-open-review-result>Read result</button></div>'}
       <div class="review-result-body">${blocks.join("")}</div>
     </section>`;
 }
@@ -2157,14 +2360,56 @@ function formatReviewInline(value) {
     .replace(/`([^`]+)`/g, "<code>$1</code>");
 }
 
-async function copyReviewResult() {
+function openReviewResultDrawer() {
   const result = reviewFinalResult();
   if (!result) return;
+  openContentDrawer({
+    mode: "review-result",
+    eyebrow: "Codex review",
+    title: "Final result",
+    meta: state.review?.title || "",
+    content: renderReviewResult(result, { drawer: true }),
+    copyText: result
+  });
+}
+
+function openReviewDiffDrawer(eventId) {
+  const event = state.reviewEvents.find((candidate) => candidate.id === eventId);
+  if (!event) return;
+  const node = state.nodeById.get(event.resolvedNodeId);
+  openContentDrawer({
+    mode: "review-diff",
+    eyebrow: "Source change",
+    title: event.file || "Changed file",
+    meta: event.line ? `Line ${event.line}` : state.review?.title || "",
+    content: renderReviewDiff(event),
+    nodeId: node?.id || null
+  });
+}
+
+function openContentDrawer({ mode, eyebrow, title, meta = "", content, copyText = "", nodeId = null }) {
+  state.contentDrawerMode = mode;
+  state.contentDrawerCopyText = copyText;
+  state.sourceViewerNodeId = nodeId;
+  contentDrawerEyebrow.textContent = eyebrow;
+  contentDrawerTitle.textContent = title;
+  contentDrawerMeta.textContent = meta;
+  contentDrawerContent.innerHTML = content;
+  contentDrawerCopyButton.hidden = !copyText;
+  contentDrawerXcodeButton.hidden = !nodeId;
+  if (!contentDrawer.open) contentDrawer.showModal();
+}
+
+async function copyContentDrawerText() {
+  if (!state.contentDrawerCopyText) return;
   try {
-    await navigator.clipboard.writeText(result);
-    reviewStatus.textContent = "Final result copied to the clipboard.";
+    await navigator.clipboard.writeText(state.contentDrawerCopyText);
+    contentDrawerCopyButton.textContent = "Copied";
+    window.setTimeout(() => {
+      contentDrawerCopyButton.textContent = "Copy";
+    }, 1200);
   } catch {
-    reviewStatus.textContent = "Could not copy the final result.";
+    contentDrawerMeta.textContent = "Could not copy this content.";
   }
 }
 
@@ -2606,6 +2851,7 @@ function applyCameraAnimation() {
 function selectNode(id, options = {}) {
   const openPopup = options.openPopup !== false;
   const focus = options.focus !== false;
+  const revealInspector = options.revealInspector !== false;
   state.selectedId = id;
   state.selectedEdgeKey = null;
   const node = state.nodeById.get(id);
@@ -2619,9 +2865,7 @@ function selectNode(id, options = {}) {
   if (openPopup) buildMemberPopup();
   markFiltersDirty();
   if (focus) focusCameraOnNode(node);
-  if (node.file) {
-    showSourcePreview(node);
-  }
+  if (revealInspector) selectInspectorTab("object");
 }
 
 function selectEdge(edge) {
@@ -2630,6 +2874,7 @@ function selectEdge(edge) {
   disposeGroupMaterials(popupXrayRoot);
   popupXrayRoot.clear();
   selectedDetails.innerHTML = renderEdgeDetails(edge);
+  selectInspectorTab("object");
   markFiltersDirty();
 }
 
@@ -2686,7 +2931,7 @@ function renderDetails(node) {
       </div>
     </div>
     ${node.source ? `<p>Found by <code>${escapeHtml(node.source)}</code>${node.inferred ? " · inferred hint" : ""}${node.indexResolved ? " · Xcode index resolved" : ""}${node.confidence ? ` · confidence <code>${escapeHtml(node.confidence)}</code>` : ""}</p>` : ""}
-    ${node.file ? `<section class="source-card"><div class="source-card-header"><div><span class="eyebrow">Source view</span><strong>${escapeHtml(node.file)}:${node.line}</strong></div><div class="source-control-group"><button class="button button-compact source-button-primary" type="button" data-source-node-id="${escapeHtml(node.id)}">View source</button><button class="button button-compact" type="button" data-source-context="${escapeHtml(node.id)}" data-delta="-6">− Context</button><button class="button button-compact" type="button" data-source-context="${escapeHtml(node.id)}" data-delta="6">+ Context</button><button class="button button-compact" type="button" data-xcode-node-id="${escapeHtml(node.id)}">Open in Xcode</button></div></div><div id="sourcePreview" class="source-preview"><p>Loading source...</p></div></section>` : ""}
+    ${node.file ? `<section class="source-card"><div class="source-card-header"><div><span class="eyebrow">Source view</span><strong>${escapeHtml(node.file)}:${node.line}</strong></div><div class="source-actions"><button class="button button-compact source-button-primary" type="button" data-source-node-id="${escapeHtml(node.id)}">View source</button><button class="button button-compact" type="button" data-xcode-node-id="${escapeHtml(node.id)}">Open in Xcode</button></div></div><p>Source opens in the wide drawer so the inspector keeps one scroll area.</p></section>` : ""}
     <div class="detail-grid">
       <p><strong>Axis mapping</strong><br>${axisDetails}</p>
       <p><strong>Inside this object</strong><br>${popupContentIds.length > 0 ? `${popupContentIds.length} contained objects in the 3D popup.` : "No inspectable members yet."}</p>
@@ -2766,45 +3011,36 @@ async function openSourceInXcode(node, targetPreview = null) {
   }
 }
 
-async function showSourcePreview(node) {
-  const preview = document.querySelector("#sourcePreview");
-  if (!preview) return;
-
-  const requestId = ++state.sourceRequestId;
-  preview.innerHTML = "<p>Loading source...</p>";
-  try {
-    const payload = await fetchSource(node, { context: state.sourceContext });
-    if (requestId !== state.sourceRequestId || state.selectedId !== node.id || !preview.isConnected) return;
-    preview.innerHTML = renderSourceSnippet(payload);
-  } catch (error) {
-    if (requestId !== state.sourceRequestId || !preview.isConnected) return;
-    preview.innerHTML = `<p><strong>Source error</strong><br><code>${escapeHtml(error.message)}</code></p>`;
-  }
-}
-
 async function openSourceViewer(node) {
-  state.sourceViewerNodeId = node.id;
-  sourceViewerTitle.textContent = node.name;
-  sourceViewerLocation.textContent = `${node.file}:${node.line || 1}`;
-  sourceViewerContent.innerHTML = "<p>Loading complete Swift file...</p>";
-  if (!sourceViewer.open) sourceViewer.showModal();
+  openContentDrawer({
+    mode: "source",
+    eyebrow: "Source code",
+    title: node.name,
+    meta: `${node.file}:${node.line || 1}`,
+    content: '<div class="source-preview" data-drawer-source><p>Loading complete Swift file...</p></div>',
+    nodeId: node.id
+  });
 
   try {
     const payload = await fetchSource(node, { fullFile: true });
-    if (state.sourceViewerNodeId !== node.id || !sourceViewer.open) return;
-    sourceViewerLocation.textContent = `${payload.file}:${payload.line} · ${payload.code.length} lines`;
-    sourceViewerContent.innerHTML = renderSourceSnippet(payload);
+    if (state.sourceViewerNodeId !== node.id || state.contentDrawerMode !== "source" || !contentDrawer.open) return;
+    contentDrawerMeta.textContent = `${payload.file}:${payload.line} · ${payload.code.length} lines`;
+    const sourceContent = contentDrawerContent.querySelector("[data-drawer-source]");
+    if (!sourceContent) return;
+    sourceContent.innerHTML = renderSourceSnippet(payload);
     requestAnimationFrame(() => {
-      sourceViewerContent.querySelector(".is-target")?.scrollIntoView({ block: "center" });
+      sourceContent.querySelector(".is-target")?.scrollIntoView({ block: "center" });
     });
   } catch (error) {
-    sourceViewerContent.innerHTML = `<p><strong>Source error</strong><br><code>${escapeHtml(error.message)}</code></p>`;
+    contentDrawerContent.innerHTML = `<p><strong>Source error</strong><br><code>${escapeHtml(error.message)}</code></p>`;
   }
 }
 
-function closeSourceViewer() {
+function closeContentDrawer() {
   state.sourceViewerNodeId = null;
-  if (sourceViewer.open) sourceViewer.close();
+  state.contentDrawerMode = null;
+  state.contentDrawerCopyText = "";
+  if (contentDrawer.open) contentDrawer.close();
 }
 
 async function fetchSource(node, options = {}) {

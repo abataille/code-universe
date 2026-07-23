@@ -1,17 +1,29 @@
-import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { execFile, spawn } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 const port = 4397;
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const sourceRoot = join(repositoryRoot, "examples", "SampleSwiftApp");
 const dataRoot = await mkdtemp(join(tmpdir(), "code-universe-review-test-"));
+const codexHome = await mkdtemp(join(tmpdir(), "code-universe-codex-home-test-"));
+const patchRoot = await mkdtemp(join(tmpdir(), "code-universe-patch-test-"));
+await writeFile(join(codexHome, "config.toml"), "model = \"gpt-5.6-sol\"\nmodel_reasoning_effort = \"high\"\n");
+await writeFile(join(patchRoot, "Feature.swift"), "struct Feature {\n    let value = 1\n}\n");
+await writeFile(join(patchRoot, "Other.swift"), "struct Other {}\n");
+await execFileAsync("git", ["init", "-q"], { cwd: patchRoot });
+await execFileAsync("git", ["add", "Feature.swift", "Other.swift"], { cwd: patchRoot });
+await execFileAsync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit", "-qm", "Initial fixture"], { cwd: patchRoot });
 const server = spawn(process.execPath, ["server.js"], {
   cwd: repositoryRoot,
   env: {
     ...process.env,
     PORT: String(port),
+    CODEX_HOME: codexHome,
     CODE_UNIVERSE_DATA_ROOT: dataRoot,
     CODE_UNIVERSE_CODEX_PATH: join(repositoryRoot, "scripts", "mock-codex-review.js")
   },
@@ -20,6 +32,12 @@ const server = spawn(process.execPath, ["server.js"], {
 
 try {
   await waitForServer();
+  const settingsResponse = await fetch(`http://127.0.0.1:${port}/api/codex-settings`);
+  const settings = await settingsResponse.json();
+  assert(settings.defaults.model === "gpt-5.6-sol", "Codex settings should expose the configured default model");
+  assert(settings.defaults.reasoningEffort === "high", "Codex settings should expose the configured reasoning effort");
+  assert(settings.models.includes("gpt-5.6-terra"), "Codex settings should provide model choices");
+
   const source = await post("/api/source", {
     sourceRoot,
     file: "Services.swift",
@@ -69,9 +87,14 @@ try {
     sourceRoot,
     title: "Automatic Codex fixture",
     behavior: "Authentication service behavior",
-    mode: "inspect"
+    mode: "inspect",
+    model: "gpt-5.6-terra",
+    reasoningEffort: "low"
   });
   assert(launched.review.codex.status === "running", "automatic review should launch Codex");
+  assert(launched.review.codex.model === "gpt-5.6-terra", "selected model should be stored with the trace");
+  assert(launched.review.codex.reasoningEffort === "low", "selected reasoning effort should be stored with the trace");
+  assert(launched.review.codex.modelOverride === true && launched.review.codex.reasoningOverride === true, "explicit settings should be marked as overrides");
   const automatic = await waitForReview(launched.review.id);
   assert(automatic.status === "completed", "automatic Codex review should complete");
   assert(automatic.codex.threadId === "fixture-thread", "Codex thread metadata should be captured");
@@ -93,10 +116,53 @@ try {
   assert(automatic.events.some((event) => event.kind === "suspect" && event.file === "Services.swift"), "conclusion file should become a suspected source event");
   assert(automatic.events.at(-1).kind === "conclusion", "Codex final message should become the conclusion");
   assert(automatic.events.at(-1).summary === "Final review result", "timeline conclusion should remain concise");
+
+  const patchReview = await post("/api/reviews/start", {
+    sourceRoot: patchRoot,
+    title: "Patch capture fixture"
+  });
+  await writeFile(join(patchRoot, "Feature.swift"), "struct Feature {\n    let value = 2\n    let enabled = true\n}\n");
+  await post("/api/reviews/event", {
+    reviewId: patchReview.review.id,
+    event: { kind: "edit", file: "Feature.swift", line: 2, summary: "Changed feature" }
+  });
+  const patched = await post("/api/reviews/finish", {
+    reviewId: patchReview.review.id,
+    outcome: "passed",
+    summary: "Patch captured"
+  });
+  const featureDiff = patched.review.git.diff.files.find((file) => file.file === "Feature.swift");
+  assert(featureDiff, "finished reviews should include a file-level patch");
+  assert(featureDiff.added === 2 && featureDiff.deleted === 1, "patch should report exact added and removed lines");
+  assert(featureDiff.patch.includes("-    let value = 1") && featureDiff.patch.includes("+    let value = 2"), "patch should preserve changed source lines");
+  await writeFile(join(patchRoot, "Other.swift"), "struct Other { let laterChange = true }\n");
+
+  const legacyImport = await post("/api/reviews/import", {
+    sourceRoot: patchRoot,
+    review: {
+      id: "legacy-clean-review",
+      title: "Legacy clean review",
+      status: "completed",
+      events: [{ kind: "edit", file: "Feature.swift", line: 2, summary: "Changed feature" }],
+      git: {
+        before: { commit: patchReview.review.git.before.commit, status: [], changes: [] },
+        after: patched.review.git.after,
+        baseline: null,
+        diff: null
+      }
+    }
+  });
+  assert(legacyImport.review.git.diff === null, "legacy import should initially have no patch");
+  const backfilledResponse = await fetch(`http://127.0.0.1:${port}/api/reviews/active?sourceRoot=${encodeURIComponent(patchRoot)}`);
+  const backfilled = await backfilledResponse.json();
+  assert(backfilled.review.git.diff.files.some((file) => file.file === "Feature.swift"), "clean legacy reviews should safely backfill their patch");
+  assert(!backfilled.review.git.diff.files.some((file) => file.file === "Other.swift"), "backfill should exclude unrelated files changed after the review");
   console.log("Review flow fixture passed.");
 } finally {
   server.kill("SIGTERM");
   await rm(dataRoot, { recursive: true, force: true });
+  await rm(codexHome, { recursive: true, force: true });
+  await rm(patchRoot, { recursive: true, force: true });
 }
 
 async function waitForServer() {

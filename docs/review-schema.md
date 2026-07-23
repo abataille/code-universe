@@ -19,6 +19,10 @@ Review traces overlay observable Codex activity on an existing source graph. The
   "codex": {
     "status": "running",
     "mode": "inspect",
+    "model": "gpt-5.6-sol",
+    "reasoningEffort": "high",
+    "modelOverride": false,
+    "reasoningOverride": false,
     "threadId": null,
     "startedAt": "2026-07-22T09:00:00.000Z",
     "usage": {
@@ -34,7 +38,22 @@ Review traces overlay observable Codex activity on an existing source graph. The
   },
   "git": {
     "before": null,
-    "after": null
+    "after": null,
+    "baseline": {
+      "commit": "temporary-git-tree",
+      "untrackedFiles": []
+    },
+    "diff": {
+      "truncated": false,
+      "files": [
+        {
+          "file": "Services/ScannerService.swift",
+          "added": 2,
+          "deleted": 1,
+          "patch": "diff --git a/Services/ScannerService.swift b/Services/ScannerService.swift\n..."
+        }
+      ]
+    }
   }
 }
 ```
@@ -43,9 +62,13 @@ Review traces overlay observable Codex activity on an existing source graph. The
 
 `codex.mode` is `inspect` for a read-only review or `fix` when source edits are allowed. Code Universe reads the documented `codex exec --json` stream and converts observable command executions, file changes, tests, builds, and the final agent message into review events. Reasoning items are deliberately ignored.
 
+`codex.model` and `codex.reasoningEffort` record the effective settings used for the review. The `Override` fields distinguish explicit per-review choices from values inherited from `~/.codex/config.toml`. The model selector includes recommended presets plus an editable `Custom model` option, while the reasoning picker offers `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`; actual availability depends on the selected model and account.
+
 Token usage is aggregated from every `turn.completed` or `turn.failed` record. The UI lists total tokens, input total, uncached input, cached input, output total, visible output, reasoning output, and the number of metered model turns. Cached input is a subset of input total, and reasoning output is a subset of output total, so neither is added twice. Tool execution does not expose a separate token counter; tool results are included when they return to the model as input.
 
 Automatic traces retain only project-local Swift files, exclude `.build`, `build`, `DerivedData`, and `.git` output, collapse project-wide file inventories, and suppress duplicate search/inspection events until the next edit, build, test, or conclusion phase.
+
+For Git projects, Code Universe creates a non-destructive baseline when the review starts and compares the completed working tree against it. This isolates changes made during the review from modifications that already existed. `git.diff.files` contains per-file unified patches and added/deleted counts. Newly created untracked Swift files are included; patches are capped at 500,000 characters and marked with `truncated` when necessary.
 
 ## Events
 

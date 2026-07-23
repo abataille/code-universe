@@ -72,6 +72,33 @@
           <p class="panel-copy">Overlay the files Codex inspected, suspected, changed, and verified.</p>
           <div class="stack">
             <textarea id="reviewTitleInput" class="search review-prompt" rows="5" placeholder="Describe the behavior, expected result, relevant screen, and how to reproduce it..."></textarea>
+            <div class="review-setting-grid">
+              <label class="field-label" for="reviewModelSelect">Model</label>
+              <select id="reviewModelSelect" class="search selection-field">
+                <option id="reviewModelDefaultOption" value="">Use Codex default</option>
+                <option value="gpt-5.6-sol">gpt-5.6-sol</option>
+                <option value="gpt-5.6">gpt-5.6</option>
+                <option value="gpt-5.6-terra">gpt-5.6-terra</option>
+                <option value="gpt-5.4">gpt-5.4</option>
+                <option value="gpt-5.3-codex-spark">gpt-5.3-codex-spark</option>
+                <option value="custom">Custom model…</option>
+              </select>
+              <label id="reviewCustomModelLabel" class="field-label" for="reviewModelInput" hidden>Custom</label>
+              <input id="reviewModelInput" class="search" type="text" placeholder="provider/model-id" autocomplete="off" hidden />
+              <label class="field-label" for="reviewReasoningSelect">Reasoning</label>
+              <select id="reviewReasoningSelect" class="search selection-field">
+                <option id="reviewReasoningDefaultOption" value="">Use Codex default</option>
+                <option value="none">None</option>
+                <option value="minimal">Minimal</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="xhigh">Extra high</option>
+                <option value="max">Max</option>
+                <option value="ultra">Ultra</option>
+              </select>
+            </div>
+            <p id="reviewCodexSettingsHint" class="status-copy">Loading Codex defaults...</p>
             <label class="field-label" for="reviewModeSelect">Codex permission</label>
             <select id="reviewModeSelect" class="search selection-field">
               <option value="inspect" selected>Inspect only — no source changes</option>
@@ -159,6 +186,7 @@
           <div class="chrome-actions" aria-label="Layout controls">
             <button id="toggleLeftRailButton" class="chrome-button" type="button" aria-pressed="false">Controls</button>
             <button id="toggleRightRailButton" class="chrome-button" type="button" aria-pressed="false">Inspector</button>
+            <button id="themeToggleButton" class="chrome-button" type="button" aria-pressed="false">Light UI</button>
           </div>
           <div class="legend">
             <span><i class="legend-file"></i>File</span>
@@ -209,67 +237,82 @@
       </section>
 
       <aside class="sidebar inspector-rail">
-        <section class="panel panel-review-timeline">
-          <span class="eyebrow">Review path</span>
-          <h2 id="reviewTimelineTitle">No active review</h2>
-          <div class="review-replay-controls" aria-label="Review replay controls">
-            <button id="reviewReplayButton" class="button button-compact" type="button" disabled>Replay</button>
-            <label for="reviewReplaySpeed">Speed</label>
-            <select id="reviewReplaySpeed" class="selection-field" aria-label="Replay speed">
-              <option value="1500">0.5×</option>
-              <option value="850" selected>1×</option>
-              <option value="425">2×</option>
-            </select>
-          </div>
-          <div id="reviewTimeline" class="review-timeline">
-            <p>Start or import a review to see Codex activity on the city.</p>
-          </div>
-        </section>
+        <nav class="inspector-tabs" role="tablist" aria-label="Inspector views">
+          <button id="inspectorTabReview" class="inspector-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="inspectorPanelReview" data-inspector-tab="review">Review</button>
+          <button id="inspectorTabObject" class="inspector-tab" type="button" role="tab" aria-selected="false" aria-controls="inspectorPanelObject" data-inspector-tab="object">Object</button>
+          <button id="inspectorTabAnalysis" class="inspector-tab" type="button" role="tab" aria-selected="false" aria-controls="inspectorPanelAnalysis" data-inspector-tab="analysis">Analysis</button>
+        </nav>
 
-        <section class="panel panel-inspector">
-          <span class="eyebrow">Inspector</span>
-          <h2>Selected object</h2>
-          <div id="selectedDetails" class="details">
-            <p>Click any object in the map to inspect what it is, what it uses, and where it lives in source.</p>
+        <div class="inspector-tab-panels">
+          <div id="inspectorPanelReview" class="inspector-tab-panel is-active" role="tabpanel" aria-labelledby="inspectorTabReview" data-inspector-panel="review">
+            <section class="panel panel-review-timeline">
+              <span class="eyebrow">Review path</span>
+              <h2 id="reviewTimelineTitle">No active review</h2>
+              <div class="review-replay-controls" aria-label="Review replay controls">
+                <button id="reviewReplayButton" class="button button-compact" type="button" disabled>Replay</button>
+                <label for="reviewReplaySpeed">Speed</label>
+                <select id="reviewReplaySpeed" class="selection-field" aria-label="Replay speed">
+                  <option value="1500">0.5×</option>
+                  <option value="850" selected>1×</option>
+                  <option value="425">2×</option>
+                </select>
+              </div>
+              <div id="reviewTimeline" class="review-timeline">
+                <p>Start or import a review to see Codex activity on the city.</p>
+              </div>
+            </section>
           </div>
-        </section>
 
-        <section class="panel panel-metrics">
-          <span class="eyebrow">Complexity</span>
-          <h2>Map stats</h2>
-          <dl class="stats">
-            <div><dt>Nodes</dt><dd id="nodeCount">0</dd></div>
-            <div><dt>Edges</dt><dd id="edgeCount">0</dd></div>
-            <div><dt>SwiftUI Views</dt><dd id="viewCount">0</dd></div>
-            <div><dt>Services</dt><dd id="serviceCount">0</dd></div>
-          </dl>
-        </section>
-
-        <section class="panel panel-diff">
-          <span class="eyebrow">Analysis</span>
-          <h2>Parser differences</h2>
-          <div id="parserDiff" class="parser-diff">
-            <p>Compare analysis styles to see symbols that only one method finds.</p>
+          <div id="inspectorPanelObject" class="inspector-tab-panel" role="tabpanel" aria-labelledby="inspectorTabObject" data-inspector-panel="object" hidden>
+            <section class="panel panel-inspector">
+              <span class="eyebrow">Inspector</span>
+              <h2>Selected object</h2>
+              <div id="selectedDetails" class="details">
+                <p>Click any object in the map to inspect what it is, what it uses, and where it lives in source.</p>
+              </div>
+            </section>
           </div>
-        </section>
+
+          <div id="inspectorPanelAnalysis" class="inspector-tab-panel" role="tabpanel" aria-labelledby="inspectorTabAnalysis" data-inspector-panel="analysis" hidden>
+            <section class="panel panel-metrics">
+              <span class="eyebrow">Complexity</span>
+              <h2>Map stats</h2>
+              <dl class="stats">
+                <div><dt>Nodes</dt><dd id="nodeCount">0</dd></div>
+                <div><dt>Edges</dt><dd id="edgeCount">0</dd></div>
+                <div><dt>SwiftUI Views</dt><dd id="viewCount">0</dd></div>
+                <div><dt>Services</dt><dd id="serviceCount">0</dd></div>
+              </dl>
+            </section>
+
+            <section class="panel panel-diff">
+              <span class="eyebrow">Analysis</span>
+              <h2>Parser differences</h2>
+              <div id="parserDiff" class="parser-diff">
+                <p>Compare analysis styles to see symbols that only one method finds.</p>
+              </div>
+            </section>
+          </div>
+        </div>
       </aside>
     </main>
 
-    <dialog id="sourceViewer" class="source-viewer" aria-labelledby="sourceViewerTitle">
-      <div class="source-viewer-shell">
-        <header class="source-viewer-header">
+    <dialog id="contentDrawer" class="content-drawer" aria-labelledby="contentDrawerTitle">
+      <div class="content-drawer-shell">
+        <header class="content-drawer-header">
           <div>
-            <span class="eyebrow">Source code</span>
-            <h2 id="sourceViewerTitle">Swift source</h2>
-            <p id="sourceViewerLocation" class="status-copy"></p>
+            <span id="contentDrawerEyebrow" class="eyebrow">Details</span>
+            <h2 id="contentDrawerTitle">Code Universe details</h2>
+            <p id="contentDrawerMeta" class="status-copy"></p>
           </div>
-          <div class="source-viewer-actions">
-            <button id="sourceViewerXcodeButton" class="button" type="button">Open in Xcode</button>
-            <button id="sourceViewerCloseButton" class="button button-primary" type="button">Close</button>
+          <div class="content-drawer-actions">
+            <button id="contentDrawerCopyButton" class="button" type="button" hidden>Copy</button>
+            <button id="contentDrawerXcodeButton" class="button" type="button" hidden>Open in Xcode</button>
+            <button id="contentDrawerCloseButton" class="button button-primary" type="button">Close</button>
           </div>
         </header>
-        <div id="sourceViewerContent" class="source-preview source-viewer-content">
-          <p>Choose an object with a source location.</p>
+        <div id="contentDrawerContent" class="content-drawer-content">
+          <p>Choose a review result, source file, or diff.</p>
         </div>
       </div>
     </dialog>
