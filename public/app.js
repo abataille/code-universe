@@ -63,6 +63,7 @@ const contentDrawerEyebrow = document.querySelector("#contentDrawerEyebrow");
 const contentDrawerTitle = document.querySelector("#contentDrawerTitle");
 const contentDrawerMeta = document.querySelector("#contentDrawerMeta");
 const contentDrawerContent = document.querySelector("#contentDrawerContent");
+const contentDrawerApplyFindingsButton = document.querySelector("#contentDrawerApplyFindingsButton");
 const contentDrawerCopyButton = document.querySelector("#contentDrawerCopyButton");
 const contentDrawerXcodeButton = document.querySelector("#contentDrawerXcodeButton");
 const contentDrawerCloseButton = document.querySelector("#contentDrawerCloseButton");
@@ -1562,6 +1563,13 @@ function bindEvents() {
   });
 
   reviewTimeline.addEventListener("click", (event) => {
+    const applyButton = event.target.closest("[data-apply-review-findings]");
+    if (applyButton) {
+      applyReviewFindings().catch((error) => {
+        reviewStatus.textContent = error.message;
+      });
+      return;
+    }
     const resultButton = event.target.closest("[data-open-review-result]");
     if (resultButton) {
       openReviewResultDrawer();
@@ -1707,6 +1715,11 @@ function bindEvents() {
   });
 
   contentDrawerCloseButton.addEventListener("click", closeContentDrawer);
+  contentDrawerApplyFindingsButton.addEventListener("click", () => {
+    applyReviewFindings().catch((error) => {
+      contentDrawerMeta.textContent = error.message;
+    });
+  });
   contentDrawerCopyButton.addEventListener("click", copyContentDrawerText);
   contentDrawerXcodeButton.addEventListener("click", async () => {
     const node = state.nodeById.get(state.sourceViewerNodeId);
@@ -1716,6 +1729,7 @@ function bindEvents() {
     state.sourceViewerNodeId = null;
     state.contentDrawerMode = null;
     state.contentDrawerCopyText = "";
+    contentDrawerApplyFindingsButton.hidden = true;
   });
   contentDrawer.addEventListener("click", (event) => {
     if (event.target === contentDrawer) {
@@ -1780,9 +1794,13 @@ function selectInspectorTab(tabName, options = {}) {
   });
 }
 
-async function startBehaviorReview() {
+async function startBehaviorReview(options = {}) {
   const sourceRoot = state.graph?.project?.sourceRoot;
   if (!sourceRoot) throw new Error("Choose a project before starting a review.");
+  const behavior = typeof options.behavior === "string" ? options.behavior.trim() : reviewTitleInput.value.trim();
+  const mode = options.mode === "fix" ? "fix" : reviewModeSelect.value === "fix" ? "fix" : "inspect";
+  if (options.mode) reviewModeSelect.value = mode;
+  if (behavior) reviewTitleInput.value = behavior;
   localStorage.setItem(reviewModelKey, selectedReviewModel());
   localStorage.setItem(reviewReasoningKey, reviewReasoningSelect.value);
   reviewStatus.textContent = "Launching Codex review...";
@@ -1792,9 +1810,10 @@ async function startBehaviorReview() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       sourceRoot,
-      title: reviewTitleInput.value.trim() || "Codex behavior review",
-      behavior: reviewTitleInput.value.trim(),
-      mode: reviewModeSelect.value === "fix" ? "fix" : "inspect",
+      title: options.title || behavior || "Codex behavior review",
+      behavior,
+      mode,
+      parentReviewId: options.parentReviewId || null,
       model: selectedReviewModel(),
       reasoningEffort: reviewReasoningSelect.value
     })
@@ -1805,6 +1824,28 @@ async function startBehaviorReview() {
     throw new Error(payload.error || "Codex review could not be launched.");
   }
   setReviewOverlay(payload.review);
+}
+
+function canApplyReviewFindings(review = state.review) {
+  return review?.status === "completed"
+    && review.codex?.mode === "inspect"
+    && Boolean(review.codex?.lastMessage);
+}
+
+async function applyReviewFindings() {
+  const sourceReview = state.review;
+  if (!canApplyReviewFindings(sourceReview)) {
+    throw new Error("Only completed inspect-only findings can start a fix review.");
+  }
+  const confirmed = window.confirm("Start an Inspect and fix review from these findings? Codex may edit source files.");
+  if (!confirmed) return;
+  closeContentDrawer();
+  await startBehaviorReview({
+    mode: "fix",
+    title: `Apply findings: ${sourceReview.title}`,
+    behavior: sourceReview.behavior || sourceReview.title,
+    parentReviewId: sourceReview.id
+  });
 }
 
 async function importBehaviorReview(file) {
@@ -2213,7 +2254,7 @@ function renderReviewTimeline() {
     return `
       <button class="review-event ${event.kind === "conclusion" ? "is-conclusion" : ""} ${future ? "is-future" : ""} ${event.id === state.selectedReviewEventId ? "is-active" : ""}" type="button" data-review-event-id="${escapeHtml(event.id)}" style="--review-color:${reviewColorCss(event)}">
         <span class="review-event-index">${event.sequence}</span>
-        <span class="review-event-copy"><strong>${escapeHtml(summary)}</strong><span>${escapeHtml(event.kind)} · ${escapeHtml(location)}${event.kind === "edit" && gitDiff?.files?.length ? " · click for diff" : ""}${event.resolvedNodeId ? "" : " · unmapped"}</span></span>
+        <span class="review-event-copy"><strong>${escapeHtml(summary)}</strong><span>${event.source === "mcp" ? `MCP${event.tool ? ` · ${escapeHtml(event.tool)}` : ""} · ` : ""}${escapeHtml(event.kind)} · ${escapeHtml(location)}${event.kind === "edit" && reviewDiffForEvent(event) ? " · click for diff" : ""}${event.resolvedNodeId ? "" : " · unmapped"}</span></span>
       </button>`;
   }).join("");
   const gitChanges = state.review.git?.after?.changes || state.review.git?.before?.changes || [];
@@ -2240,16 +2281,15 @@ function renderReviewTimeline() {
 }
 
 function renderReviewDiffSummary(event) {
-  const files = state.review?.git?.diff?.files || [];
-  const fileDiff = files.find((candidate) => reviewFilesMatch(normalizeReviewPath(candidate.file), normalizeReviewPath(event.file)));
+  const fileDiff = reviewDiffForEvent(event);
   return `
     <section class="review-drawer-card" aria-label="Selected source change">
       <div>
         <span class="eyebrow">Selected change</span>
         <strong>${escapeHtml(fileDiff?.file || event.file || "Changed file")}</strong>
-        <p>${fileDiff ? `+${fileDiff.added} added · −${fileDiff.deleted} removed` : "This trace only contains the changed filename."}</p>
+        <p>${fileDiff ? `+${fileDiff.added} added · −${fileDiff.deleted} removed` : "No isolated patch was captured for this edit."}</p>
       </div>
-      <button class="button button-compact" type="button" data-open-review-diff="${escapeHtml(event.id)}">View diff</button>
+      ${fileDiff ? `<button class="button button-compact" type="button" data-open-review-diff="${escapeHtml(event.id)}">View diff</button>` : ""}
     </section>`;
 }
 
@@ -2265,13 +2305,15 @@ function renderReviewResultSummary(result) {
         <strong>Final result</strong>
         <p>${escapeHtml(preview.slice(0, 180))}${preview.length > 180 ? "…" : ""}</p>
       </div>
-      <button class="button button-compact" type="button" data-open-review-result>Read result</button>
+      <div class="review-drawer-actions">
+        <button class="button button-compact" type="button" data-open-review-result>Read result</button>
+        ${canApplyReviewFindings() ? '<button class="button button-compact button-primary" type="button" data-apply-review-findings>Apply findings</button>' : ""}
+      </div>
     </section>`;
 }
 
 function renderReviewDiff(event) {
-  const files = state.review?.git?.diff?.files || [];
-  const fileDiff = files.find((candidate) => reviewFilesMatch(normalizeReviewPath(candidate.file), normalizeReviewPath(event.file)));
+  const fileDiff = reviewDiffForEvent(event);
   if (!fileDiff) {
     return `
       <section class="review-diff" aria-label="Review source changes">
@@ -2297,6 +2339,12 @@ function renderReviewDiff(event) {
       <div class="review-diff-stats"><span class="is-added">+${fileDiff.added}</span><span class="is-removed">−${fileDiff.deleted}</span>${state.review.git.diff.truncated ? "<span>Patch truncated</span>" : ""}</div>
       <pre class="review-diff-code"><code>${lines}</code></pre>
     </section>`;
+}
+
+function reviewDiffForEvent(event) {
+  const files = state.review?.git?.diff?.files || [];
+  const matching = files.find((candidate) => reviewFilesMatch(normalizeReviewPath(candidate.file), normalizeReviewPath(event?.file)));
+  return matching || (!event?.file && files.length === 1 ? files[0] : null);
 }
 
 function reviewFinalResult() {
@@ -2369,7 +2417,8 @@ function openReviewResultDrawer() {
     title: "Final result",
     meta: state.review?.title || "",
     content: renderReviewResult(result, { drawer: true }),
-    copyText: result
+    copyText: result,
+    showApplyFindings: canApplyReviewFindings()
   });
 }
 
@@ -2387,7 +2436,7 @@ function openReviewDiffDrawer(eventId) {
   });
 }
 
-function openContentDrawer({ mode, eyebrow, title, meta = "", content, copyText = "", nodeId = null }) {
+function openContentDrawer({ mode, eyebrow, title, meta = "", content, copyText = "", nodeId = null, showApplyFindings = false }) {
   state.contentDrawerMode = mode;
   state.contentDrawerCopyText = copyText;
   state.sourceViewerNodeId = nodeId;
@@ -2395,6 +2444,7 @@ function openContentDrawer({ mode, eyebrow, title, meta = "", content, copyText 
   contentDrawerTitle.textContent = title;
   contentDrawerMeta.textContent = meta;
   contentDrawerContent.innerHTML = content;
+  contentDrawerApplyFindingsButton.hidden = !showApplyFindings;
   contentDrawerCopyButton.hidden = !copyText;
   contentDrawerXcodeButton.hidden = !nodeId;
   if (!contentDrawer.open) contentDrawer.showModal();
@@ -3040,6 +3090,7 @@ function closeContentDrawer() {
   state.sourceViewerNodeId = null;
   state.contentDrawerMode = null;
   state.contentDrawerCopyText = "";
+  contentDrawerApplyFindingsButton.hidden = true;
   if (contentDrawer.open) contentDrawer.close();
 }
 

@@ -810,6 +810,12 @@ h1 {
   min-width: 0;
 }
 
+.review-drawer-card > .review-drawer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .review-drawer-card strong {
   font-size: 12px;
 }

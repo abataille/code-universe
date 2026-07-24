@@ -154,6 +154,7 @@ Review Mode overlays observable Codex activity on the existing source city. Insp
 - **Model and reasoning controls**: inherit the current Codex defaults or choose/edit a model and reasoning effort for each review; the effective values are stored with the trace.
 - **Visual investigation trace**: see searches, inspections, suspected causes, edits, builds, tests, and conclusions mapped onto project objects.
 - **Exact review diffs**: click an edit step to inspect the review-scoped unified patch with green additions, red removals, line counts, and a shortcut to the complete source file.
+- **Apply findings**: turn a completed `Inspect only` report into a linked `Inspect and fix` review that verifies the findings before editing.
 - **Clean project scope**: ignore generated folders and external files, normalize source paths, collapse file inventories, and remove repetitive trace noise.
 - **Node-focused navigation**: selecting a trace step highlights its mapped object without opening a popup or moving the camera.
 - **Complete token ledger**: view total, input, uncached input, cached input, output, visible output, reasoning-output tokens, and metered model turns without double-counting subsets.
@@ -168,9 +169,27 @@ Choose the project in Code Universe, enter the behavior in the `Behavior review`
 - `Inspect only` launches Codex in a read-only sandbox and cannot change source files.
 - `Inspect and fix` allows Codex to edit the selected project and run focused verification.
 
+After an `Inspect only` review completes, select `Apply findings` in the final-result card or drawer. Code Universe starts a new `Inspect and fix` review for the same project, includes the previous report as a hypothesis, and stores the originating review in `parentReviewId`.
+
 Code Universe launches the Codex runtime bundled with the ChatGPT desktop app, consumes its JSONL event stream, and automatically maps observable searches, source inspections, file changes, builds, tests, and the final report onto the city. The review summary lists total, input, uncached input, cached input, output, visible output, reasoning-output tokens, and metered model turns without double-counting subsets. Private reasoning is neither requested nor stored.
 
-Trace extraction is project-scoped: generated build folders and external files are ignored, project-wide source inventories are collapsed, repeated inspection/search events are deduplicated within each review phase, and build/test commands use concise outcome labels.
+### Code Universe MCP
+
+Each review launches a temporary local STDIO MCP server named `code_universe`. No global Codex configuration or project file is required. Code Universe injects the server configuration into the review process and provides a short-lived token that is valid only while that review is running.
+
+The MCP server exposes seven bounded, read-only tools:
+
+- `get_project_summary`
+- `search_nodes`
+- `get_node`
+- `get_relationships`
+- `find_change_impact`
+- `read_source`
+- `get_latest_trace`
+
+Codex uses these tools to query the graph before broad source searches. MCP calls are labeled in the review timeline and mapped to the returned file or object. The MCP server cannot edit files, run shell commands, open Xcode, or access a different project. In `Inspect and fix` mode, source changes still use Codex's normal workspace tools, approvals, Git patch capture, and focused verification.
+
+Trace extraction is project-scoped: generated build folders and external files are ignored, project-wide source inventories are collapsed, repeated inspection/search events are deduplicated within each review phase, and build/test commands use concise outcome labels. Fix reviews use a bounded Swift source snapshot when a Git baseline is unavailable, so edit steps can still show their unified diff.
 
 Completed and imported traces can be replayed from the `Review path` panel. Replay progressively reveals mapped nodes and route streets, supports pause/resume and 0.5×, 1×, or 2× speed, and reveals the final report only when the conclusion step is reached.
 
@@ -227,6 +246,7 @@ npm run scan:sample
 npm run scan:sample:swiftsyntax
 npm run test:scan
 npm run test:review
+npm run test:mcp
 npm run review -- help
 npm run mac:build
 npm run mac:run

@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { access, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { basename, extname, dirname, join, normalize, relative, resolve } from "node:path";
 import { execFile, spawn } from "node:child_process";
@@ -9,6 +9,7 @@ import { homedir } from "node:os";
 import { promisify } from "node:util";
 import { scanSwiftFolder } from "./scripts/scan-swift-core.js";
 import { enrichGraphWithXcodeIndex } from "./scripts/scan-xcode-index.js";
+import { executeMcpGraphTool, mcpGraphToolNames, mcpTraceEvent } from "./lib/mcp-queries.js";
 
 const execFileAsync = promisify(execFile);
 const port = Number(process.env.PORT || 4173);
@@ -20,11 +21,13 @@ const activeClients = new Map();
 let shutdownTimer = null;
 let pruneTimer = null;
 const sourceFileIndexCache = new Map();
+const universeScanCache = new Map();
 const reviewDataRoot = process.env.CODE_UNIVERSE_DATA_ROOT
   ? resolve(process.env.CODE_UNIVERSE_DATA_ROOT)
   : join(process.cwd(), ".code-universe-data", "reviews");
 const reviewCache = new Map();
 const activeCodexRuns = new Map();
+const activeMcpSessions = new Map();
 const reviewWriteQueues = new Map();
 const reviewEventKinds = new Set(["inspect", "search", "suspect", "edit", "build", "test", "conclusion"]);
 
@@ -140,9 +143,15 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (url.pathname === "/api/mcp/tool" && request.method === "POST") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await executeMcpToolRequest(request, body));
+      return;
+    }
+
     await serveStatic(url, response);
   } catch (error) {
-    sendJson(response, 500, { error: error.message });
+    sendJson(response, error.statusCode || 500, { error: error.message });
   }
 });
 
@@ -201,6 +210,23 @@ async function scanResolvedPath(inputPath, scanner) {
       : resolvedScanner === "swiftsyntax"
         ? await scanSwiftFolderWithSwiftSyntax(projectRoot)
         : await scanSwiftFolder(projectRoot);
+  const cachedGraph = {
+    ...graph,
+    project: {
+      ...graph.project,
+      pickedPath: resolvedInput,
+      sourceRoot: projectRoot
+    }
+  };
+  universeScanCache.set(resolve(projectRoot), {
+    graph: cachedGraph,
+    diagnostics: {
+      ...diagnostics,
+      scanner: resolvedScanner,
+      pickedPath: resolvedInput,
+      sourceRoot: projectRoot
+    }
+  });
 
   const displayedGraph = selectedSwiftFile
     ? graphForSelectedSwiftFile(graph, selectedSwiftFile)
@@ -270,6 +296,98 @@ function diagnosticsForGraph(diagnostics, graph, selectedFile) {
     functionCount: graph.nodes.filter((node) => node.kind === "function").length,
     propertyCount: graph.nodes.filter((node) => node.kind === "property").length
   };
+}
+
+async function executeMcpToolRequest(request, body) {
+  const reviewId = typeof body?.reviewId === "string" ? body.reviewId : "";
+  const session = activeMcpSessions.get(reviewId);
+  if (!session || requestBearerToken(request) !== session.token) {
+    throw responseError(403, "The Code Universe MCP session is not active.");
+  }
+  const review = await loadReview(reviewId);
+  if (!review || review.status !== "running" || resolve(review.sourceRoot) !== resolve(session.sourceRoot)) {
+    throw responseError(409, "The Code Universe review is no longer running.");
+  }
+
+  const tool = typeof body?.tool === "string" ? body.tool : "";
+  const args = body?.arguments && typeof body.arguments === "object" ? body.arguments : {};
+  const supportedTools = new Set([...mcpGraphToolNames, "read_source", "get_latest_trace"]);
+  if (!supportedTools.has(tool)) throw responseError(400, `Unsupported Code Universe MCP tool: ${tool || "unknown"}`);
+
+  let result;
+  if (mcpGraphToolNames.has(tool)) {
+    const scan = await scanForMcp(session.sourceRoot);
+    result = executeMcpGraphTool(tool, args, scan.graph, scan.diagnostics);
+  } else if (tool === "read_source") {
+    if (typeof args.file !== "string" || !args.file.trim()) throw responseError(400, "file is required.");
+    result = await readSourceSnippet({
+      sourceRoot: session.sourceRoot,
+      file: args.file,
+      line: args.line,
+      context: args.context,
+      fullFile: false
+    });
+  } else {
+    result = summarizeMcpTrace(await findLatestReview(session.sourceRoot), args.limit);
+  }
+
+  const traceEvent = mcpTraceEvent(tool, args, result);
+  if (traceEvent) {
+    const activeReview = await loadReview(reviewId);
+    if (activeReview?.status === "running") {
+      appendNormalizedReviewEvents(activeReview, [traceEvent]);
+      await saveReview(activeReview);
+    }
+  }
+  return { result };
+}
+
+async function scanForMcp(sourceRoot) {
+  const key = resolve(sourceRoot);
+  if (!universeScanCache.has(key)) await scanResolvedPath(key, scannerMode);
+  const scan = universeScanCache.get(key);
+  if (!scan) throw new Error("Code Universe could not prepare the active project graph.");
+  return scan;
+}
+
+function summarizeMcpTrace(review, requestedLimit) {
+  if (!review) return { review: null };
+  const limit = Math.max(1, Math.min(100, Number(requestedLimit) || 30));
+  return {
+    review: {
+      id: review.id,
+      title: review.title,
+      behavior: review.behavior,
+      status: review.status,
+      startedAt: review.startedAt,
+      updatedAt: review.updatedAt,
+      finishedAt: review.finishedAt,
+      codex: review.codex ? {
+        status: review.codex.status,
+        mode: review.codex.mode,
+        model: review.codex.model,
+        reasoningEffort: review.codex.reasoningEffort,
+        usage: review.codex.usage
+      } : null,
+      changedFiles: (review.git?.diff?.files || []).slice(0, 30).map((file) => ({
+        file: file.file,
+        added: file.added,
+        deleted: file.deleted
+      })),
+      events: review.events.slice(-limit)
+    }
+  };
+}
+
+function requestBearerToken(request) {
+  const authorization = request.headers.authorization || "";
+  return authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+}
+
+function responseError(statusCode, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
 }
 
 async function compareParsers(inputPath) {
@@ -653,20 +771,27 @@ async function startReview(body) {
   if (existing) {
     activeCodexRuns.get(existing.id)?.kill("SIGTERM");
     activeCodexRuns.delete(existing.id);
+    activeMcpSessions.delete(existing.id);
     existing.status = "completed";
     existing.finishedAt = now;
     existing.updatedAt = now;
+    existing.git ||= { before: null, after: null, baseline: null, sourceBaseline: null, diff: null };
+    existing.git.after = await captureGitEvidence(existing.sourceRoot);
+    existing.git.diff = await captureCompletedReviewDiff(existing);
     await saveReview(existing);
   }
-  const [beforeEvidence, baseline] = await Promise.all([
+  const reviewId = randomUUID();
+  const [beforeEvidence, baseline, sourceBaseline] = await Promise.all([
     captureGitEvidence(sourceRoot),
-    captureGitReviewBaseline(sourceRoot)
+    captureGitReviewBaseline(sourceRoot),
+    body?.mode === "fix" ? captureSourceReviewBaseline(sourceRoot, reviewId) : null
   ]);
   const review = {
     version: 1,
-    id: randomUUID(),
+    id: reviewId,
     title: cleanReviewText(body?.title, "Code review"),
     behavior: cleanReviewText(body?.behavior, ""),
+    parentReviewId: validReviewId(body?.parentReviewId) ? body.parentReviewId : null,
     sourceRoot,
     status: "running",
     startedAt: now,
@@ -678,6 +803,7 @@ async function startReview(body) {
       before: beforeEvidence,
       after: null,
       baseline,
+      sourceBaseline,
       diff: null
     }
   };
@@ -688,6 +814,7 @@ async function startReview(body) {
 async function launchCodexReview(body) {
   const sourceRoot = await validatedReviewRoot(body?.sourceRoot);
   const mode = body?.mode === "fix" ? "fix" : "inspect";
+  const parentReview = await applyFindingsParent(body?.parentReviewId, sourceRoot, mode);
   const defaults = await readCodexDefaults();
   const requestedModel = cleanCodexModel(body?.model);
   const requestedReasoningEffort = cleanReasoningEffort(body?.reasoningEffort);
@@ -703,6 +830,8 @@ async function launchCodexReview(body) {
   const { review } = await startReview({
     ...body,
     sourceRoot,
+    mode,
+    parentReviewId: parentReview?.id || null,
     title: cleanReviewText(body?.title, "Codex behavior review")
   });
   review.codex = {
@@ -721,13 +850,29 @@ async function launchCodexReview(body) {
     lastMessage: null,
     usage: emptyCodexUsage()
   };
+  const mcpToken = randomUUID();
+  activeMcpSessions.set(review.id, { token: mcpToken, sourceRoot });
   await saveReview(review);
 
-  const prompt = codexReviewPrompt(review, mode);
+  const prompt = codexReviewPrompt(review, mode, parentReview);
+  const mcpScript = join(process.cwd(), "scripts", "code-universe-mcp.js");
+  const mcpConfig = [
+    "--config",
+    `mcp_servers.code_universe.command=${JSON.stringify(process.execPath)}`,
+    "--config",
+    `mcp_servers.code_universe.args=[${JSON.stringify(mcpScript)}]`,
+    "--config",
+    'mcp_servers.code_universe.env_vars=["CODE_UNIVERSE_MCP_URL","CODE_UNIVERSE_REVIEW_ID","CODE_UNIVERSE_MCP_TOKEN"]',
+    "--config",
+    "mcp_servers.code_universe.required=true",
+    "--config",
+    "mcp_servers.code_universe.tool_timeout_sec=120"
+  ];
   const args = [
     ...codex.argsPrefix,
     ...(requestedModel ? ["--model", requestedModel] : []),
     ...(requestedReasoningEffort ? ["--config", `model_reasoning_effort="${requestedReasoningEffort}"`] : []),
+    ...mcpConfig,
     "exec",
     "--json",
     "--ephemeral",
@@ -739,7 +884,13 @@ async function launchCodexReview(body) {
   ];
   const child = spawn(codex.command, args, {
     cwd: sourceRoot,
-    env: process.env,
+    env: {
+      ...process.env,
+      CODE_UNIVERSE_MCP_URL: `http://${host}:${port}`,
+      CODE_UNIVERSE_MCP_REVIEW_MODE: mode,
+      CODE_UNIVERSE_REVIEW_ID: review.id,
+      CODE_UNIVERSE_MCP_TOKEN: mcpToken
+    },
     stdio: ["ignore", "pipe", "pipe"]
   });
   activeCodexRuns.set(review.id, child);
@@ -761,6 +912,20 @@ async function launchCodexReview(body) {
   });
 
   return { review };
+}
+
+async function applyFindingsParent(reviewId, sourceRoot, mode) {
+  if (!validReviewId(reviewId)) return null;
+  if (mode !== "fix") throw responseError(400, "Applying findings requires Inspect and fix mode.");
+  const review = await loadReview(reviewId);
+  if (!review) throw responseError(404, "The source review could not be found.");
+  if (resolve(review.sourceRoot) !== resolve(sourceRoot)) {
+    throw responseError(400, "Findings can only be applied to the same project.");
+  }
+  if (review.status !== "completed" || review.codex?.mode !== "inspect" || !review.codex?.lastMessage) {
+    throw responseError(400, "Only completed inspect-only findings can start a fix review.");
+  }
+  return review;
 }
 
 async function resolveCodexCommand() {
@@ -793,18 +958,30 @@ async function resolveCodexCommand() {
   throw new Error("Codex CLI was not found. Install it or set CODE_UNIVERSE_CODEX_PATH.");
 }
 
-function codexReviewPrompt(review, mode) {
+function codexReviewPrompt(review, mode, parentReview = null) {
   const behavior = review.behavior || review.title;
   const action = mode === "fix"
     ? "Find the root cause, implement the smallest safe fix, and run focused verification."
     : "Investigate only. Do not modify source files. Find the most likely root cause and gather concrete evidence.";
-  return [
+  const prompt = [
     `Review this behavior: ${behavior}`,
     action,
+    "Use the code_universe MCP tools first to locate relevant objects, relationships, and bounded source excerpts.",
+    "Treat the MCP map as architectural context; confirm important conclusions against the actual source.",
     "Inspect the relevant source code instead of guessing.",
     "Run only focused, non-destructive commands and tests that help establish the behavior.",
     "In the final response, name the relevant Swift files and symbols, explain the evidence, and clearly separate confirmed facts from hypotheses."
-  ].join("\n");
+  ];
+  if (parentReview?.codex?.lastMessage) {
+    prompt.push(
+      "",
+      `This fix review follows inspect-only review ${parentReview.id}.`,
+      "Treat the previous findings below as a starting hypothesis. Verify them against the current source before editing.",
+      "Previous findings:",
+      parentReview.codex.lastMessage.slice(0, 16_000)
+    );
+  }
+  return prompt.join("\n");
 }
 
 function queueReviewUpdate(reviewId, update) {
@@ -995,6 +1172,7 @@ async function completeCodexReview(reviewId, exitCode, explicitError = null) {
   const review = await loadReview(reviewId);
   if (!review || review.status !== "running") return;
   activeCodexRuns.delete(reviewId);
+  activeMcpSessions.delete(reviewId);
   const failed = exitCode !== 0 || review.codex?.status === "failed";
   const finalMessage = review.codex?.lastMessage;
   if (finalMessage) {
@@ -1026,7 +1204,7 @@ async function completeCodexReview(reviewId, exitCode, explicitError = null) {
   review.codex.exitCode = exitCode;
   review.codex.error = explicitError || review.codex.error;
   review.git.after = await captureGitEvidence(review.sourceRoot);
-  review.git.diff = await captureReviewGitDiff(review.sourceRoot, reviewDiffBaseline(review));
+  review.git.diff = await captureCompletedReviewDiff(review);
   await saveReview(review);
   scheduleShutdownIfIdle();
 }
@@ -1053,7 +1231,7 @@ async function finishReview(body) {
   review.finishedAt = now;
   review.updatedAt = now;
   review.git.after = await captureGitEvidence(review.sourceRoot);
-  review.git.diff = await captureReviewGitDiff(review.sourceRoot, reviewDiffBaseline(review));
+  review.git.diff = await captureCompletedReviewDiff(review);
   await saveReview(review);
   return { review };
 }
@@ -1096,6 +1274,8 @@ function normalizeReviewEvent(candidate, sequence) {
     nodeId: cleanReviewText(candidate?.nodeId, "") || null,
     summary: cleanReviewText(candidate?.summary, friendlyReviewEvent(kind)),
     command: cleanReviewText(candidate?.command, "") || null,
+    source: candidate?.source === "mcp" ? "mcp" : null,
+    tool: candidate?.source === "mcp" ? cleanReviewText(candidate?.tool, "") || null : null,
     durationMs: Number.isFinite(Number(candidate?.durationMs)) ? Math.max(0, Number(candidate.durationMs)) : null
   };
 }
@@ -1194,7 +1374,7 @@ async function reviewFiles() {
 }
 
 async function loadReview(reviewId) {
-  if (!reviewId || typeof reviewId !== "string" || !/^[a-zA-Z0-9-]+$/.test(reviewId)) return null;
+  if (!validReviewId(reviewId)) return null;
   if (reviewCache.has(reviewId)) return reviewCache.get(reviewId);
   try {
     const review = JSON.parse(await readFile(join(reviewDataRoot, `${reviewId}.json`), "utf8"));
@@ -1203,6 +1383,10 @@ async function loadReview(reviewId) {
   } catch {
     return null;
   }
+}
+
+function validReviewId(reviewId) {
+  return typeof reviewId === "string" && /^[a-zA-Z0-9-]+$/.test(reviewId);
 }
 
 async function saveReview(review) {
@@ -1292,10 +1476,49 @@ async function captureGitReviewBaseline(sourceRoot) {
   }
 }
 
+async function captureSourceReviewBaseline(sourceRoot, reviewId) {
+  const baselineRoot = sourceBaselineRoot(reviewId);
+  const files = (await listSwiftSourceFiles(sourceRoot))
+    .map((file) => ({ absolute: file, relative: normalize(relative(sourceRoot, file)).replaceAll("\\", "/") }))
+    .filter((file) => file.relative && !file.relative.startsWith(".."))
+    .sort((left, right) => left.relative.localeCompare(right.relative));
+  const maximumFiles = 1500;
+  const maximumBytes = 20 * 1024 * 1024;
+  let totalBytes = 0;
+  let fileCount = 0;
+  let truncated = files.length > maximumFiles;
+
+  for (const file of files.slice(0, maximumFiles)) {
+    const fileStat = await stat(file.absolute).catch(() => null);
+    if (!fileStat?.isFile()) continue;
+    if (totalBytes + fileStat.size > maximumBytes) {
+      truncated = true;
+      break;
+    }
+    const destination = join(baselineRoot, file.relative);
+    await mkdir(dirname(destination), { recursive: true });
+    await copyFile(file.absolute, destination);
+    totalBytes += fileStat.size;
+    fileCount += 1;
+  }
+
+  return { fileCount, totalBytes, truncated };
+}
+
+async function captureCompletedReviewDiff(review) {
+  const gitDiff = await captureReviewGitDiff(review.sourceRoot, reviewDiffBaseline(review));
+  let diff = gitDiff;
+  if (!gitDiff?.files?.length && review.git?.sourceBaseline) {
+    diff = await captureSourceReviewDiff(review);
+  }
+  await rm(sourceBaselineRoot(review.id), { recursive: true, force: true });
+  return diff;
+}
+
 async function captureReviewGitDiff(sourceRoot, baseline) {
   if (!baseline?.commit) return null;
   try {
-    const { stdout } = await execFileAsync("git", ["diff", "--no-ext-diff", "--no-color", "--unified=3", baseline.commit, "--"], {
+    const { stdout } = await execFileAsync("git", ["-c", "core.quotePath=false", "diff", "--no-ext-diff", "--no-color", "--unified=3", baseline.commit, "--"], {
       cwd: sourceRoot,
       maxBuffer: 1024 * 1024 * 4
     });
@@ -1311,6 +1534,88 @@ async function captureReviewGitDiff(sourceRoot, baseline) {
   } catch {
     return null;
   }
+}
+
+async function captureSourceReviewDiff(review) {
+  const editedFiles = [...new Set(review.events
+    .filter((event) => event.kind === "edit" && event.file)
+    .map((event) => normalize(event.file).replaceAll("\\", "/"))
+    .filter((file) => file && !file.startsWith("..") && file.endsWith(".swift")))]
+    .slice(0, 40);
+  const patches = [];
+  for (const file of editedFiles) {
+    const patch = await sourceSnapshotPatch(review, file);
+    if (patch) patches.push(patch);
+  }
+  if (patches.length === 0) return null;
+  const maximumPatchLength = 500_000;
+  const completePatch = patches.join("\n");
+  const truncated = completePatch.length > maximumPatchLength;
+  return {
+    truncated,
+    source: "snapshot",
+    files: splitReviewGitPatch(truncated ? completePatch.slice(0, maximumPatchLength) : completePatch)
+  };
+}
+
+async function sourceSnapshotPatch(review, file) {
+  const beforePath = join(sourceBaselineRoot(review.id), file);
+  const afterPath = resolve(review.sourceRoot, file);
+  if (!isInsideRoot(review.sourceRoot, afterPath)) return null;
+  const [hasBefore, hasAfter] = await Promise.all([
+    isReadableFile(beforePath),
+    isReadableFile(afterPath)
+  ]);
+  if (!hasBefore && !hasAfter) return null;
+  const [before, after] = await Promise.all([
+    hasBefore ? readFile(beforePath, "utf8") : Promise.resolve(""),
+    hasAfter ? readFile(afterPath, "utf8") : Promise.resolve("")
+  ]);
+  if (before === after) return null;
+
+  if (hasBefore && hasAfter) {
+    try {
+      await execFileAsync("git", ["diff", "--no-index", "--no-ext-diff", "--no-color", "--unified=3", "--", beforePath, afterPath], {
+        maxBuffer: 1024 * 1024 * 2
+      });
+    } catch (error) {
+      if (error.code === 1 && error.stdout) {
+        const normalized = normalizeNoIndexPatch(String(error.stdout), file);
+        if (normalized) return normalized;
+      }
+    }
+  }
+
+  return fullSourceReplacementPatch(file, before, after, hasBefore, hasAfter);
+}
+
+function normalizeNoIndexPatch(patch, file) {
+  const lines = patch.split(/\r?\n/);
+  const hunkIndex = lines.findIndex((line) => line.startsWith("@@"));
+  if (hunkIndex < 0) return null;
+  return [
+    `diff --git a/${file} b/${file}`,
+    `--- a/${file}`,
+    `+++ b/${file}`,
+    ...lines.slice(hunkIndex)
+  ].join("\n").trimEnd();
+}
+
+function fullSourceReplacementPatch(file, before, after, hasBefore, hasAfter) {
+  const beforeLines = before.split(/\r?\n/);
+  const afterLines = after.split(/\r?\n/);
+  return [
+    `diff --git a/${file} b/${file}`,
+    hasBefore ? `--- a/${file}` : "--- /dev/null",
+    hasAfter ? `+++ b/${file}` : "+++ /dev/null",
+    `@@ -1,${hasBefore ? beforeLines.length : 0} +1,${hasAfter ? afterLines.length : 0} @@`,
+    ...(hasBefore ? beforeLines.map((line) => `-${line}`) : []),
+    ...(hasAfter ? afterLines.map((line) => `+${line}`) : [])
+  ].join("\n");
+}
+
+function sourceBaselineRoot(reviewId) {
+  return join(reviewDataRoot, ".baselines", reviewId);
 }
 
 async function patchesForNewUntrackedFiles(sourceRoot, untrackedBefore) {
@@ -1395,6 +1700,13 @@ async function resolveSourceLocation(body) {
 async function resolveSourceFile(resolvedRoot, file) {
   const directFile = resolve(resolvedRoot, file);
   if (isInsideRoot(resolvedRoot, directFile) && await isReadableFile(directFile)) {
+    const [canonicalRoot, canonicalFile] = await Promise.all([
+      realpath(resolvedRoot),
+      realpath(directFile)
+    ]);
+    if (!isInsideRoot(canonicalRoot, canonicalFile)) {
+      throw responseError(403, "Source file resolves outside the scanned project.");
+    }
     return directFile;
   }
 
@@ -1438,7 +1750,7 @@ async function listSwiftSourceFiles(directory) {
   const files = [];
 
   for (const entry of entries) {
-    if (entry.name === ".git" || entry.name === "DerivedData" || entry.name === "build") continue;
+    if (entry.name === ".git" || entry.name === ".build" || entry.name === "DerivedData" || entry.name === "build") continue;
     const fullPath = join(directory, entry.name);
     if (entry.isDirectory()) {
       files.push(...await listSwiftSourceFiles(fullPath));

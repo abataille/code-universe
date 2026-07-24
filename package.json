@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
+    "mcp": "node scripts/code-universe-mcp.js",
     "test:scan": "node scripts/test-scan-fixtures.js",
     "test:review": "node scripts/test-review-flow.js",
+    "test:mcp": "node scripts/test-mcp.js",
     "scan:sample": "node scripts/scan-swift.js examples/SampleSwiftApp public/sample-graph.json",
     "scan:sample:swiftsyntax": "node scripts/scan-swift-syntax.js examples/SampleSwiftApp public/sample-graph.json",
     "review": "node scripts/code-universe-review.js",
@@ -16,6 +18,11 @@
     "mac:open": "npm run mac:bundle && open \"dist/Code Universe.app\""
   },
   "dependencies": {
-    "three": "^0.185.0"
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "three": "^0.185.0",
+    "zod": "^3.25.76"
+  },
+  "overrides": {
+    "@hono/node-server": "2.0.11"
   }
 }

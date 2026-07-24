@@ -2,6 +2,33 @@
 
 const cdArgumentIndex = process.argv.indexOf("--cd");
 const sourceRoot = cdArgumentIndex >= 0 ? process.argv[cdArgumentIndex + 1] : process.cwd();
+if (!process.argv.some((argument) => argument.includes("mcp_servers.code_universe.command"))) {
+  throw new Error("Code Universe did not configure the MCP server for the Codex review.");
+}
+if (!process.argv.some((argument) => argument.includes("mcp_servers.code_universe.env_vars"))) {
+  throw new Error("Code Universe did not forward the MCP review environment.");
+}
+
+const mcpResponse = await fetch(new URL("/api/mcp/tool", process.env.CODE_UNIVERSE_MCP_URL), {
+  method: "POST",
+  headers: {
+    "Authorization": `Bearer ${process.env.CODE_UNIVERSE_MCP_TOKEN}`,
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify({
+    reviewId: process.env.CODE_UNIVERSE_REVIEW_ID,
+    tool: "search_nodes",
+    arguments: {
+      query: "AuthenticationService",
+      limit: 5
+    }
+  })
+});
+const mcpPayload = await mcpResponse.json();
+if (!mcpResponse.ok || !mcpPayload.result?.nodes?.some((node) => node.name === "AuthenticationService")) {
+  throw new Error(mcpPayload.error || "Code Universe MCP fixture search failed.");
+}
+
 const finalReport = `## Most likely cause
 
 The likely behavior source is \`AuthenticationService\` in [Services.swift:4](${sourceRoot}/Services.swift:4).
