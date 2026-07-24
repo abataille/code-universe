@@ -551,7 +551,7 @@ h1 {
 
 .review-event {
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
+  grid-template-columns: 24px minmax(0, 1fr) auto;
   gap: 9px;
   width: 100%;
   padding: 9px;
@@ -573,6 +573,15 @@ h1 {
   opacity: 0.34;
 }
 
+.review-event.is-running {
+  border-color: rgba(255, 196, 72, 0.72);
+  background: rgba(77, 53, 14, 0.28);
+}
+
+.review-event.is-completed {
+  border-color: rgba(89, 224, 156, 0.25);
+}
+
 .review-event-index {
   display: grid;
   place-items: center;
@@ -589,6 +598,23 @@ h1 {
   display: grid;
   gap: 3px;
   min-width: 0;
+}
+
+.review-event-state {
+  align-self: start;
+  padding: 3px 6px;
+  border: 1px solid rgba(89, 224, 156, 0.3);
+  border-radius: 999px;
+  color: #73e8ad;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.review-event.is-running .review-event-state {
+  border-color: rgba(255, 196, 72, 0.48);
+  color: #ffd36f;
 }
 
 .review-event-copy strong {
@@ -790,6 +816,24 @@ h1 {
   color: var(--muted);
   font-size: 10px;
   white-space: normal;
+}
+
+.review-summary .review-summary-state.is-running,
+.status-copy.is-running {
+  border-color: rgba(255, 196, 72, 0.5);
+  color: #ffd36f;
+}
+
+.review-summary .review-summary-state.is-completed,
+.status-copy.is-completed {
+  border-color: rgba(89, 224, 156, 0.4);
+  color: #73e8ad;
+}
+
+.review-summary .review-summary-state.is-failed,
+.status-copy.is-failed {
+  border-color: rgba(255, 88, 112, 0.46);
+  color: #ff8295;
 }
 
 .review-drawer-card {

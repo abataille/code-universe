@@ -163,7 +163,8 @@ const state = {
   reviewDismissedId: null,
   reviewReplayIndex: null,
   reviewReplayPlaying: false,
-  reviewReplayTimer: null
+  reviewReplayTimer: null,
+  applyingReviewFindings: false
 };
 
 const scene = new THREE.Scene();
@@ -1837,14 +1838,27 @@ async function applyReviewFindings() {
   if (!canApplyReviewFindings(sourceReview)) {
     throw new Error("Only completed inspect-only findings can start a fix review.");
   }
-  const confirmed = window.confirm("Start an Inspect and fix review from these findings? Codex may edit source files.");
-  if (!confirmed) return;
-  closeContentDrawer();
-  await startBehaviorReview({
-    mode: "fix",
-    title: `Apply findings: ${sourceReview.title}`,
-    behavior: sourceReview.behavior || sourceReview.title,
-    parentReviewId: sourceReview.id
+  if (state.applyingReviewFindings) return;
+  state.applyingReviewFindings = true;
+  setApplyFindingsBusy(true);
+  try {
+    await startBehaviorReview({
+      mode: "fix",
+      title: `Apply findings: ${sourceReview.title}`,
+      behavior: sourceReview.behavior || sourceReview.title,
+      parentReviewId: sourceReview.id
+    });
+    closeContentDrawer();
+  } finally {
+    state.applyingReviewFindings = false;
+    setApplyFindingsBusy(false);
+  }
+}
+
+function setApplyFindingsBusy(busy) {
+  document.querySelectorAll("[data-apply-review-findings], #contentDrawerApplyFindingsButton").forEach((button) => {
+    button.disabled = busy;
+    button.textContent = busy ? "Starting fix…" : "Apply findings";
   });
 }
 
@@ -2219,6 +2233,8 @@ function renderReviewTimeline() {
     reviewReplayButton.disabled = true;
     reviewReplayButton.textContent = "Replay";
     reviewTimelineTitle.textContent = "No active review";
+    reviewStatus.classList.remove("is-running", "is-completed", "is-failed");
+    reviewTimeline.classList.remove("is-running", "is-completed", "is-failed");
     reviewTimeline.innerHTML = "<p>Start or import a review to see Codex activity on the city.</p>";
     reviewStatus.textContent = "No review overlay is active.";
     return;
@@ -2226,6 +2242,9 @@ function renderReviewTimeline() {
 
   const mappedCount = state.reviewEvents.filter((event) => event.resolvedNodeId).length;
   const codexStatus = state.review.codex?.status;
+  const reviewRunning = ["starting", "running"].includes(codexStatus) || state.review.status === "running";
+  const reviewCompleted = codexStatus === "completed" || state.review.status === "completed";
+  const reviewFailed = codexStatus === "failed" || state.review.status === "failed";
   const usage = codexUsageBreakdown(state.review.codex?.usage);
   const replaying = state.reviewReplayIndex !== null;
   const replayComplete = replaying && state.reviewReplayIndex >= state.reviewEvents.length;
@@ -2238,23 +2257,33 @@ function renderReviewTimeline() {
   const rawEventCount = state.review.events.length;
   const replayStatus = replaying ? ` · replay ${replayProgress}${state.reviewReplayPlaying ? "" : replayComplete ? " complete" : " paused"}` : "";
   reviewStatus.textContent = `${codexStatus ? `Codex ${codexStatus}` : state.review.status} · ${state.reviewEvents.length} useful events · ${mappedCount} mapped${usageStatus}${replayStatus}`;
+  reviewStatus.classList.toggle("is-running", reviewRunning);
+  reviewStatus.classList.toggle("is-completed", reviewCompleted);
+  reviewStatus.classList.toggle("is-failed", reviewFailed);
+  reviewTimeline.classList.toggle("is-running", reviewRunning);
+  reviewTimeline.classList.toggle("is-completed", reviewCompleted);
+  reviewTimeline.classList.toggle("is-failed", reviewFailed);
   const replayWindowStart = Math.max(0, state.reviewReplayIndex - 5);
   const visibleEvents = replaying && !replayComplete
     ? state.reviewEvents.slice(replayWindowStart, replayWindowStart + 40)
     : state.reviewEvents;
+  const orderedVisibleEvents = [...visibleEvents].reverse();
   const activeEvents = activeReviewEvents();
   const finalResult = (!replaying || activeEvents.some((event) => event.kind === "conclusion")) ? reviewFinalResult() : "";
   const selectedEvent = state.reviewEvents.find((event) => event.id === state.selectedReviewEventId);
   const gitDiff = state.review.git?.diff;
-  const items = visibleEvents.map((event) => {
+  const items = orderedVisibleEvents.map((event) => {
     const eventIndex = state.reviewEvents.indexOf(event);
     const future = replaying && eventIndex >= state.reviewReplayIndex;
+    const running = !future && ((reviewRunning && eventIndex === activeEvents.length - 1) || (state.reviewReplayPlaying && event.id === state.selectedReviewEventId));
+    const completed = !future && !running;
     const location = event.file ? `${event.file}${event.line ? `:${event.line}` : ""}` : event.outcome || "review event";
     const summary = event.kind === "conclusion" && finalResult ? "Final review result" : event.summary;
     return `
-      <button class="review-event ${event.kind === "conclusion" ? "is-conclusion" : ""} ${future ? "is-future" : ""} ${event.id === state.selectedReviewEventId ? "is-active" : ""}" type="button" data-review-event-id="${escapeHtml(event.id)}" style="--review-color:${reviewColorCss(event)}">
+      <button class="review-event ${event.kind === "conclusion" ? "is-conclusion" : ""} ${future ? "is-future" : ""} ${running ? "is-running" : ""} ${completed ? "is-completed" : ""} ${event.id === state.selectedReviewEventId ? "is-active" : ""}" type="button" data-review-event-id="${escapeHtml(event.id)}" style="--review-color:${reviewColorCss(event)}">
         <span class="review-event-index">${event.sequence}</span>
         <span class="review-event-copy"><strong>${escapeHtml(summary)}</strong><span>${event.source === "mcp" ? `MCP${event.tool ? ` · ${escapeHtml(event.tool)}` : ""} · ` : ""}${escapeHtml(event.kind)} · ${escapeHtml(location)}${event.kind === "edit" && reviewDiffForEvent(event) ? " · click for diff" : ""}${event.resolvedNodeId ? "" : " · unmapped"}</span></span>
+        ${future ? "" : `<span class="review-event-state">${running ? "Running" : "Completed"}</span>`}
       </button>`;
   }).join("");
   const gitChanges = state.review.git?.after?.changes || state.review.git?.before?.changes || [];
@@ -2268,7 +2297,7 @@ function renderReviewTimeline() {
       ${state.review.codex?.model ? `<span>${escapeHtml(state.review.codex.model)}</span>` : ""}
       ${state.review.codex?.reasoningEffort ? `<span>${escapeHtml(state.review.codex.reasoningEffort)} reasoning</span>` : ""}
       ${state.review.codex?.mode ? `<span>${state.review.codex.mode === "fix" ? "edits allowed" : "inspect only"}</span>` : ""}
-      <span>${escapeHtml(state.review.status)}</span>
+      <span class="review-summary-state ${reviewRunning ? "is-running" : reviewCompleted ? "is-completed" : reviewFailed ? "is-failed" : ""}">${reviewRunning ? "Running" : reviewCompleted ? "Completed" : reviewFailed ? "Failed" : escapeHtml(state.review.status)}</span>
     </div>
     ${selectedEvent?.kind === "edit" ? renderReviewDiffSummary(selectedEvent) : ""}
     ${finalResult ? renderReviewResultSummary(finalResult) : ""}
