@@ -10,6 +10,9 @@ import { promisify } from "node:util";
 import { scanSwiftFolder } from "./scripts/scan-swift-core.js";
 import { enrichGraphWithXcodeIndex } from "./scripts/scan-xcode-index.js";
 import { executeMcpGraphTool, mcpGraphToolNames, mcpTraceEvent } from "./lib/mcp-queries.js";
+import { scanProject, profileForScanner, scannerForProfile } from "./lib/projects/scan-project.js";
+import { discoverProjectFiles, isSupportedSourceFile } from "./lib/projects/discover-files.js";
+import { openSourceInEditor } from "./lib/editors/registry.js";
 
 const execFileAsync = promisify(execFile);
 const port = Number(process.env.PORT || 4173);
@@ -199,17 +202,16 @@ async function scanResolvedPath(inputPath, scanner) {
   const inputEntry = await stat(resolvedInput);
   const projectRoot = await resolveProjectRoot(resolvedInput);
   sourceFileIndexCache.delete(resolve(projectRoot));
-  const selectedSwiftFile = !inputEntry.isDirectory() && resolvedInput.endsWith(".swift")
+  const selectedFile = !inputEntry.isDirectory() && isSupportedSourceFile(resolvedInput)
     ? relative(projectRoot, resolvedInput)
     : null;
   const resolvedScanner = resolveScannerMode(scanner);
-  const { graph, diagnostics } = resolvedScanner === "xcode-index"
-    ? await scanSwiftFolderWithXcodeIndex(projectRoot)
-    : resolvedScanner === "merged"
-      ? await scanSwiftFolderMerged(projectRoot)
-      : resolvedScanner === "swiftsyntax"
-        ? await scanSwiftFolderWithSwiftSyntax(projectRoot)
-        : await scanSwiftFolder(projectRoot);
+  const profile = profileForScanner(resolvedScanner);
+  const { graph, diagnostics } = await scanProject(projectRoot, {
+    profile,
+    legacyScanner: resolvedScanner,
+    scanSwift: scanSwiftForAdapter
+  });
   const cachedGraph = {
     ...graph,
     project: {
@@ -228,11 +230,11 @@ async function scanResolvedPath(inputPath, scanner) {
     }
   });
 
-  const displayedGraph = selectedSwiftFile
-    ? graphForSelectedSwiftFile(graph, selectedSwiftFile)
+  const displayedGraph = selectedFile
+    ? graphForSelectedFile(graph, selectedFile)
     : graph;
-  const displayedDiagnostics = selectedSwiftFile
-    ? diagnosticsForGraph(diagnostics, displayedGraph, selectedSwiftFile)
+  const displayedDiagnostics = selectedFile
+    ? diagnosticsForGraph(diagnostics, displayedGraph, selectedFile)
     : diagnostics;
 
   return {
@@ -242,7 +244,7 @@ async function scanResolvedPath(inputPath, scanner) {
         ...displayedGraph.project,
         pickedPath: resolvedInput,
         sourceRoot: projectRoot,
-        selectedFile: selectedSwiftFile
+        selectedFile
       }
     },
     diagnostics: {
@@ -250,12 +252,12 @@ async function scanResolvedPath(inputPath, scanner) {
       scanner: resolvedScanner,
       pickedPath: resolvedInput,
       sourceRoot: projectRoot,
-      selectedFile: selectedSwiftFile
+      selectedFile
     }
   };
 }
 
-function graphForSelectedSwiftFile(graph, selectedFile) {
+function graphForSelectedFile(graph, selectedFile) {
   const fileNode = graph.nodes.find((node) => node.kind === "file" && node.file === selectedFile);
   if (!fileNode) return graph;
 
@@ -287,14 +289,16 @@ function diagnosticsForGraph(diagnostics, graph, selectedFile) {
   return {
     ...diagnostics,
     focusedFile: selectedFile,
+    fullFileCount: diagnostics.filesScanned,
     fullSwiftFileCount: diagnostics.swiftFileCount,
     fullTypeCount: diagnostics.typeCount,
     fullFunctionCount: diagnostics.functionCount,
     fullPropertyCount: diagnostics.propertyCount,
-    swiftFileCount: graph.nodes.filter((node) => node.kind === "file").length,
-    typeCount: graph.nodes.filter((node) => node.id.startsWith("type:")).length,
-    functionCount: graph.nodes.filter((node) => node.kind === "function").length,
-    propertyCount: graph.nodes.filter((node) => node.kind === "property").length
+    filesScanned: graph.nodes.filter((node) => node.kind === "file").length,
+    swiftFileCount: graph.nodes.filter((node) => node.kind === "file" && node.language === "swift").length,
+    typeCount: graph.nodes.filter((node) => node.category === "type" || node.category === "component").length,
+    functionCount: graph.nodes.filter((node) => node.category === "callable").length,
+    propertyCount: graph.nodes.filter((node) => node.category === "data").length
   };
 }
 
@@ -439,13 +443,34 @@ async function compareParsers(inputPath) {
 }
 
 function resolveScannerMode(scanner) {
-  if (scanner === "xcode-index" || scanner === "merged" || scanner === "swiftsyntax" || scanner === "heuristic") {
+  if (["fast", "balanced", "accurate", "indexed"].includes(scanner)) {
+    return scannerForProfile(scanner);
+  }
+  if (["xcode-index", "merged", "swiftsyntax", "heuristic"].includes(scanner)) {
     return scanner;
   }
-  if (scannerMode === "xcode-index" || scannerMode === "merged" || scannerMode === "swiftsyntax" || scannerMode === "heuristic") {
+  if (["xcode-index", "merged", "swiftsyntax", "heuristic"].includes(scannerMode)) {
     return scannerMode;
   }
   return "merged";
+}
+
+async function scanSwiftForAdapter(projectRoot, profile) {
+  const scanner = scannerForProfile(profile);
+  const result = scanner === "xcode-index"
+    ? await scanSwiftFolderWithXcodeIndex(projectRoot)
+    : scanner === "merged"
+      ? await scanSwiftFolderMerged(projectRoot)
+      : scanner === "swiftsyntax"
+        ? await scanSwiftFolderWithSwiftSyntax(projectRoot)
+        : await scanSwiftFolder(projectRoot);
+  return {
+    ...result,
+    diagnostics: {
+      ...result.diagnostics,
+      scanner
+    }
+  };
 }
 
 async function scanSwiftFolderWithXcodeIndex(projectRoot) {
@@ -704,23 +729,27 @@ function countBy(items, keyForItem) {
 
 async function scanSwiftFolderWithSwiftSyntax(projectRoot) {
   const outputDir = resolve(".swift-cache/server");
-  const outputPath = join(outputDir, "graph.json");
+  const outputPath = join(outputDir, `graph-${randomUUID()}.json`);
   await mkdir(outputDir, { recursive: true });
-  await execFileAsync("node", ["scripts/scan-swift-syntax.js", projectRoot, outputPath], {
-    timeout: swiftSyntaxTimeoutMs,
-    maxBuffer: 1024 * 1024 * 12,
-    env: {
-      ...process.env,
-      CLANG_MODULE_CACHE_PATH: resolve(".swift-cache/clang-module-cache")
-    }
-  }).catch((error) => {
-    if (error.killed || error.signal === "SIGTERM" || error.code === "ETIMEDOUT") {
-      throw new Error(`timed out after ${Math.round(swiftSyntaxTimeoutMs / 1000)}s`);
-    }
-    throw error;
-  });
-
-  const graph = JSON.parse(await readFile(outputPath, "utf8"));
+  let graph;
+  try {
+    await execFileAsync("node", ["scripts/scan-swift-syntax.js", projectRoot, outputPath], {
+      timeout: swiftSyntaxTimeoutMs,
+      maxBuffer: 1024 * 1024 * 12,
+      env: {
+        ...process.env,
+        CLANG_MODULE_CACHE_PATH: resolve(".swift-cache/clang-module-cache")
+      }
+    }).catch((error) => {
+      if (error.killed || error.signal === "SIGTERM" || error.code === "ETIMEDOUT") {
+        throw new Error(`timed out after ${Math.round(swiftSyntaxTimeoutMs / 1000)}s`);
+      }
+      throw error;
+    });
+    graph = JSON.parse(await readFile(outputPath, "utf8"));
+  } finally {
+    await rm(outputPath, { force: true });
+  }
   return {
     graph,
     diagnostics: {
@@ -756,11 +785,20 @@ async function readSourceSnippet(body) {
 
 async function openSourceInXcode(body) {
   const { resolvedFile, relativeFile, targetLine } = await resolveSourceLocation(body);
-  await execFileAsync("xed", ["--line", String(targetLine), resolvedFile]);
+  const project = universeScanCache.get(resolve(body.sourceRoot))?.graph?.project || null;
+  const opened = await openSourceInEditor({
+    file: resolvedFile,
+    line: targetLine,
+    column: Number(body?.column || 1)
+  }, project, {
+    editor: body?.editor
+  });
   return {
     opened: true,
     file: relativeFile,
-    line: targetLine
+    line: targetLine,
+    editor: opened.editor,
+    editorName: opened.displayName
   };
 }
 
@@ -1049,7 +1087,7 @@ function reviewEventsFromCodexItem(item, sourceRoot) {
   const outcome = failed ? "failed" : "passed";
 
   if (["file_change", "file_changes"].includes(item.type)) {
-    return swiftFilesInText(JSON.stringify(item), sourceRoot)
+    return sourceFilesInText(JSON.stringify(item), sourceRoot)
       .map((file) => ({ kind: "edit", outcome: "changed", file: file.file, line: file.line, summary: `Changed ${basename(file.file)}` }));
   }
   if (item.type !== "command_execution") return [];
@@ -1061,7 +1099,7 @@ function reviewEventsFromCodexItem(item, sourceRoot) {
   if (isSourceInventoryCommand(command)) {
     return [{ kind: "search", outcome: failed ? "failed" : "info", summary: "Indexed project source files", command }];
   }
-  const files = swiftFilesInText(command, sourceRoot);
+  const files = sourceFilesInText(command, sourceRoot);
   if (kind === "edit") {
     return files.map((file) => ({ kind, outcome: "changed", file: file.file, line: file.line, summary: `Changed ${basename(file.file)}`, command }));
   }
@@ -1080,7 +1118,7 @@ function classifyCodexCommand(command) {
 }
 
 function isSourceInventoryCommand(command) {
-  return /(?:rg\s+--files|find\b[^\n]*(?:-name|-path)[^\n]*\*\.swift)/i.test(command);
+  return /(?:rg\s+--files|find\b[^\n]*(?:-name|-path)[^\n]*\*\.(?:swift|[cm]?[jt]sx?|html?|css))/i.test(command);
 }
 
 function summarizeCodexCommand(command, kind, outcome) {
@@ -1094,16 +1132,16 @@ function summarizeCodexCommand(command, kind, outcome) {
   return `Build ${outcome}`;
 }
 
-function swiftFilesInText(text, sourceRoot) {
+function sourceFilesInText(text, sourceRoot) {
   const matches = [];
   const seen = new Set();
-  const pattern = /((?:\/?[A-Za-z0-9_@+.-]+\/)*[A-Za-z0-9_@+.-]+\.swift)(?::(\d+))?/g;
+  const pattern = /((?:\/?[A-Za-z0-9_@+.-]+\/)*[A-Za-z0-9_@+.-]+\.(?:swift|mjs|cjs|jsx|mts|cts|tsx|js|ts|html?|css))(?::(\d+))?(?::(\d+))?/gi;
   for (const match of String(text || "").matchAll(pattern)) {
     const file = normalizeTraceSourceFile(match[1], sourceRoot);
     const key = `${file}:${match[2] || ""}`;
     if (!file || seen.has(key)) continue;
     seen.add(key);
-    matches.push({ file, line: match[2] ? Number(match[2]) : null });
+    matches.push({ file, line: match[2] ? Number(match[2]) : null, column: match[3] ? Number(match[3]) : null });
     if (matches.length >= 8) break;
   }
   return matches;
@@ -1176,7 +1214,7 @@ async function completeCodexReview(reviewId, exitCode, explicitError = null) {
   const failed = exitCode !== 0 || review.codex?.status === "failed";
   const finalMessage = review.codex?.lastMessage;
   if (finalMessage) {
-    const suspectedFiles = swiftFilesInText(finalMessage, review.sourceRoot);
+    const suspectedFiles = sourceFilesInText(finalMessage, review.sourceRoot);
     appendNormalizedReviewEvents(review, suspectedFiles.map((file) => ({
       kind: "suspect",
       file: file.file,
@@ -1478,7 +1516,7 @@ async function captureGitReviewBaseline(sourceRoot) {
 
 async function captureSourceReviewBaseline(sourceRoot, reviewId) {
   const baselineRoot = sourceBaselineRoot(reviewId);
-  const files = (await listSwiftSourceFiles(sourceRoot))
+  const files = (await listProjectSourceFiles(sourceRoot))
     .map((file) => ({ absolute: file, relative: normalize(relative(sourceRoot, file)).replaceAll("\\", "/") }))
     .filter((file) => file.relative && !file.relative.startsWith(".."))
     .sort((left, right) => left.relative.localeCompare(right.relative));
@@ -1540,7 +1578,7 @@ async function captureSourceReviewDiff(review) {
   const editedFiles = [...new Set(review.events
     .filter((event) => event.kind === "edit" && event.file)
     .map((event) => normalize(event.file).replaceAll("\\", "/"))
-    .filter((file) => file && !file.startsWith("..") && file.endsWith(".swift")))]
+    .filter((file) => file && !file.startsWith("..") && isSupportedSourceFile(file)))]
     .slice(0, 40);
   const patches = [];
   for (const file of editedFiles) {
@@ -1621,7 +1659,7 @@ function sourceBaselineRoot(reviewId) {
 async function patchesForNewUntrackedFiles(sourceRoot, untrackedBefore) {
   const { stdout } = await execFileAsync("git", ["ls-files", "--others", "--exclude-standard"], { cwd: sourceRoot });
   const newFiles = stdout.trim().split("\n")
-    .filter((file) => file && !untrackedBefore.has(file) && file.endsWith(".swift"))
+    .filter((file) => file && !untrackedBefore.has(file) && isSupportedSourceFile(file))
     .slice(0, 30);
   const patches = [];
   for (const file of newFiles) {
@@ -1710,7 +1748,7 @@ async function resolveSourceFile(resolvedRoot, file) {
     return directFile;
   }
 
-  const sourceFiles = await swiftFileIndexForRoot(resolvedRoot);
+  const sourceFiles = await sourceFileIndexForRoot(resolvedRoot);
   const normalizedFile = normalize(file);
   const suffixMatches = sourceFiles.filter((candidate) => {
     const candidateRelative = normalize(relative(resolvedRoot, candidate));
@@ -1726,40 +1764,22 @@ async function resolveSourceFile(resolvedRoot, file) {
       .slice(0, 6)
       .map((candidate) => relative(resolvedRoot, candidate))
       .join(", ");
-    throw new Error(`Multiple Swift files named ${basename(file)}. Matching files: ${choices}${basenameMatches.length > 6 ? ", ..." : ""}`);
+    throw new Error(`Multiple source files named ${basename(file)}. Matching files: ${choices}${basenameMatches.length > 6 ? ", ..." : ""}`);
   }
 
   throw new Error(`Source file not found: ${file}`);
 }
 
-async function swiftFileIndexForRoot(resolvedRoot) {
+async function sourceFileIndexForRoot(resolvedRoot) {
   const cached = sourceFileIndexCache.get(resolvedRoot);
   if (cached) return cached;
-  const files = await listSwiftSourceFiles(resolvedRoot);
+  const files = await listProjectSourceFiles(resolvedRoot);
   sourceFileIndexCache.set(resolvedRoot, files);
   return files;
 }
 
-async function listSwiftSourceFiles(directory) {
-  let entries = [];
-  try {
-    entries = await readdir(directory, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const files = [];
-
-  for (const entry of entries) {
-    if (entry.name === ".git" || entry.name === ".build" || entry.name === "DerivedData" || entry.name === "build") continue;
-    const fullPath = join(directory, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...await listSwiftSourceFiles(fullPath));
-    } else if (entry.isFile() && entry.name.endsWith(".swift")) {
-      files.push(fullPath);
-    }
-  }
-
-  return files;
+async function listProjectSourceFiles(directory) {
+  return (await discoverProjectFiles(directory)).map((file) => file.absolute);
 }
 
 async function isReadableFile(path) {
@@ -1791,7 +1811,13 @@ async function resolveProjectRoot(inputPath) {
 
 async function showNativeProjectPicker() {
   const script = `
-set chosenItem to choose file with prompt "Choose an .xcodeproj, project.pbxproj, or Swift file"
+set choice to choose from list {"Project folder", "Source file"} with title "Code Universe" with prompt "What would you like to scan?" default items {"Project folder"}
+if choice is false then error number -128
+if item 1 of choice is "Project folder" then
+  set chosenItem to choose folder with prompt "Choose a project folder"
+else
+  set chosenItem to choose file with prompt "Choose a Swift, JavaScript, TypeScript, HTML, or CSS source file"
+end if
 POSIX path of chosenItem
 `;
 

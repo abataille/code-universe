@@ -1,78 +1,126 @@
 # Code Universe Graph Schema
 
-Code Universe uses a small JSON graph that can later move to SQLite without changing the viewer contract.
+Code Universe uses a language-neutral JSON graph. Schema v2 adds universal categories, languages, ranges, qualified names, adapter metadata, and provenance while retaining the v1 `kind`, `file`, and `line` fields.
 
-## Nodes
+Schema v1 graphs remain loadable and are normalized in the viewer and server.
 
-Each node describes a source-code object.
+## Project
 
 ```json
 {
-  "id": "type:ContentView",
-  "kind": "swiftui_view",
-  "name": "ContentView",
-  "file": "ContentView.swift",
-  "line": 3,
-  "metrics": {
-    "methods": 0,
-    "properties": 2
+  "schemaVersion": 2,
+  "project": {
+    "name": "Example",
+    "scannedAt": "2026-07-25T12:00:00.000Z",
+    "sourceRoot": "/projects/example",
+    "primaryLanguage": "typescript",
+    "languages": [
+      { "id": "typescript", "fileCount": 12, "confidence": 0.95 },
+      { "id": "html", "fileCount": 2, "confidence": 0.7 },
+      { "id": "css", "fileCount": 3, "confidence": 0.75 }
+    ],
+    "projectKind": "typescript",
+    "scanProfile": "balanced",
+    "adapters": [
+      { "id": "typescript", "version": 1, "profile": "balanced" },
+      { "id": "web-assets", "version": 1, "profile": "balanced" }
+    ]
   }
 }
 ```
 
-Supported node kinds:
+Mixed-language projects run every applicable adapter. `primaryLanguage` is presentation metadata, not an instruction to exclude other languages.
+
+## Nodes
+
+```json
+{
+  "id": "symbol:typescript:src/app.ts#App.render:method:12",
+  "category": "callable",
+  "kind": "method",
+  "language": "typescript",
+  "name": "render",
+  "qualifiedName": "App.render",
+  "file": "src/app.ts",
+  "line": 12,
+  "column": 3,
+  "location": {
+    "file": "src/app.ts",
+    "range": {
+      "start": { "line": 12, "column": 3 },
+      "end": { "line": 18, "column": 4 }
+    }
+  },
+  "metrics": {
+    "lines": 7,
+    "complexity": 2
+  },
+  "attributes": {},
+  "provenance": {
+    "adapter": "typescript",
+    "source": "typescript-compiler",
+    "confidence": 0.95,
+    "inferred": false
+  }
+}
+```
+
+Neutral categories:
 
 - `repository`
 - `directory`
 - `file`
-- `swiftui_view`
-- `class`
-- `struct`
-- `enum`
-- `protocol`
-- `function`
-- `property`
-- `service`
-- `model`
+- `module`
+- `component`
+- `type`
+- `callable`
+- `data`
+- `markup`
+- `style`
+
+`kind` is extensible and language-specific. Current kinds include the existing Swift kinds plus `react_component`, `interface`, `type_alias`, `method`, `constructor`, `variable`, `html_document`, `html_element`, `stylesheet`, `css_rule`, and `keyframes`.
 
 ## Edges
 
-Edges describe relationships between nodes.
-
 ```json
 {
-  "from": "type:ContentView",
-  "to": "type:DashboardView",
-  "kind": "uses",
-  "source": "heuristic",
-  "confidence": 0.55,
-  "inferred": true
+  "from": "symbol:css:styles.css##app:1",
+  "to": "symbol:html:index.html#main#app:8",
+  "kind": "styles",
+  "source": "css-selector",
+  "confidence": 0.98,
+  "inferred": false,
+  "provenance": {
+    "adapter": null,
+    "source": "css-selector",
+    "confidence": 0.98,
+    "inferred": false
+  }
 }
 ```
 
-Supported edge kinds:
+Supported relationships include:
 
 - `contains`
 - `defines`
 - `imports`
+- `exports`
 - `uses`
 - `calls`
+- `extends`
+- `implements`
 - `conforms_to`
 - `owns_state`
-- `depends_on`
+- `uses_member`
+- `loads`
+- `styles`
 
-Merged parser output may add optional provenance fields:
+The legacy Swift relationship names remain supported. Future migrations may normalize `conforms_to` to `implements` at query time, but existing Swift graph output is intentionally preserved.
 
-- `source`: `swiftsyntax`, `heuristic`, or `xcode-index`
-- `confidence`: approximate scanner confidence
-- `inferred`: `true` for heuristic-only hints layered onto SwiftSyntax output
-- `indexResolved`: `true` for links added from Xcode index records
+## Compatibility
 
-## Next Schema Steps
-
-- Add stable `qualifiedName` values.
-- Add Xcode target membership.
-- Add source ranges, not only start lines.
-- Add separate `callsite` nodes for precise call graph inspection.
-- Add graph snapshot metadata for comparisons over time.
-- Keep the SwiftSyntax scanner output compatible with this schema while adding richer optional fields.
+- Existing schema-v1 files continue loading.
+- Existing Swift node IDs and kinds are unchanged.
+- `file` and `line` remain populated alongside the v2 location range.
+- Unknown kinds receive a neutral category and safe viewer geometry.
+- Schema validation rejects duplicate IDs, dangling edges, and project-escaping source paths.

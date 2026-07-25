@@ -16,11 +16,13 @@ const nonGitRoot = await mkdtemp(join(tmpdir(), "code-universe-source-snapshot-t
 await writeFile(join(codexHome, "config.toml"), "model = \"gpt-5.6-sol\"\nmodel_reasoning_effort = \"high\"\n");
 await writeFile(join(patchRoot, "Feature.swift"), "struct Feature {\n    let value = 1\n}\n");
 await writeFile(join(patchRoot, "Other.swift"), "struct Other {}\n");
+await writeFile(join(patchRoot, "Feature.ts"), "export const value = 1;\n");
 await writeFile(join(nonGitRoot, "Standalone.swift"), "struct Standalone {\n    let value = 1\n}\n");
+await writeFile(join(nonGitRoot, "index.html"), "<main id=\"app\">Before</main>\n");
 await writeFile(join(dataRoot, "Outside.swift"), "struct Outside {}\n");
 await symlink(join(dataRoot, "Outside.swift"), join(patchRoot, "Escape.swift"));
 await execFileAsync("git", ["init", "-q"], { cwd: patchRoot });
-await execFileAsync("git", ["add", "Feature.swift", "Other.swift"], { cwd: patchRoot });
+await execFileAsync("git", ["add", "Feature.swift", "Other.swift", "Feature.ts"], { cwd: patchRoot });
 await execFileAsync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit", "-qm", "Initial fixture"], { cwd: patchRoot });
 const server = spawn(process.execPath, ["server.js"], {
   cwd: repositoryRoot,
@@ -53,6 +55,13 @@ try {
   assert(source.line === 3 && source.startLine === 1, "source endpoint should retain the selected line");
   assert(source.code.length >= 19, "full source view should return the complete Swift file");
   assert(source.code.some((line) => line.content.includes("struct AnalyticsService")), "full source view should include code beyond the selected symbol");
+  const webSource = await post("/api/source", {
+    sourceRoot: patchRoot,
+    file: "Feature.ts",
+    line: 1,
+    fullFile: true
+  });
+  assert(webSource.code[0].content.includes("export const value"), "source endpoint should resolve TypeScript files");
   const escapedSourceResponse = await fetch(`http://127.0.0.1:${port}/api/source`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -182,9 +191,14 @@ try {
     mode: "fix"
   });
   await writeFile(join(nonGitRoot, "Standalone.swift"), "struct Standalone {\n    let value = 2\n    let enabled = true\n}\n");
+  await writeFile(join(nonGitRoot, "index.html"), "<main id=\"app\">After</main>\n");
   await post("/api/reviews/event", {
     reviewId: snapshotReview.review.id,
     event: { kind: "edit", file: "Standalone.swift", line: 2, summary: "Changed standalone feature" }
+  });
+  await post("/api/reviews/event", {
+    reviewId: snapshotReview.review.id,
+    event: { kind: "edit", file: "index.html", line: 1, summary: "Changed web entry point" }
   });
   const snapshotPatched = await post("/api/reviews/finish", {
     reviewId: snapshotReview.review.id,
@@ -192,9 +206,11 @@ try {
     summary: "Snapshot patch captured"
   });
   const snapshotDiff = snapshotPatched.review.git.diff?.files?.find((file) => file.file === "Standalone.swift");
+  const htmlSnapshotDiff = snapshotPatched.review.git.diff?.files?.find((file) => file.file === "index.html");
   assert(snapshotPatched.review.git.diff?.source === "snapshot", "non-Git fix reviews should use the source snapshot fallback");
   assert(snapshotDiff, "source snapshots should produce a visible file-level patch");
   assert(snapshotDiff.patch.includes("-    let value = 1") && snapshotDiff.patch.includes("+    let value = 2"), "snapshot patches should preserve changed source lines");
+  assert(htmlSnapshotDiff?.patch.includes("-<main id=\"app\">Before</main>") && htmlSnapshotDiff.patch.includes("+<main id=\"app\">After</main>"), "source snapshots should include HTML changes");
 
   const legacyImport = await post("/api/reviews/import", {
     sourceRoot: patchRoot,

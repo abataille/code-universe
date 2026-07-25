@@ -1,14 +1,16 @@
 # Architecture
 
 ```text
-Swift source folder
-  -> scripts/scan-swift.js
-  -> public/sample-graph.json
-  -> public/app.js
-  -> browser/macOS 3D explorer
+Project folder or source file
+  -> shared discovery and language detection
+  -> Swift, JavaScript/TypeScript, and HTML/CSS adapters
+  -> validated schema-v2 graph
+  -> browser/macOS 3D explorer, reviews, and MCP
 ```
 
-The app is split into scanners, a local Node server, a browser-based Three.js viewer, and a small macOS WebKit shell. Each part communicates through the same versioned graph contract so the viewer can evolve independently from scanner quality.
+The app is split into language adapters, a local Node server, a browser-based Three.js viewer, and a small macOS WebKit shell. Each part communicates through the same versioned graph contract so the viewer can evolve independently from scanner quality. The existing Swift scanners are preserved behind the Swift adapter.
+
+See `language-adapters.md` for detection, adapter, editor, and migration details.
 
 ## Current Analysis Limits
 

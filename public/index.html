@@ -13,7 +13,7 @@
           <div class="brand-mark" aria-hidden="true">⌘</div>
           <div>
             <h1>Code Universe</h1>
-            <p>Explore your Swift app as a living map</p>
+            <p>Explore any codebase as a living map</p>
           </div>
         </div>
 
@@ -26,7 +26,7 @@
 
         <section class="panel panel-accent">
           <h2>Project</h2>
-          <p class="panel-copy">Choose an Xcode project or a single Swift file. Scanning stays on this Mac.</p>
+          <p class="panel-copy">Choose a project folder or source file. Swift, JavaScript, TypeScript, HTML, and CSS stay on this Mac.</p>
           <div class="stack">
             <button id="pickProjectButton" class="button button-primary" type="button">Choose Project or File</button>
             <button id="compareParsersButton" class="button" type="button">Compare Parsers</button>
@@ -162,7 +162,7 @@
         <section class="welcome-card" aria-label="Getting started">
           <span class="eyebrow">Start here</span>
           <h2>Pick a project, then follow the bright paths.</h2>
-          <p>Use the map for structure, search for symbols, and click any object to see source, dependencies, and Xcode actions.</p>
+          <p>Use the map for structure, search for symbols, and click any object to see source, dependencies, and editor actions.</p>
         </section>
 
       </aside>
@@ -174,10 +174,10 @@
             <span id="projectMeta"></span>
           </div>
           <select id="parserSelect" class="topbar-select selection-field" aria-label="Analysis style">
-            <option value="heuristic">Fast overview</option>
-            <option value="merged">Best combined view</option>
-            <option value="swiftsyntax">Accurate Swift parse</option>
-            <option value="xcode-index">Xcode Index map</option>
+            <option value="fast">Fast overview</option>
+            <option value="balanced">Best combined view</option>
+            <option value="accurate">Accurate parse</option>
+            <option value="indexed">Indexed map</option>
           </select>
           <label class="topbar-search" aria-label="Search code object">
             <span>Search</span>
@@ -280,8 +280,8 @@
               <dl class="stats">
                 <div><dt>Nodes</dt><dd id="nodeCount">0</dd></div>
                 <div><dt>Edges</dt><dd id="edgeCount">0</dd></div>
-                <div><dt>SwiftUI Views</dt><dd id="viewCount">0</dd></div>
-                <div><dt>Services</dt><dd id="serviceCount">0</dd></div>
+                <div><dt>Components</dt><dd id="viewCount">0</dd></div>
+                <div><dt>Types</dt><dd id="serviceCount">0</dd></div>
               </dl>
             </section>
 
@@ -308,7 +308,7 @@
           <div class="content-drawer-actions">
             <button id="contentDrawerApplyFindingsButton" class="button" type="button" hidden>Apply findings</button>
             <button id="contentDrawerCopyButton" class="button" type="button" hidden>Copy</button>
-            <button id="contentDrawerXcodeButton" class="button" type="button" hidden>Open in Xcode</button>
+            <button id="contentDrawerXcodeButton" class="button" type="button" hidden>Open in Editor</button>
             <button id="contentDrawerCloseButton" class="button button-primary" type="button">Close</button>
           </div>
         </header>

@@ -12,8 +12,12 @@ const fileChildGap = 4;
 
 function buildLayout(graph) {
   const files = graph.nodes.filter((node) => node.kind === "file");
-  const types = graph.nodes.filter((node) => !["repository", "file", "module", "function", "property"].includes(node.kind));
-  const functions = graph.nodes.filter((node) => node.kind === "function" || node.kind === "property");
+  const types = graph.nodes.filter((node) =>
+    ["component", "type"].includes(nodeCategory(node)) || ["html_document", "stylesheet"].includes(node.kind)
+  );
+  const functions = graph.nodes.filter((node) =>
+    ["callable", "data"].includes(nodeCategory(node)) || ["html_element", "css_rule", "keyframes"].includes(node.kind)
+  );
   const modules = graph.nodes.filter((node) => node.kind === "module");
   const edgesByFrom = groupEdgesByFrom(graph.edges);
   const definesByFrom = groupEdgesByFrom(graph.edges, "defines");
@@ -273,7 +277,7 @@ function dimensionsForNode(node, edgesByFrom, allNodes) {
     const footprint = clamp(44 + Math.sqrt(city.loc) * 8.5, 44, 420);
     return { width: Math.round(footprint), height: 3, depth: Math.round(Math.max(28, footprint * 0.7)) };
   }
-  if (node.kind === "property") {
+  if (node.kind === "property" || node.kind === "variable") {
     const diameter = clamp(10 + Math.sqrt(city.volumeScore) * 1.8, 10, 58);
     return { width: Math.round(diameter), height: Math.round(diameter), depth: Math.round(diameter) };
   }
@@ -307,8 +311,8 @@ function cityMetricsForNode(node, edgesByFrom, allNodes) {
 }
 
 function normalizedComplexityScore(complexity, kind) {
-  if (kind === "property") return clamp(complexity / 8, 0, 1);
-  if (kind === "function") return clamp(complexity / 28, 0, 1);
+  if (kind === "property" || kind === "variable") return clamp(complexity / 8, 0, 1);
+  if (["function", "method", "constructor"].includes(kind)) return clamp(complexity / 28, 0, 1);
   return clamp(complexity / 42, 0, 1);
 }
 
@@ -317,17 +321,17 @@ function axisMetricsForNode(node, edgesByFrom, allNodes) {
   const definedMemberIds = (edgesByFrom.get(node.id) || []).filter((edge) => edge.kind === "defines").map((edge) => edge.to);
   const nodeById = new Map(allNodes.map((item) => [item.id, item]));
   const definedMembers = definedMemberIds.map((id) => nodeById.get(id)).filter(Boolean);
-  const definedFunctions = definedMembers.filter((member) => member.kind === "function").length;
-  const definedProperties = definedMembers.filter((member) => member.kind === "property").length;
+  const definedFunctions = definedMembers.filter((member) => nodeCategory(member) === "callable").length;
+  const definedProperties = definedMembers.filter((member) => nodeCategory(member) === "data").length;
   const memberLines = definedMembers.reduce((sum, member) => sum + (member.metrics?.lines || 1), 0);
   const fileLines = allNodes.find((candidate) => candidate.kind === "file" && candidate.file === node.file)?.metrics?.lines || 0;
   const edgeCounts = graphEdgeCountsForNode(node.id, edgesByFrom);
-  const variables = Math.max(node.kind === "property" ? 1 : 0, metrics.properties || 0, definedProperties, edgeCounts.ownedState || 0);
+  const variables = Math.max(nodeCategory(node) === "data" ? 1 : 0, metrics.properties || 0, definedProperties, edgeCounts.ownedState || 0);
   const functions = Math.max(
-    node.kind === "function" ? 1 : 0,
+    nodeCategory(node) === "callable" ? 1 : 0,
     metrics.methods || 0,
     definedFunctions,
-    node.kind === "function" ? (metrics.calls || 0) + (metrics.branches || 0) * 2 : 0
+    nodeCategory(node) === "callable" ? (metrics.calls || 0) + (metrics.branches || 0) * 2 : 0
   );
   const hasExplicitLines = Number.isFinite(metrics.lines) && metrics.lines > 0;
   let lines = hasExplicitLines ? metrics.lines : Math.max(1, memberLines || (node.kind === "file" ? fileLines || 30 : 8));
@@ -338,14 +342,14 @@ function axisMetricsForNode(node, edgesByFrom, allNodes) {
 function complexityForNode(node, edgesByFrom) {
   if (node.kind === "file") return 1;
   const edgeCounts = graphEdgeCountsForNode(node.id, edgesByFrom);
-  if (node.kind === "function") {
+  if (nodeCategory(node) === "callable") {
     const lineWeight = Math.sqrt(node.metrics?.lines || 2) * 0.42;
     const branchWeight = (node.metrics?.branches || 0) * 0.95;
     const callWeight = Math.sqrt(node.metrics?.calls || 0) * 0.5;
     const dependencyWeight = edgeCounts.outgoingUses * 0.8 + edgeCounts.memberUses * 0.65 + edgeCounts.incoming * 0.25;
     return clamp(0.9 + lineWeight + branchWeight + callWeight + dependencyWeight, 0.85, 18);
   }
-  if (node.kind === "property") return clamp(0.72 + edgeCounts.incoming * 0.45 + edgeCounts.outgoingUses * 0.35, 0.65, 5);
+  if (nodeCategory(node) === "data") return clamp(0.72 + edgeCounts.incoming * 0.45 + edgeCounts.outgoingUses * 0.35, 0.65, 5);
   if (node.kind === "module") return 0.85;
   if (node.kind === "repository") return 2.2;
   const lines = Math.max(1, node.metrics?.lines || 1);
@@ -376,13 +380,27 @@ function graphEdgeCountsForNode(nodeId, edgesByFrom) {
 function baseDimensionsForKind(kind) {
   if (kind === "repository") return { width: 72, depth: 72, height: 34 };
   if (kind === "file") return { width: 72, depth: 48, height: 3 };
-  if (kind === "swiftui_view") return { width: 34, depth: 34, height: 34 };
+  if (kind === "swiftui_view" || kind === "react_component") return { width: 34, depth: 34, height: 34 };
   if (kind === "service" || kind === "class") return { width: 32, depth: 32, height: 52 };
-  if (kind === "function") return { width: 10, depth: 10, height: 12 };
-  if (kind === "property") return { width: 8, depth: 8, height: 8 };
+  if (["function", "method", "constructor"].includes(kind)) return { width: 10, depth: 10, height: 12 };
+  if (kind === "property" || kind === "variable") return { width: 8, depth: 8, height: 8 };
   if (kind === "module") return { width: 38, depth: 38, height: 10 };
-  if (kind === "protocol") return { width: 26, depth: 26, height: 40 };
+  if (kind === "protocol" || kind === "interface") return { width: 26, depth: 26, height: 40 };
+  if (kind === "html_element" || kind === "css_rule") return { width: 24, depth: 24, height: 18 };
+  if (kind === "html_document" || kind === "stylesheet") return { width: 30, depth: 30, height: 24 };
   return { width: 30, depth: 30, height: 30 };
+}
+
+function nodeCategory(node) {
+  if (node?.category) return node.category;
+  const kind = node?.kind;
+  if (["swiftui_view", "react_component"].includes(kind)) return "component";
+  if (["function", "method", "constructor"].includes(kind)) return "callable";
+  if (["property", "variable", "css_custom_property"].includes(kind)) return "data";
+  if (["html_document", "html_element"].includes(kind)) return "markup";
+  if (["stylesheet", "css_rule", "keyframes"].includes(kind)) return "style";
+  if (["repository", "file", "module"].includes(kind)) return kind;
+  return "type";
 }
 
 function separateLargeObjects(layout) {

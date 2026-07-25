@@ -80,6 +80,17 @@ const colors = {
   protocol: 0x5aa8ff,
   function: 0xf6fbff,
   property: 0xff7ad9,
+  method: 0xf6fbff,
+  variable: 0xff7ad9,
+  interface: 0x5aa8ff,
+  type_alias: 0xa970ff,
+  source_module: 0x45d9ff,
+  react_component: 0x18ff9a,
+  html_document: 0x54d6ff,
+  html_element: 0xff9f43,
+  stylesheet: 0x8d7dff,
+  css_rule: 0xc77dff,
+  keyframes: 0xff5ec4,
   module: 0x7d8cff
 };
 
@@ -115,7 +126,7 @@ const state = {
   showModules: true,
   showProtocols: true,
   showProperties: true,
-  parserMode: "heuristic",
+  parserMode: "fast",
   parserComparison: null,
   performanceMode: false,
   edgeFilters: {
@@ -277,7 +288,9 @@ function getClientId() {
 }
 
 function initializeParserMode() {
-  state.parserMode = "heuristic";
+  const saved = localStorage.getItem(parserModeKey);
+  const aliases = { heuristic: "fast", merged: "balanced", swiftsyntax: "accurate", "xcode-index": "indexed" };
+  state.parserMode = ["fast", "balanced", "accurate", "indexed"].includes(saved) ? saved : aliases[saved] || "fast";
   localStorage.setItem(parserModeKey, state.parserMode);
   parserSelect.value = state.parserMode;
 }
@@ -346,7 +359,7 @@ async function loadInitialUniverse() {
   if (requestedScanPath) {
     await loadSampleUniverse();
     try {
-      await scanPath(requestedScanPath, "Xcode handoff scan");
+      await scanPath(requestedScanPath, "Editor handoff scan");
     } catch (error) {
       showStartupError(error);
     }
@@ -363,7 +376,7 @@ async function loadInitialUniverse() {
 
 async function loadSampleUniverse() {
   pickerStatus.textContent = "Loaded bundled sample universe.";
-  scanSummary.textContent = "Sample data only. Use the picker to analyze a real Xcode project.";
+  scanSummary.textContent = "Sample data only. Use the picker to analyze a real project.";
   const graph = await fetch("./sample-graph.json").then((response) => response.json());
   await loadGraph(graph, "Sample Swift app");
 }
@@ -383,7 +396,7 @@ async function pickAndScanProject() {
     throw new Error(payload.error || "Project scan failed.");
   }
 
-  await loadGraph(payload.graph, "Native Xcode scan");
+  await loadGraph(payload.graph, "Native project scan");
   focusSelectedFile(payload.diagnostics);
   const rememberedPath = payload.diagnostics.selectedFile ? payload.diagnostics.pickedPath : payload.diagnostics.sourceRoot;
   if (rememberedPath) {
@@ -423,10 +436,14 @@ async function scanPath(path, descriptor) {
 async function compareParsers() {
   const sourceRoot = state.graph?.project?.sourceRoot || localStorage.getItem(lastProjectPathKey);
   if (!sourceRoot) {
-    parserDiff.innerHTML = "<p>Choose a real Xcode project first, then compare parsers.</p>";
+    parserDiff.innerHTML = "<p>Choose a real Swift project first, then compare its Swift analysis modes.</p>";
     return;
   }
 
+  if (!state.graph?.project?.languages?.some((language) => language.id === "swift")) {
+    parserDiff.innerHTML = "<p>Parser comparison currently applies to the preserved Swift analysis pipeline.</p>";
+    return;
+  }
   parserDiff.innerHTML = "<p>Running fast heuristic and SwiftSyntax scans...</p>";
   const response = await fetch("/api/compare-parsers", {
     method: "POST",
@@ -444,7 +461,8 @@ async function compareParsers() {
 }
 
 async function loadGraph(graph, descriptor) {
-  state.graph = graph;
+  state.graph = normalizeGraphForViewer(graph);
+  graph = state.graph;
   state.largeGraphMode = isLargeGraph(graph);
   if (state.largeGraphMode) {
     state.performanceMode = true;
@@ -538,8 +556,12 @@ function focusSelectedFile(diagnostics) {
 
 function buildLayout(graph) {
   const files = graph.nodes.filter((node) => node.kind === "file");
-  const types = graph.nodes.filter((node) => !["repository", "file", "module", "function", "property"].includes(node.kind));
-  const functions = graph.nodes.filter((node) => node.kind === "function" || node.kind === "property");
+  const types = graph.nodes.filter((node) =>
+    ["component", "type"].includes(nodeCategory(node)) || ["html_document", "stylesheet"].includes(node.kind)
+  );
+  const functions = graph.nodes.filter((node) =>
+    ["callable", "data"].includes(nodeCategory(node)) || ["html_element", "css_rule", "keyframes"].includes(node.kind)
+  );
   const modules = graph.nodes.filter((node) => node.kind === "module");
   const definesByFrom = groupEdgesByFrom(graph.edges, "defines");
   const layout = [];
@@ -855,7 +877,7 @@ function buildScene() {
 
   for (const node of state.layout) {
     if (node.kind === "repository") continue;
-    if (node.kind === "function" || node.kind === "property") continue;
+    if (isPopupMember(node)) continue;
     const material = new THREE.MeshStandardMaterial({
       color: colorForNode(node),
       roughness: node.kind === "file" ? 0.78 : 0.48,
@@ -915,12 +937,12 @@ function buildScene() {
       root.add(fileMarker);
     }
 
-    if (importantKinds.has(node.kind) || node.kind === "function" || node.kind === "property") {
+    if (importantKinds.has(node.kind) || isPopupMember(node)) {
       const label = makeLabel(
         node.name,
-        node.kind === "swiftui_view" ? "#dfffee" : node.kind === "function" || node.kind === "property" ? "#f2f6f8" : "#d9e7ee",
-        node.kind === "function" || node.kind === "property" ? 48 : 68,
-        node.kind === "function" || node.kind === "property" ? 10 : 13
+        nodeCategory(node) === "component" ? "#dfffee" : ["callable", "data"].includes(nodeCategory(node)) ? "#f2f6f8" : "#d9e7ee",
+        isPopupMember(node) ? 48 : 68,
+        isPopupMember(node) ? 10 : 13
       );
       label.position.set(node.x, (node.y || 0) + node.height + 18, node.z);
       label.userData = {
@@ -1224,7 +1246,7 @@ function addFileDistrictDetails(mesh, node) {
 }
 
 function isStructuralBuilding(kind) {
-  return ["swiftui_view", "service", "class", "model", "struct", "enum"].includes(kind);
+  return ["swiftui_view", "react_component", "service", "class", "model", "struct", "enum", "interface", "type_alias", "html_document", "html_element", "stylesheet", "css_rule"].includes(kind);
 }
 
 function isTranslucentCityObject(kind) {
@@ -1302,6 +1324,49 @@ function draw() {
 function markFiltersDirty() {
   state.filtersDirty = true;
   requestRender();
+}
+
+function normalizeGraphForViewer(graph) {
+  return {
+    ...graph,
+    nodes: (graph.nodes || []).map((node) => ({
+      ...node,
+      category: node.category || legacyCategory(node.kind),
+      language: node.language || languageForSourceFile(node.file),
+      column: node.column || node.location?.range?.start?.column || 1,
+      qualifiedName: node.qualifiedName || node.name
+    }))
+  };
+}
+
+function nodeCategory(node) {
+  return node?.category || legacyCategory(node?.kind);
+}
+
+function isPopupMember(node) {
+  return ["callable", "data"].includes(nodeCategory(node))
+    || ["html_element", "css_rule", "keyframes"].includes(node?.kind);
+}
+
+function legacyCategory(kind) {
+  if (kind === "repository") return "repository";
+  if (kind === "file") return "file";
+  if (kind === "module") return "module";
+  if (["swiftui_view", "react_component"].includes(kind)) return "component";
+  if (["function", "method", "constructor"].includes(kind)) return "callable";
+  if (["property", "variable", "css_custom_property"].includes(kind)) return "data";
+  if (["html_document", "html_element"].includes(kind)) return "markup";
+  if (["stylesheet", "css_rule", "keyframes"].includes(kind)) return "style";
+  return "type";
+}
+
+function languageForSourceFile(file = "") {
+  if (/\.swift$/i.test(file)) return "swift";
+  if (/\.(?:ts|tsx|mts|cts)$/i.test(file)) return "typescript";
+  if (/\.(?:js|jsx|mjs|cjs)$/i.test(file)) return "javascript";
+  if (/\.html?$/i.test(file)) return "html";
+  if (/\.css$/i.test(file)) return "css";
+  return null;
 }
 
 function requestRender() {
@@ -1624,7 +1689,7 @@ function bindEvents() {
   });
 
   parserSelect.addEventListener("change", async () => {
-    state.parserMode = ["xcode-index", "merged", "swiftsyntax", "heuristic"].includes(parserSelect.value) ? parserSelect.value : "merged";
+    state.parserMode = ["fast", "balanced", "accurate", "indexed"].includes(parserSelect.value) ? parserSelect.value : "balanced";
     localStorage.setItem(parserModeKey, state.parserMode);
     const lastProjectPath = localStorage.getItem(lastProjectPathKey);
     if (!lastProjectPath) {
@@ -1707,11 +1772,11 @@ function bindEvents() {
       return;
     }
 
-    const xcodeButton = event.target.closest("[data-xcode-node-id]");
-    if (xcodeButton) {
-      const node = state.nodeById.get(xcodeButton.dataset.xcodeNodeId);
+    const editorButton = event.target.closest("[data-editor-node-id]");
+    if (editorButton) {
+      const node = state.nodeById.get(editorButton.dataset.editorNodeId);
       if (!node) return;
-      await openSourceInXcode(node);
+      await openSourceInEditor(node);
     }
   });
 
@@ -1724,7 +1789,7 @@ function bindEvents() {
   contentDrawerCopyButton.addEventListener("click", copyContentDrawerText);
   contentDrawerXcodeButton.addEventListener("click", async () => {
     const node = state.nodeById.get(state.sourceViewerNodeId);
-    if (node) await openSourceInXcode(node);
+    if (node) await openSourceInEditor(node);
   });
   contentDrawer.addEventListener("close", () => {
     state.sourceViewerNodeId = null;
@@ -2542,15 +2607,18 @@ function formatTokenCount(value) {
 }
 
 function describeParser(mode) {
-  if (mode === "xcode-index") return "Xcode Index map";
-  if (mode === "merged") return "best combined view";
-  return mode === "swiftsyntax" ? "accurate Swift parse" : "fast overview";
+  if (mode === "indexed" || mode === "xcode-index") return "indexed map";
+  if (mode === "balanced" || mode === "merged") return "best combined view";
+  return mode === "accurate" || mode === "swiftsyntax" ? "accurate parse" : "fast overview";
 }
 
 function formatScanSummary(diagnostics) {
+  const languageSummary = (diagnostics.languages || [])
+    .map((language) => `${language.fileCount} ${language.id}`)
+    .join(", ");
   const parts = [
-    `${diagnostics.swiftFileCount} Swift files`,
-    `${diagnostics.typeCount} types`
+    languageSummary || `${diagnostics.filesScanned ?? diagnostics.swiftFileCount ?? 0} source files`,
+    `${diagnostics.typeCount} types/components`
   ];
   if (diagnostics.focusedFile) {
     parts.unshift(`Focused file: ${diagnostics.focusedFile}`);
@@ -2813,8 +2881,8 @@ function updateHoverFromPointer(event) {
 function renderHoverTooltip(node) {
   const metrics = node.metrics || {};
   const ownLines = Math.max(1, metrics.lines || 1);
-  const ownVars = Math.max(0, metrics.properties || (node.kind === "property" ? 1 : 0));
-  const ownFuncs = Math.max(0, metrics.methods || (node.kind === "function" ? 1 : 0));
+  const ownVars = Math.max(0, metrics.properties || (nodeCategory(node) === "data" ? 1 : 0));
+  const ownFuncs = Math.max(0, metrics.methods || (nodeCategory(node) === "callable" ? 1 : 0));
   const ownComplexity = complexityForNode(node);
   const title = escapeHtml(node.name);
   const location = node.file ? `${escapeHtml(node.file)}:${node.line}` : friendlyKind(node.kind);
@@ -2824,10 +2892,10 @@ function renderHoverTooltip(node) {
   if (node.kind === "file") {
     details.push(`${formatNumber(ownLines)} LOC`);
     details.push(`file plot`);
-  } else if (node.kind === "function") {
+  } else if (nodeCategory(node) === "callable") {
     details.push(`${formatNumber(ownLines)} LOC · ${formatNumber(metrics.branches || 0)} branches`);
     details.push(`${formatNumber(metrics.calls || 0)} calls · complexity ${formatNumber(ownComplexity)}`);
-  } else if (node.kind === "property") {
+  } else if (nodeCategory(node) === "data") {
     details.push(`state/property sphere`);
     details.push(`complexity ${formatNumber(ownComplexity)}`);
   } else {
@@ -3010,12 +3078,12 @@ function renderDetails(node) {
       </div>
     </div>
     ${node.source ? `<p>Found by <code>${escapeHtml(node.source)}</code>${node.inferred ? " · inferred hint" : ""}${node.indexResolved ? " · Xcode index resolved" : ""}${node.confidence ? ` · confidence <code>${escapeHtml(node.confidence)}</code>` : ""}</p>` : ""}
-    ${node.file ? `<section class="source-card"><div class="source-card-header"><div><span class="eyebrow">Source view</span><strong>${escapeHtml(node.file)}:${node.line}</strong></div><div class="source-actions"><button class="button button-compact source-button-primary" type="button" data-source-node-id="${escapeHtml(node.id)}">View source</button><button class="button button-compact" type="button" data-xcode-node-id="${escapeHtml(node.id)}">Open in Xcode</button></div></div><p>Source opens in the wide drawer so the inspector keeps one scroll area.</p></section>` : ""}
+    ${node.file ? `<section class="source-card"><div class="source-card-header"><div><span class="eyebrow">Source view</span><strong>${escapeHtml(node.file)}:${node.line}</strong></div><div class="source-actions"><button class="button button-compact source-button-primary" type="button" data-source-node-id="${escapeHtml(node.id)}">View source</button><button class="button button-compact" type="button" data-editor-node-id="${escapeHtml(node.id)}">Open in Editor</button></div></div><p>Source opens in the wide drawer so the inspector keeps one scroll area.</p></section>` : ""}
     <div class="detail-grid">
       <p><strong>Axis mapping</strong><br>${axisDetails}</p>
       <p><strong>Inside this object</strong><br>${popupContentIds.length > 0 ? `${popupContentIds.length} contained objects in the 3D popup.` : "No inspectable members yet."}</p>
       ${ownedState.length > 0 ? `<p><strong>State it owns</strong><br>${names(ownedState, "out")}</p>` : ""}
-      ${node.kind === "function" ? `<p><strong>Uses outside parent</strong><br>${names(externalUses, "out") || "No external type usage detected."}</p>` : ""}
+      ${nodeCategory(node) === "callable" ? `<p><strong>Uses outside parent</strong><br>${names(externalUses, "out") || "No external type usage detected."}</p>` : ""}
       <p><strong>Uses</strong><br>${names(outgoing.filter((edge) => edge.kind !== "owns_state"), "out") || "No outgoing relationships yet."}</p>
       <p><strong>Used by</strong><br>${names(incoming, "in") || "No incoming relationships yet."}</p>
     </div>
@@ -3058,7 +3126,13 @@ function describeEdge(edge) {
     return "Xcode index evidence found both symbols in the same indexed file record; treat this as a file-level semantic hint.";
   }
   if (edge.kind === "uses") return "The source object references or calls the target object.";
+  if (edge.kind === "calls") return "The source callable invokes the target callable or constructor.";
   if (edge.kind === "imports") return "The source file imports the target framework or module.";
+  if (edge.kind === "exports") return "The source file exports or re-exports the target.";
+  if (edge.kind === "loads") return "The document loads this script or stylesheet.";
+  if (edge.kind === "styles") return "This CSS selector matches the target markup element.";
+  if (edge.kind === "extends") return "The source type extends the target type.";
+  if (edge.kind === "implements") return "The source type implements the target contract.";
   if (edge.kind === "defines") return "The source file contains or defines the target object.";
   if (edge.kind === "owns_state") return "The source type owns or exposes this state/property.";
   if (edge.kind === "uses_member") return "A member inside the popup references another member or dependency.";
@@ -3066,9 +3140,9 @@ function describeEdge(edge) {
   return "A detected relationship between two code objects.";
 }
 
-async function openSourceInXcode(node, targetPreview = null) {
+async function openSourceInEditor(node, targetPreview = null) {
   const preview = targetPreview || document.querySelector("#sourcePreview");
-  if (preview) preview.innerHTML = "<p>Opening in Xcode...</p>";
+  if (preview) preview.innerHTML = "<p>Opening in editor...</p>";
   try {
     const response = await fetch("/api/open-source", {
       method: "POST",
@@ -3077,16 +3151,18 @@ async function openSourceInXcode(node, targetPreview = null) {
         sourceRoot: state.graph.project.sourceRoot,
         file: node.file,
         line: node.line,
+        column: node.column || node.location?.range?.start?.column || 1,
         context: state.sourceContext
       })
     });
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(payload.error || "Xcode open failed.");
+      throw new Error(payload.error || "Editor open failed.");
     }
-    if (preview) preview.innerHTML = `<p>Opened <code>${escapeHtml(payload.file)}:${payload.line}</code> in Xcode.</p>`;
+    contentDrawerXcodeButton.textContent = `Open in ${payload.editorName || "Editor"}`;
+    if (preview) preview.innerHTML = `<p>Opened <code>${escapeHtml(payload.file)}:${payload.line}</code> in ${escapeHtml(payload.editorName || "the editor")}.</p>`;
   } catch (error) {
-    if (preview) preview.innerHTML = `<p><strong>Xcode error</strong><br><code>${escapeHtml(error.message)}</code></p>`;
+    if (preview) preview.innerHTML = `<p><strong>Editor error</strong><br><code>${escapeHtml(error.message)}</code></p>`;
   }
 }
 
@@ -3096,7 +3172,7 @@ async function openSourceViewer(node) {
     eyebrow: "Source code",
     title: node.name,
     meta: `${node.file}:${node.line || 1}`,
-    content: '<div class="source-preview" data-drawer-source><p>Loading complete Swift file...</p></div>',
+    content: '<div class="source-preview" data-drawer-source><p>Loading complete source file...</p></div>',
     nodeId: node.id
   });
 
@@ -3131,6 +3207,7 @@ async function fetchSource(node, options = {}) {
       sourceRoot: state.graph?.project?.sourceRoot,
       file: node.file,
       line: node.line,
+      column: node.column || node.location?.range?.start?.column || 1,
       context: options.context,
       fullFile: options.fullFile === true
     })
@@ -3153,7 +3230,7 @@ function renderSourceSnippet(payload) {
 }
 
 function getExternalUses(node) {
-  if (node.kind !== "function") return [];
+  if (nodeCategory(node) !== "callable") return [];
   const parentId = (state.edgesByTo.get(node.id) || []).find((edge) => edge.kind === "defines")?.from;
   return (state.edgesByFrom.get(node.id) || []).filter((edge) => edge.kind === "uses" && edge.to !== parentId);
 }
@@ -3272,9 +3349,9 @@ function isEdgeVisible(edge) {
 
 function isMainEdgeRenderable(edge) {
   if (state.edgeDensity === "everything") {
-    return ["uses", "imports", "conforms_to", "defines", "owns_state", "uses_member"].includes(edge.kind);
+    return ["uses", "calls", "imports", "exports", "loads", "styles", "extends", "implements", "conforms_to", "defines", "owns_state", "uses_member"].includes(edge.kind);
   }
-  return ["uses", "imports", "conforms_to"].includes(edge.kind);
+  return ["uses", "calls", "imports", "exports", "loads", "styles", "extends", "implements", "conforms_to"].includes(edge.kind);
 }
 
 function passesEdgeDensity(edge) {
@@ -3297,8 +3374,8 @@ function updateStats(graph, descriptor) {
   projectMeta.textContent = `${descriptor} · ${new Date(graph.project.scannedAt).toLocaleString()} · ${graph.nodes.length} items${mode}${worker}`;
   document.querySelector("#nodeCount").textContent = graph.nodes.length;
   document.querySelector("#edgeCount").textContent = graph.edges.length;
-  document.querySelector("#viewCount").textContent = graph.nodes.filter((node) => node.kind === "swiftui_view").length;
-  document.querySelector("#serviceCount").textContent = graph.nodes.filter((node) => node.kind === "service" || node.kind === "class").length;
+  document.querySelector("#viewCount").textContent = graph.nodes.filter((node) => nodeCategory(node) === "component").length;
+  document.querySelector("#serviceCount").textContent = graph.nodes.filter((node) => nodeCategory(node) === "type").length;
 }
 
 function appendGraphScaleNotice() {
@@ -3516,7 +3593,7 @@ function dimensionsForNode(node) {
     };
   }
 
-  if (node.kind === "property") {
+  if (node.kind === "property" || node.kind === "variable") {
     const diameter = clamp(10 + Math.sqrt(city.volumeScore) * 1.8, 10, 58);
     return {
       width: Math.round(diameter),
@@ -3646,12 +3723,14 @@ function graphEdgeCountsForNode(nodeId) {
 function baseDimensionsForKind(kind) {
   if (kind === "repository") return { width: 72, depth: 72, height: 34 };
   if (kind === "file") return { width: 72, depth: 48, height: 3 };
-  if (kind === "swiftui_view") return { width: 34, depth: 34, height: 34 };
+  if (kind === "swiftui_view" || kind === "react_component") return { width: 34, depth: 34, height: 34 };
   if (kind === "service" || kind === "class") return { width: 32, depth: 32, height: 52 };
-  if (kind === "function") return { width: 10, depth: 10, height: 12 };
-  if (kind === "property") return { width: 8, depth: 8, height: 8 };
+  if (kind === "function" || kind === "method" || kind === "constructor") return { width: 10, depth: 10, height: 12 };
+  if (kind === "property" || kind === "variable") return { width: 8, depth: 8, height: 8 };
   if (kind === "module") return { width: 38, depth: 38, height: 10 };
-  if (kind === "protocol") return { width: 26, depth: 26, height: 40 };
+  if (kind === "protocol" || kind === "interface") return { width: 26, depth: 26, height: 40 };
+  if (kind === "html_element" || kind === "css_rule") return { width: 24, depth: 24, height: 18 };
+  if (kind === "html_document" || kind === "stylesheet") return { width: 30, depth: 30, height: 24 };
   return { width: 30, depth: 30, height: 30 };
 }
 
@@ -3672,10 +3751,10 @@ function makeNodeGeometry(kind, width, height, depth) {
     geometry = new THREE.BoxGeometry(roundedWidth, roundedHeight, roundedDepth);
   } else if (kind === "file") {
     geometry = new THREE.BoxGeometry(roundedWidth, roundedHeight, roundedDepth);
-  } else if (kind === "function" || kind === "protocol") {
-    geometry = new THREE.CylinderGeometry(0.5, 0.5, 1, kind === "protocol" ? 8 : 14);
+  } else if (["function", "method", "constructor", "protocol", "interface"].includes(kind)) {
+    geometry = new THREE.CylinderGeometry(0.5, 0.5, 1, ["protocol", "interface"].includes(kind) ? 8 : 14);
     geometry.scale(roundedWidth, roundedHeight, roundedDepth);
-  } else if (kind === "property") {
+  } else if (kind === "property" || kind === "variable") {
     geometry = new THREE.SphereGeometry(0.5, 14, 10);
     geometry.scale(roundedWidth, roundedHeight, roundedDepth);
   } else {
@@ -3707,9 +3786,10 @@ function getBasicMaterial(key, options) {
 }
 
 function edgeColor(kind) {
-  if (kind === "uses") return 0xff4f5f;
-  if (kind === "imports") return 0x63d2ff;
+  if (kind === "uses" || kind === "calls" || kind === "styles") return 0xff4f5f;
+  if (kind === "imports" || kind === "exports" || kind === "loads") return 0x63d2ff;
   if (kind === "owns_state") return 0xff6b78;
+  if (kind === "extends" || kind === "implements") return 0x5aa8ff;
   return 0xffffff;
 }
 
@@ -3741,7 +3821,7 @@ function makeArrowHead(points, color) {
 
 function describeKind(kind) {
   if (kind === "repository") return "whole scanned app";
-  if (kind === "file") return "Swift source file";
+  if (kind === "file") return "source file";
   if (kind === "swiftui_view") return "SwiftUI screen or reusable view";
   if (kind === "service") return "service or store type";
   if (kind === "class") return "reference type";
@@ -3750,7 +3830,17 @@ function describeKind(kind) {
   if (kind === "protocol") return "protocol contract";
   if (kind === "module") return "imported framework or module";
   if (kind === "function") return "method or function";
+  if (kind === "method" || kind === "constructor") return "class or object method";
   if (kind === "property") return "stored or computed property / var";
+  if (kind === "variable") return "variable or constant";
+  if (kind === "react_component") return "React component";
+  if (kind === "html_document") return "HTML document";
+  if (kind === "html_element") return "named or structural HTML element";
+  if (kind === "stylesheet") return "CSS stylesheet";
+  if (kind === "css_rule") return "CSS selector rule";
+  if (kind === "interface") return "interface contract";
+  if (kind === "type_alias") return "type alias";
+  if (kind === "source_module") return "source module";
   return "code structure";
 }
 
@@ -3761,6 +3851,9 @@ function friendlyKind(kind) {
   if (kind === "service") return "Service";
   if (kind === "function") return "Function";
   if (kind === "property") return "Property / Var";
+  if (kind === "react_component") return "Component";
+  if (kind === "html_element") return "HTML Element";
+  if (kind === "css_rule") return "CSS Rule";
   return kind.replaceAll("_", " ");
 }
 
@@ -3771,7 +3864,7 @@ function getInspectableMemberIds(nodeId) {
     .map((edge) => edge.to)
     .filter((memberId) => {
       const node = state.nodeById.get(memberId);
-      return node?.kind === "function" || node?.kind === "property";
+      return isPopupMember(node);
     });
 }
 
@@ -3794,7 +3887,7 @@ function getXrayContentIds(nodeId) {
         if (!state.showProtocols && child.kind === "protocol") return false;
         return child.kind !== "function" && child.kind !== "property";
       }
-      return child.kind === "function" || child.kind === "property";
+      return isPopupMember(child);
     });
 }
 
@@ -3807,7 +3900,7 @@ function resolveOpenShellId(nodeId) {
   if (popupContentIds.length > 0) return nodeId;
 
   const node = state.nodeById.get(nodeId);
-  if (node?.kind === "function" || node?.kind === "property") {
+  if (isPopupMember(node)) {
     return (state.edgesByTo.get(nodeId) || []).find((edge) => edge.kind === "defines")?.from || null;
   }
 
@@ -3867,7 +3960,7 @@ function shouldShowLabel(nodeId) {
   if (isSearchMatch(node)) return true;
   if (state.performanceMode && node.id !== state.selectedId && node.id !== state.openShellId) return false;
   if (importantKinds.has(node.kind)) return true;
-  if (node.kind === "function" || node.kind === "property") return false;
+  if (isPopupMember(node)) return false;
   return false;
 }
 
@@ -3882,7 +3975,7 @@ function isSearchMatch(node) {
 function shouldShowMesh(nodeId) {
   const node = state.nodeById.get(nodeId);
   if (!node) return false;
-  if (node.kind === "function" || node.kind === "property") return false;
+  if (isPopupMember(node)) return false;
   return true;
 }
 
@@ -4607,7 +4700,7 @@ function popupDimensionsForDependency(node) {
 function getPopupDependencyIds(parentId, memberIds) {
   const memberSet = new Set(memberIds);
   return uniqueValues((state.edgesByFrom.get(parentId) || [])
-    .filter((edge) => ["uses", "conforms_to", "imports"].includes(edge.kind))
+    .filter((edge) => ["uses", "calls", "conforms_to", "extends", "implements", "imports", "exports", "loads", "styles"].includes(edge.kind))
     .map((edge) => edge.to)
     .filter((nodeId) => nodeId !== parentId && !memberSet.has(nodeId)));
 }
@@ -4626,7 +4719,7 @@ function getPopupEdges(parentId, memberIds, dependencyIds) {
     edge.__renderKey = edge.__renderKey || edgeKey(edge, edgeIndex);
     if (edge.kind === "defines" && edge.from === parentId && visibleIds.has(edge.to)) edges.push(edge);
     if (edge.kind === "owns_state" && edge.from === parentId && visibleIds.has(edge.to)) edges.push(edge);
-    if (["uses", "conforms_to", "imports"].includes(edge.kind) && edge.from === parentId && visibleIds.has(edge.to)) edges.push(edge);
+    if (["uses", "calls", "conforms_to", "extends", "implements", "imports", "exports", "loads", "styles"].includes(edge.kind) && edge.from === parentId && visibleIds.has(edge.to)) edges.push(edge);
     if (edge.kind === "uses_member" && visibleIds.has(edge.from) && visibleIds.has(edge.to)) edges.push(edge);
   });
 
@@ -4634,6 +4727,8 @@ function getPopupEdges(parentId, memberIds, dependencyIds) {
 }
 
 function isEdgeKindEnabled(kind) {
+  if (["calls", "styles", "extends", "implements"].includes(kind)) return state.edgeFilters.uses !== false;
+  if (["exports", "loads"].includes(kind)) return state.edgeFilters.imports !== false;
   return state.edgeFilters[kind] !== false;
 }
 

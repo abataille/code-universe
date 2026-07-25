@@ -1,6 +1,6 @@
 # Code Universe
 
-Code Universe is a local 3D architecture map for Swift projects. It turns an Xcode project into a navigable city where files, views, structs, models, services, functions, properties, imports, and usage relationships can be inspected visually.
+Code Universe is a local 3D architecture map for Swift, JavaScript, TypeScript, HTML, and CSS projects. It turns a codebase into a navigable city where files, components, types, functions, properties, modules, markup, styles, imports, and usage relationships can be inspected visually.
 
 The app runs on your Mac. Source code is scanned locally and stays local.
 
@@ -10,7 +10,8 @@ The app runs on your Mac. Source code is scanned locally and stays local.
 
 ## Highlights
 
-- Explore Swift projects as a navigable 3D code city.
+- Explore Swift and web projects as a navigable 3D code city.
+- Scan mixed-language projects through versioned language adapters.
 - Inspect files, types, functions, properties, dependencies, and source code.
 - Compare heuristic, SwiftSyntax, merged, and Xcode-index analysis.
 - Ask Codex to investigate or fix a specific application behavior.
@@ -87,7 +88,7 @@ Connection detail defaults to only `Uses` checked so the map starts readable. En
 
 ### Project Panel
 
-- `Choose Project or File`: scan an `.xcodeproj`, `project.pbxproj`, folder, or single `.swift` file.
+- `Choose Project or File`: scan a project folder or a single Swift, JavaScript, TypeScript, HTML, or CSS file.
 - `Compare Parsers`: compare heuristic, SwiftSyntax, merged, and Xcode-index analysis for the selected project.
 - `Load Sample Universe`: reload the bundled SampleSwiftApp graph.
 
@@ -109,16 +110,18 @@ Connection detail defaults to only `Uses` checked so the map starts readable. En
 - Click an object: inspect it and open the source preview.
 - Search and press `Enter`: jump to a matching symbol.
 
-## Parser Modes
+## Analysis Profiles
 
-The default parser is `Fast overview` for quick large-project scanning.
+The default profile is `Fast overview` for quick large-project scanning.
 
 Available modes:
 
-- `Fast overview`: fast heuristic scanner.
-- `Best combined view`: SwiftSyntax structure plus heuristic relationship hints.
-- `Accurate Swift parse`: SwiftSyntax structural scan.
-- `Xcode Index map`: local Xcode index relationships when available.
+- `Fast overview`: fastest adapter-supported structure scan.
+- `Best combined view`: balanced structure and relationship resolution.
+- `Accurate parse`: strongest local parser mode.
+- `Indexed map`: local semantic indexes when an adapter supports them.
+
+For Swift these profiles preserve the existing heuristic, merged, SwiftSyntax, and Xcode-index implementations. JavaScript and TypeScript use the TypeScript compiler parser; HTML and CSS use parse5 and PostCSS.
 
 Regenerate the sample with SwiftSyntax:
 

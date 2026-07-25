@@ -7,6 +7,8 @@
     "start": "node server.js",
     "mcp": "node scripts/code-universe-mcp.js",
     "test:scan": "node scripts/test-scan-fixtures.js",
+    "test:languages": "node scripts/test-language-adapters.js",
+    "test": "npm run test:scan && npm run test:languages && npm run test:review && npm run test:mcp",
     "test:review": "node scripts/test-review-flow.js",
     "test:mcp": "node scripts/test-mcp.js",
     "scan:sample": "node scripts/scan-swift.js examples/SampleSwiftApp public/sample-graph.json",
@@ -19,7 +21,10 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
+    "parse5": "^7.3.0",
+    "postcss": "^8.5.23",
     "three": "^0.185.0",
+    "typescript": "^5.9.3",
     "zod": "^3.25.76"
   },
   "overrides": {
