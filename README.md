@@ -1,6 +1,6 @@
 # Code Universe
 
-Code Universe is a local 3D architecture map for Swift, JavaScript, TypeScript, HTML, and CSS projects. It turns a codebase into a navigable city where files, components, types, functions, properties, modules, markup, styles, imports, and usage relationships can be inspected visually.
+Code Universe is a local 3D architecture map for Swift, JavaScript, TypeScript, HTML, CSS, C#, Objective-C, and Objective-C++ projects. It turns a codebase into a navigable city where files, components, types, functions, properties, modules, markup, styles, imports, and usage relationships can be inspected visually.
 
 The app runs on your Mac. Source code is scanned locally and stays local.
 
@@ -10,8 +10,14 @@ The app runs on your Mac. Source code is scanned locally and stays local.
 
 ## Highlights
 
-- Explore Swift and web projects as a navigable 3D code city.
+- Explore Swift, web, .NET, and Objective-C projects as a navigable 3D code city.
 - Scan mixed-language projects through versioned language adapters.
+- Resolve JavaScript/TypeScript calls and types through the TypeScript semantic checker.
+- Connect CSS Modules and HTML/CSS selectors to the components and elements they style.
+- Trace HTML links and image sources, including responsive, external, and embedded image assets.
+- Connect JavaScript carousels, JSX media, inline scripts, and DOM selectors to the HTML elements and assets they use.
+- Validate local web assets, flag broken references, and distinguish images, video, audio, fonts, embeds, and downloads.
+- Reuse unchanged full graphs and independently fingerprinted adapter fragments.
 - Inspect files, types, functions, properties, dependencies, and source code.
 - Compare heuristic, SwiftSyntax, merged, and Xcode-index analysis.
 - Ask Codex to investigate or fix a specific application behavior.
@@ -88,7 +94,7 @@ Connection detail defaults to only `Uses` checked so the map starts readable. En
 
 ### Project Panel
 
-- `Choose Project or File`: scan a project folder or a single Swift, JavaScript, TypeScript, HTML, or CSS file.
+- `Choose Project or File`: scan a project folder or a single Swift, JavaScript, TypeScript, HTML, CSS, C#, Objective-C, or Objective-C++ file.
 - `Compare Parsers`: compare heuristic, SwiftSyntax, merged, and Xcode-index analysis for the selected project.
 - `Load Sample Universe`: reload the bundled SampleSwiftApp graph.
 

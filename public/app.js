@@ -88,6 +88,13 @@ const colors = {
   react_component: 0x18ff9a,
   html_document: 0x54d6ff,
   html_element: 0xff9f43,
+  jsx_element: 0xffb86c,
+  inline_script: 0x45d9ff,
+  image_asset: 0xffb86c,
+  video_asset: 0xff6b78,
+  audio_asset: 0x57e6c2,
+  font_asset: 0xc77dff,
+  web_asset: 0x7d8cff,
   stylesheet: 0x8d7dff,
   css_rule: 0xc77dff,
   keyframes: 0xff5ec4,
@@ -109,7 +116,10 @@ const reviewModelKey = "codeUniverse.reviewModel";
 const reviewReasoningKey = "codeUniverse.reviewReasoning";
 const uiThemeKey = "codeUniverse.uiTheme";
 
-const importantKinds = new Set(["file", "swiftui_view", "service", "class", "model", "struct", "enum", "protocol"]);
+const importantKinds = new Set([
+  "file", "swiftui_view", "service", "class", "model", "struct", "enum", "protocol",
+  "image_asset", "video_asset", "audio_asset"
+]);
 
 const state = {
   graph: null,
@@ -557,13 +567,17 @@ function focusSelectedFile(diagnostics) {
 function buildLayout(graph) {
   const files = graph.nodes.filter((node) => node.kind === "file");
   const types = graph.nodes.filter((node) =>
-    ["component", "type"].includes(nodeCategory(node)) || ["html_document", "stylesheet"].includes(node.kind)
+    ["component", "type"].includes(nodeCategory(node)) || ["html_document", "stylesheet", "inline_script"].includes(node.kind)
   );
   const functions = graph.nodes.filter((node) =>
-    ["callable", "data"].includes(nodeCategory(node)) || ["html_element", "css_rule", "keyframes"].includes(node.kind)
+    ["callable", "data"].includes(nodeCategory(node)) || ["html_element", "jsx_element", "css_rule", "keyframes"].includes(node.kind)
   );
   const modules = graph.nodes.filter((node) => node.kind === "module");
+  const assets = graph.nodes.filter((node) => node.category === "asset");
   const definesByFrom = groupEdgesByFrom(graph.edges, "defines");
+  const ownedMembersByFrom = groupEdgesByFrom(graph.edges.filter((edge) =>
+    edge.kind === "defines" || edge.kind === "contains"
+  ));
   const layout = [];
   const layoutById = new Map();
   const fileChildTypesById = mapFileChildTypes(files, types, definesByFrom);
@@ -642,11 +656,22 @@ function buildLayout(graph) {
       ...dimensionsForNode(moduleNode)
     });
   });
+  const assetOriginZ = moduleOriginZ - Math.max(90, Math.ceil(modules.length / 6) * 76 + 40);
+  assets.forEach((assetNode, index) => {
+    addLayoutNode(layout, layoutById, {
+      ...assetNode,
+      ...gridPosition(index, Math.max(1, assets.length), 78, 66, 0, assetOriginZ),
+      y: 34,
+      ...dimensionsForNode(assetNode)
+    });
+  });
 
   types.forEach((type) => {
     const parent = layoutById.get(type.id);
     if (!parent) return;
-    const memberIds = new Set((definesByFrom.get(type.id) || []).map((edge) => edge.to));
+    const memberIds = new Set((ownedMembersByFrom.get(type.id) || [])
+      .filter((edge) => edge.kind === "defines" || type.kind === "html_document")
+      .map((edge) => edge.to));
     const members = functions.filter((candidate) => memberIds.has(candidate.id));
     const spacing = spacingForNodes(members, 24, 24, 12);
     members.forEach((node, index) => {
@@ -1246,7 +1271,7 @@ function addFileDistrictDetails(mesh, node) {
 }
 
 function isStructuralBuilding(kind) {
-  return ["swiftui_view", "react_component", "service", "class", "model", "struct", "enum", "interface", "type_alias", "html_document", "html_element", "stylesheet", "css_rule"].includes(kind);
+  return ["swiftui_view", "react_component", "service", "class", "model", "struct", "enum", "interface", "type_alias", "html_document", "html_element", "jsx_element", "inline_script", "stylesheet", "css_rule"].includes(kind);
 }
 
 function isTranslucentCityObject(kind) {
@@ -1345,7 +1370,7 @@ function nodeCategory(node) {
 
 function isPopupMember(node) {
   return ["callable", "data"].includes(nodeCategory(node))
-    || ["html_element", "css_rule", "keyframes"].includes(node?.kind);
+    || ["html_element", "jsx_element", "css_rule", "keyframes"].includes(node?.kind);
 }
 
 function legacyCategory(kind) {
@@ -1355,8 +1380,9 @@ function legacyCategory(kind) {
   if (["swiftui_view", "react_component"].includes(kind)) return "component";
   if (["function", "method", "constructor"].includes(kind)) return "callable";
   if (["property", "variable", "css_custom_property"].includes(kind)) return "data";
-  if (["html_document", "html_element"].includes(kind)) return "markup";
+  if (["html_document", "html_element", "jsx_element"].includes(kind)) return "markup";
   if (["stylesheet", "css_rule", "keyframes"].includes(kind)) return "style";
+  if (kind?.endsWith("_asset")) return "asset";
   return "type";
 }
 
@@ -2623,6 +2649,9 @@ function formatScanSummary(diagnostics) {
   if (diagnostics.focusedFile) {
     parts.unshift(`Focused file: ${diagnostics.focusedFile}`);
   }
+  if (diagnostics.cacheHit) {
+    parts.push("reused unchanged project scan");
+  }
   if (diagnostics.heuristicHintEdges !== undefined) {
     parts.push(`${diagnostics.heuristicHintEdges} inferred hint edges`);
   }
@@ -2999,12 +3028,14 @@ function selectNode(id, options = {}) {
   const openPopup = options.openPopup !== false;
   const focus = options.focus !== false;
   const revealInspector = options.revealInspector !== false;
+  const requestedId = id;
+  id = options.preferImageAsset === false ? id : preferredImageAssetId(id);
   state.selectedId = id;
   state.selectedEdgeKey = null;
   const node = state.nodeById.get(id);
   if (!node) return;
   if (openPopup) {
-    state.openShellId = resolveOpenShellId(id);
+    state.openShellId = resolveOpenShellId(requestedId) || resolveOpenShellId(id);
   } else {
     hidePopup();
   }
@@ -3013,6 +3044,15 @@ function selectNode(id, options = {}) {
   markFiltersDirty();
   if (focus) focusCameraOnNode(node);
   if (revealInspector) selectInspectorTab("object");
+}
+
+function preferredImageAssetId(nodeId) {
+  const imageEdges = (state.edgesByFrom.get(nodeId) || [])
+    .filter((edge) => edge.kind === "displays" && state.nodeById.get(edge.to)?.kind === "image_asset");
+  const primaryEdges = imageEdges.filter((edge) => edge.responsive !== true);
+  if (primaryEdges.length === 1) return primaryEdges[0].to;
+  if (imageEdges.length === 1) return imageEdges[0].to;
+  return nodeId;
 }
 
 function selectEdge(edge) {
@@ -3074,9 +3114,15 @@ function renderDetails(node) {
         <div><span>Vars</span><strong>${formatNumber(axis.variables)}</strong></div>
         <div><span>Funcs</span><strong>${formatNumber(axis.functions)}</strong></div>
         <div><span>Size</span><strong>${dimensions.width}×${dimensions.height}×${dimensions.depth}</strong></div>
+        ${node.language ? `<div><span>Language</span><strong>${escapeHtml(node.language)}</strong></div>` : ""}
+        ${node.attributes?.framework ? `<div><span>Framework</span><strong>${escapeHtml(node.attributes.framework)}</strong></div>` : ""}
         ${node.file ? `<div><span>File</span><strong>${escapeHtml(node.file)}:${node.line}</strong></div>` : ""}
       </div>
     </div>
+    ${node.attributes?.semanticName ? `<p><strong>Semantic symbol</strong><br><code>${escapeHtml(node.attributes.semanticName)}</code></p>` : ""}
+    ${node.attributes?.image ? `<p><strong>Image</strong><br>${node.attributes.altStatus ? `alt: <code>${escapeHtml(node.attributes.altStatus)}</code><br>` : ""}${node.attributes.src ? `source: <code>${escapeHtml(node.attributes.src)}</code><br>` : ""}${node.attributes.srcset ? `responsive: <code>${escapeHtml(node.attributes.srcset)}</code><br>` : ""}${node.attributes.width && node.attributes.height ? `intrinsic size: <code>${node.attributes.width}×${node.attributes.height}</code>` : ""}</p>` : ""}
+    ${selectedImagePreview(node)}
+    ${node.category === "asset" ? `<p><strong>Asset</strong><br>${node.attributes?.path ? `path: <code>${escapeHtml(node.attributes.path)}</code><br>` : ""}${node.attributes?.source ? `source: <code>${escapeHtml(node.attributes.source)}</code><br>` : ""}${node.attributes?.exists === true ? "local file: <code>found</code><br>" : node.attributes?.broken ? "local file: <code>missing</code><br>" : ""}${node.attributes?.pixelWidth && node.attributes?.pixelHeight ? `pixel size: <code>${node.attributes.pixelWidth}×${node.attributes.pixelHeight}</code><br>` : ""}${node.metrics?.bytes ? `bytes: <code>${formatNumber(node.metrics.bytes)}</code>` : ""}</p>` : ""}
     ${node.source ? `<p>Found by <code>${escapeHtml(node.source)}</code>${node.inferred ? " · inferred hint" : ""}${node.indexResolved ? " · Xcode index resolved" : ""}${node.confidence ? ` · confidence <code>${escapeHtml(node.confidence)}</code>` : ""}</p>` : ""}
     ${node.file ? `<section class="source-card"><div class="source-card-header"><div><span class="eyebrow">Source view</span><strong>${escapeHtml(node.file)}:${node.line}</strong></div><div class="source-actions"><button class="button button-compact source-button-primary" type="button" data-source-node-id="${escapeHtml(node.id)}">View source</button><button class="button button-compact" type="button" data-editor-node-id="${escapeHtml(node.id)}">Open in Editor</button></div></div><p>Source opens in the wide drawer so the inspector keeps one scroll area.</p></section>` : ""}
     <div class="detail-grid">
@@ -3088,6 +3134,14 @@ function renderDetails(node) {
       <p><strong>Used by</strong><br>${names(incoming, "in") || "No incoming relationships yet."}</p>
     </div>
   `;
+}
+
+function selectedImagePreview(node) {
+  if (node.kind !== "image_asset" || node.attributes?.exists !== true || !node.attributes?.path) return "";
+  const sourceRoot = state.graph?.project?.sourceRoot;
+  if (!sourceRoot) return "";
+  const source = `/api/asset?sourceRoot=${encodeURIComponent(sourceRoot)}&file=${encodeURIComponent(node.attributes.path)}`;
+  return `<figure class="selected-image-preview"><img src="${escapeHtml(source)}" alt="${escapeHtml(node.name)}"><figcaption>Selected image asset</figcaption></figure>`;
 }
 
 function renderEdgeDetails(edge) {
@@ -3131,6 +3185,11 @@ function describeEdge(edge) {
   if (edge.kind === "exports") return "The source file exports or re-exports the target.";
   if (edge.kind === "loads") return "The document loads this script or stylesheet.";
   if (edge.kind === "styles") return "This CSS selector matches the target markup element.";
+  if (edge.kind === "links_to") return "This HTML anchor navigates to the target page, fragment, or URL.";
+  if (edge.kind === "displays") return "This HTML image or responsive source displays the target image asset.";
+  if (edge.kind === "embeds") return "This element embeds the target media or document asset.";
+  if (edge.kind === "downloads") return "This link downloads the target asset.";
+  if (edge.kind === "submits_to") return "This form submits to the target route or URL.";
   if (edge.kind === "extends") return "The source type extends the target type.";
   if (edge.kind === "implements") return "The source type implements the target contract.";
   if (edge.kind === "defines") return "The source file contains or defines the target object.";
@@ -3349,9 +3408,9 @@ function isEdgeVisible(edge) {
 
 function isMainEdgeRenderable(edge) {
   if (state.edgeDensity === "everything") {
-    return ["uses", "calls", "imports", "exports", "loads", "styles", "extends", "implements", "conforms_to", "defines", "owns_state", "uses_member"].includes(edge.kind);
+    return ["uses", "calls", "imports", "exports", "loads", "styles", "links_to", "displays", "embeds", "downloads", "submits_to", "extends", "implements", "conforms_to", "defines", "owns_state", "uses_member"].includes(edge.kind);
   }
-  return ["uses", "calls", "imports", "exports", "loads", "styles", "extends", "implements", "conforms_to"].includes(edge.kind);
+  return ["uses", "calls", "imports", "exports", "loads", "styles", "links_to", "displays", "embeds", "downloads", "submits_to", "extends", "implements", "conforms_to"].includes(edge.kind);
 }
 
 function passesEdgeDensity(edge) {
@@ -3580,6 +3639,7 @@ function boundsForLayout(items) {
 }
 
 function dimensionsForNode(node) {
+  if (node.kind?.endsWith("_asset")) return assetDimensionsForNode(node);
   const base = baseDimensionsForKind(node.kind);
   if (node.kind === "repository" || node.kind === "module") return base;
 
@@ -3610,6 +3670,17 @@ function dimensionsForNode(node) {
     width: Math.round(width),
     height: Math.round(height),
     depth: Math.round(depth)
+  };
+}
+
+function assetDimensionsForNode(node) {
+  const pixelWidth = Math.max(1, Number(node?.attributes?.pixelWidth) || 1);
+  const pixelHeight = Math.max(1, Number(node?.attributes?.pixelHeight) || 1);
+  const aspect = clamp(pixelWidth / pixelHeight, 0.35, 2.8);
+  return {
+    width: clamp(34 * Math.sqrt(aspect), 24, 58),
+    depth: clamp(34 / Math.sqrt(aspect), 18, 52),
+    height: 8
   };
 }
 
@@ -3683,6 +3754,9 @@ function axisMetricsForNode(node) {
 
 function complexityForNode(node) {
   if (node.kind === "file") return 1;
+  if (["html_document", "html_element", "jsx_element"].includes(node.kind) && Number.isFinite(node.metrics?.complexity)) {
+    return clamp(node.metrics.complexity, 0.9, 100);
+  }
   const edgeCounts = graphEdgeCountsForNode(node.id);
   if (node.kind === "function") {
     const lineWeight = Math.sqrt(node.metrics?.lines || 2) * 0.42;
@@ -3728,8 +3802,9 @@ function baseDimensionsForKind(kind) {
   if (kind === "function" || kind === "method" || kind === "constructor") return { width: 10, depth: 10, height: 12 };
   if (kind === "property" || kind === "variable") return { width: 8, depth: 8, height: 8 };
   if (kind === "module") return { width: 38, depth: 38, height: 10 };
+  if (kind?.endsWith("_asset")) return { width: 34, depth: 34, height: 8 };
   if (kind === "protocol" || kind === "interface") return { width: 26, depth: 26, height: 40 };
-  if (kind === "html_element" || kind === "css_rule") return { width: 24, depth: 24, height: 18 };
+  if (kind === "html_element" || kind === "jsx_element" || kind === "css_rule") return { width: 24, depth: 24, height: 18 };
   if (kind === "html_document" || kind === "stylesheet") return { width: 30, depth: 30, height: 24 };
   return { width: 30, depth: 30, height: 30 };
 }
@@ -3787,6 +3862,11 @@ function getBasicMaterial(key, options) {
 
 function edgeColor(kind) {
   if (kind === "uses" || kind === "calls" || kind === "styles") return 0xff4f5f;
+  if (kind === "links_to") return 0x57e6c2;
+  if (kind === "displays") return 0xffb86c;
+  if (kind === "embeds") return 0xff6b78;
+  if (kind === "downloads") return 0xc77dff;
+  if (kind === "submits_to") return 0x57e6c2;
   if (kind === "imports" || kind === "exports" || kind === "loads") return 0x63d2ff;
   if (kind === "owns_state") return 0xff6b78;
   if (kind === "extends" || kind === "implements") return 0x5aa8ff;
@@ -3836,6 +3916,13 @@ function describeKind(kind) {
   if (kind === "react_component") return "React component";
   if (kind === "html_document") return "HTML document";
   if (kind === "html_element") return "named or structural HTML element";
+  if (kind === "jsx_element") return "JSX element inside a JavaScript or TypeScript component";
+  if (kind === "inline_script") return "JavaScript embedded in an HTML script element";
+  if (kind === "image_asset") return "local, responsive, embedded, or external image asset";
+  if (kind === "video_asset") return "local, embedded, or external video asset";
+  if (kind === "audio_asset") return "local, embedded, or external audio asset";
+  if (kind === "font_asset") return "local or external font asset";
+  if (kind === "web_asset") return "download, manifest, document, or other web asset";
   if (kind === "stylesheet") return "CSS stylesheet";
   if (kind === "css_rule") return "CSS selector rule";
   if (kind === "interface") return "interface contract";
@@ -3853,19 +3940,40 @@ function friendlyKind(kind) {
   if (kind === "property") return "Property / Var";
   if (kind === "react_component") return "Component";
   if (kind === "html_element") return "HTML Element";
+  if (kind === "jsx_element") return "JSX Element";
+  if (kind === "image_asset") return "Image Asset";
+  if (kind === "video_asset") return "Video Asset";
+  if (kind === "audio_asset") return "Audio Asset";
+  if (kind === "font_asset") return "Font Asset";
+  if (kind === "web_asset") return "Web Asset";
   if (kind === "css_rule") return "CSS Rule";
   return kind.replaceAll("_", " ");
 }
 
 function getInspectableMemberIds(nodeId) {
   if (!state.graph) return [];
-  return (state.edgesByFrom.get(nodeId) || [])
-    .filter((edge) => edge.kind === "defines")
+  const parent = state.nodeById.get(nodeId);
+  const direct = (state.edgesByFrom.get(nodeId) || [])
+    .filter((edge) => edge.kind === "defines" || (parent?.kind === "html_document" && edge.kind === "contains"))
     .map((edge) => edge.to)
     .filter((memberId) => {
       const node = state.nodeById.get(memberId);
       return isPopupMember(node);
     });
+  if (parent?.kind !== "html_document") return direct;
+  const results = [];
+  const seen = new Set();
+  const visit = (id) => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    const node = state.nodeById.get(id);
+    if (isPopupMember(node)) results.push(id);
+    for (const edge of state.edgesByFrom.get(id) || []) {
+      if (edge.kind === "contains") visit(edge.to);
+    }
+  };
+  direct.forEach(visit);
+  return results;
 }
 
 function getPopupContentIds(nodeId) {
@@ -3877,9 +3985,23 @@ function getPopupContentIds(nodeId) {
 function getXrayContentIds(nodeId) {
   if (!state.graph) return [];
   const shell = state.nodeById.get(nodeId);
-  return (state.edgesByFrom.get(nodeId) || [])
+  const directChildren = (state.edgesByFrom.get(nodeId) || [])
     .filter((edge) => edge.kind === "defines")
-    .map((edge) => edge.to)
+    .map((edge) => edge.to);
+  const htmlInternals = shell?.kind === "file" && shell.language === "html"
+    ? directChildren
+      .filter((childId) => state.nodeById.get(childId)?.kind === "html_document")
+      .flatMap((documentId) => getInspectableMemberIds(documentId))
+    : [];
+  const inlineScriptInternals = shell?.kind === "file" && shell.language === "html"
+    ? directChildren
+      .filter((childId) => state.nodeById.get(childId)?.kind === "inline_script")
+      .flatMap((scriptId) => [scriptId, ...getDefinedDescendantIds(scriptId)])
+    : [];
+  const candidates = shell?.kind === "file" && shell.language === "html"
+    ? [...htmlInternals, ...inlineScriptInternals]
+    : directChildren;
+  return uniqueValues(candidates)
     .filter((childId) => {
       const child = state.nodeById.get(childId);
       if (!child) return false;
@@ -3889,6 +4011,21 @@ function getXrayContentIds(nodeId) {
       }
       return isPopupMember(child);
     });
+}
+
+function getDefinedDescendantIds(nodeId) {
+  const results = [];
+  const seen = new Set();
+  const visit = (parentId) => {
+    for (const edge of state.edgesByFrom.get(parentId) || []) {
+      if (edge.kind !== "defines" || seen.has(edge.to)) continue;
+      seen.add(edge.to);
+      results.push(edge.to);
+      visit(edge.to);
+    }
+  };
+  visit(nodeId);
+  return results;
 }
 
 function isOpenedShell(nodeId) {
@@ -4290,6 +4427,7 @@ function buildMemberPopup() {
   const shellNode = state.layoutById.get(state.openShellId);
   if (!shellNode) return;
   const isFilePopup = shellNode.kind === "file";
+  const isHtmlPopup = (isFilePopup && shellNode.language === "html") || shellNode.kind === "html_document";
   const contentIds = getPopupContentIds(state.openShellId);
   if (contentIds.length === 0) return;
 
@@ -4297,6 +4435,13 @@ function buildMemberPopup() {
     const member = state.nodeById.get(memberId);
     if (isFilePopup && member?.kind === "protocol" && !state.showProtocols) return false;
     return member?.kind !== "property" || state.showProperties;
+  }).sort((leftId, rightId) => {
+    if (!isHtmlPopup) return 0;
+    const left = state.nodeById.get(leftId);
+    const right = state.nodeById.get(rightId);
+    return (left?.line || 0) - (right?.line || 0)
+      || (left?.column || 0) - (right?.column || 0)
+      || leftId.localeCompare(rightId);
   });
   if (visibleMemberIds.length === 0) return;
 
@@ -4306,12 +4451,18 @@ function buildMemberPopup() {
     .map((dependencyId) => state.layoutById.get(dependencyId) || state.nodeById.get(dependencyId))
     .filter(Boolean);
   const parentDimensions = popupDimensionsForParent(shellNode, visibleMemberIds.length);
-  const memberLayout = isFilePopup
-    ? popupFileChildLayout(shellNode, memberNodes, parentDimensions)
-    : popupContainedChildLayout(memberNodes, parentDimensions);
+  const memberLayout = isHtmlPopup
+    ? popupHtmlDomLayout(memberNodes)
+    : isFilePopup
+      ? popupFileChildLayout(shellNode, memberNodes, parentDimensions)
+      : popupContainedChildLayout(memberNodes, parentDimensions);
   const dependencyLayout = popupGridLayout(dependencyNodes, popupDimensionsForDependency);
   const maxMemberHeight = memberNodes.reduce((value, node, index) => {
-    const dimensions = isFilePopup ? memberLayout.dimensions[index] : popupDimensionsForMember(node);
+    const dimensions = isHtmlPopup
+      ? memberLayout.dimensions[index]
+      : isFilePopup
+        ? memberLayout.dimensions[index]
+        : popupDimensionsForMember(node);
     return Math.max(value, dimensions?.height || 0);
   }, 0);
   const maxDependencyHeight = dependencyNodes.reduce((value, node) => Math.max(value, popupDimensionsForDependency(node).height), 0);
@@ -4332,7 +4483,7 @@ function buildMemberPopup() {
   state.popupFocusTarget = {
     nodeId: shellNode.id,
     target: new THREE.Vector3(origin.x, origin.y + 10, origin.z),
-    distance: clamp(Math.max(frameWidth, frameHeight, frameDepth) * 2.2, 360, 920)
+    distance: clamp(Math.max(frameWidth, frameHeight, frameDepth) * 2.2, 360, isHtmlPopup ? 1200 : 920)
   };
   const frame = new THREE.Mesh(
     new THREE.BoxGeometry(frameWidth, frameHeight, frameDepth),
@@ -4391,14 +4542,50 @@ function buildMemberPopup() {
   parentLabel.position.set(parentPosition.x, parentPosition.y + Math.max(14, shellNode.height * 0.2 + 14), parentPosition.z);
   popupRoot.add(parentLabel);
 
-  if (isFilePopup) {
+  if (isHtmlPopup) {
+    placePopupHtmlElements(visibleMemberIds, parentPosition, parentDimensions, positions, memberLayout);
+  } else if (isFilePopup) {
     placePopupFileChildren(visibleMemberIds, parentPosition, parentDimensions, shellNode, positions, memberLayout);
   } else {
     placePopupContainedMembers(visibleMemberIds, parentPosition, parentDimensions, positions, memberLayout);
   }
-  placePopupDependencies(dependencyIds, origin, frameHeight, positions, dependencyLayout);
+  placePopupDependencies(dependencyIds, origin, frameHeight, positions, dependencyLayout, isHtmlPopup ? memberLayout.depth : 0);
 
   getPopupEdges(shellNode.id, visibleMemberIds, dependencyIds).forEach((edge) => drawPopupEdge(edge, positions));
+}
+
+function placePopupHtmlElements(elementIds, parentPosition, parentDimensions, positions, layoutInfo) {
+  elementIds.forEach((elementId, index) => {
+    const node = state.layoutById.get(elementId);
+    if (!node) return;
+    const base = layoutInfo.positions[index] || { x: 0, z: 0 };
+    const dimensions = layoutInfo.dimensions[index] || popupDimensionsForHtmlElement(node);
+    const position = new THREE.Vector3(
+      parentPosition.x + base.x,
+      parentPosition.y + parentDimensions.height / 2 + 12 + dimensions.height / 2,
+      parentPosition.z + base.z
+    );
+    const material = getNodeMaterial(node.kind, "popup-html-element", {
+      color: node.attributes?.navigation ? 0x57e6c2 : node.attributes?.image ? 0xffb86c : colorForNode(node),
+      roughness: 0.62,
+      metalness: 0.06,
+      emissive: node.attributes?.navigation ? 0x174b40 : node.attributes?.image ? 0x4f3216 : emissiveForNode(node),
+      emissiveIntensity: node.attributes?.navigation || node.attributes?.image ? 0.3 : 0.12,
+      transparent: false,
+      opacity: 1,
+      depthWrite: true
+    });
+    const mesh = new THREE.Mesh(makeNodeGeometry(node.kind, dimensions.width, dimensions.height, dimensions.depth), material);
+    mesh.position.copy(position);
+    mesh.userData.nodeId = elementId;
+    mesh.castShadow = true;
+    popupRoot.add(mesh);
+    positions.set(elementId, position.clone());
+
+    const label = makeLabel(node.name, node.attributes?.navigation ? "#baffed" : node.attributes?.image ? "#ffe0b5" : "#ffffff", 52, 9);
+    label.position.set(position.x, position.y + dimensions.height / 2 + 10, position.z);
+    popupRoot.add(label);
+  });
 }
 
 function placePopupFileChildren(childIds, parentPosition, parentDimensions, shellNode, positions, layoutInfo) {
@@ -4513,7 +4700,7 @@ function placePopupContainedMembers(memberIds, parentPosition, parentDimensions,
   });
 }
 
-function placePopupDependencies(dependencyIds, origin, frameHeight, positions, layoutInfo) {
+function placePopupDependencies(dependencyIds, origin, frameHeight, positions, layoutInfo, memberDepth = 0) {
   dependencyIds.forEach((dependencyId, index) => {
     const node = state.layoutById.get(dependencyId) || state.nodeById.get(dependencyId);
     if (!node) return;
@@ -4522,7 +4709,7 @@ function placePopupDependencies(dependencyIds, origin, frameHeight, positions, l
     const position = new THREE.Vector3(
       origin.x + base.x,
       origin.y - frameHeight / 2 + 104 + dimensions.height / 2,
-      origin.z + base.z - layoutInfo.depth * 0.42 - 48
+      origin.z + base.z - layoutInfo.depth * 0.42 - memberDepth * 0.5 - 48
     );
     const material = getNodeMaterial(node.kind, "popup-dependency", {
       color: colors[node.kind] || 0xa7c4ff,
@@ -4610,6 +4797,38 @@ function popupContainedChildLayout(nodes, parentDimensions) {
   };
 }
 
+function popupHtmlDomLayout(nodes) {
+  if (nodes.length === 0) {
+    return { columns: 1, rows: 0, width: 0, depth: 0, positions: [], dimensions: [] };
+  }
+  const dimensions = nodes.map(popupDimensionsForHtmlElement);
+  const columns = Math.max(1, Math.min(8, Math.ceil(Math.sqrt(nodes.length * 1.35))));
+  const rows = Math.max(1, Math.ceil(nodes.length / columns));
+  const maxWidth = dimensions.reduce((value, item) => Math.max(value, item.width), 0);
+  const maxDepth = dimensions.reduce((value, item) => Math.max(value, item.depth), 0);
+  const cellWidth = Math.max(76, maxWidth + 34);
+  const cellDepth = Math.max(64, maxDepth + 36);
+  const width = columns * cellWidth;
+  const depth = rows * cellDepth;
+  return {
+    columns,
+    rows,
+    width,
+    depth,
+    cellWidth,
+    cellDepth,
+    dimensions,
+    positions: nodes.map((_, index) => {
+      const column = index % columns;
+      const row = Math.floor(index / columns);
+      return {
+        x: column * cellWidth - ((columns - 1) * cellWidth) / 2,
+        z: row * cellDepth - ((rows - 1) * cellDepth) / 2
+      };
+    })
+  };
+}
+
 function popupGridLayout(nodes, dimensionsForPopupNode) {
   if (nodes.length === 0) {
     return { columns: 1, rows: 0, width: 0, depth: 0, cellWidth: 0, cellDepth: 0, positions: [] };
@@ -4657,7 +4876,20 @@ function popupDimensionsForContainedMember(node, itemSize) {
   };
 }
 
+function popupDimensionsForHtmlElement(node) {
+  const lines = Math.max(1, node.metrics?.lines || 1);
+  const nameWidth = Math.min(34, Math.max(0, String(node.name || "").length - 8) * 1.4);
+  return {
+    width: (node.attributes?.image ? 48 : node.attributes?.navigation ? 38 : 32) + nameWidth,
+    height: clamp(10 + Math.log2(lines + 1) * 4, 12, 28),
+    depth: node.attributes?.image ? 30 : node.attributes?.navigation ? 20 : 26
+  };
+}
+
 function popupDimensionsForParent(node, childCount = 0) {
+  if (node.kind === "html_document") {
+    return { width: 58, height: 24, depth: 46 };
+  }
   if (node.kind !== "file") {
     const childFootprint = Math.sqrt(Math.max(1, childCount)) * 24;
     return {
@@ -4699,8 +4931,9 @@ function popupDimensionsForDependency(node) {
 
 function getPopupDependencyIds(parentId, memberIds) {
   const memberSet = new Set(memberIds);
-  return uniqueValues((state.edgesByFrom.get(parentId) || [])
-    .filter((edge) => ["uses", "calls", "conforms_to", "extends", "implements", "imports", "exports", "loads", "styles"].includes(edge.kind))
+  const sourceIds = [parentId, ...memberIds];
+  return uniqueValues(sourceIds.flatMap((sourceId) => state.edgesByFrom.get(sourceId) || [])
+    .filter((edge) => ["uses", "calls", "conforms_to", "extends", "implements", "imports", "exports", "loads", "styles", "links_to", "displays", "embeds", "downloads", "submits_to"].includes(edge.kind))
     .map((edge) => edge.to)
     .filter((nodeId) => nodeId !== parentId && !memberSet.has(nodeId)));
 }
@@ -4717,9 +4950,10 @@ function getPopupEdges(parentId, memberIds, dependencyIds) {
   candidates.forEach((edge, edgeIndex) => {
     if (!isEdgeVisible(edge)) return;
     edge.__renderKey = edge.__renderKey || edgeKey(edge, edgeIndex);
-    if (edge.kind === "defines" && edge.from === parentId && visibleIds.has(edge.to)) edges.push(edge);
+    if (edge.kind === "defines" && visibleIds.has(edge.from) && visibleIds.has(edge.to)) edges.push(edge);
     if (edge.kind === "owns_state" && edge.from === parentId && visibleIds.has(edge.to)) edges.push(edge);
-    if (["uses", "calls", "conforms_to", "extends", "implements", "imports", "exports", "loads", "styles"].includes(edge.kind) && edge.from === parentId && visibleIds.has(edge.to)) edges.push(edge);
+    if (["uses", "calls", "conforms_to", "extends", "implements", "imports", "exports", "loads", "styles", "links_to", "displays", "embeds", "downloads", "submits_to"].includes(edge.kind)
+      && visibleIds.has(edge.from) && visibleIds.has(edge.to)) edges.push(edge);
     if (edge.kind === "uses_member" && visibleIds.has(edge.from) && visibleIds.has(edge.to)) edges.push(edge);
   });
 
@@ -4727,7 +4961,7 @@ function getPopupEdges(parentId, memberIds, dependencyIds) {
 }
 
 function isEdgeKindEnabled(kind) {
-  if (["calls", "styles", "extends", "implements"].includes(kind)) return state.edgeFilters.uses !== false;
+  if (["calls", "styles", "links_to", "displays", "embeds", "downloads", "submits_to", "extends", "implements"].includes(kind)) return state.edgeFilters.uses !== false;
   if (["exports", "loads"].includes(kind)) return state.edgeFilters.imports !== false;
   return state.edgeFilters[kind] !== false;
 }
@@ -4784,7 +5018,7 @@ function popupStreetCurveForEdge(fromPosition, toPosition) {
 }
 
 function popupEdgeColor(kind) {
-  if (kind === "defines") return 0xb9d8e8;
+  if (kind === "defines" || kind === "contains") return 0xb9d8e8;
   if (kind === "uses_member") return 0x7cf1b8;
   if (kind === "owns_state") return 0xff6b78;
   if (kind === "conforms_to") return 0xffffff;
@@ -4792,13 +5026,13 @@ function popupEdgeColor(kind) {
 }
 
 function popupEdgeOpacity(kind) {
-  if (kind === "defines") return 0.34;
+  if (kind === "defines" || kind === "contains") return 0.34;
   if (kind === "owns_state") return 0.58;
   return 0.74;
 }
 
 function popupEdgeLift(kind) {
-  if (kind === "defines") return 18;
+  if (kind === "defines" || kind === "contains") return 18;
   if (kind === "conforms_to") return 42;
   return 30;
 }

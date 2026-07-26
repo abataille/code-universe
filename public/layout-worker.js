@@ -13,14 +13,18 @@ const fileChildGap = 4;
 function buildLayout(graph) {
   const files = graph.nodes.filter((node) => node.kind === "file");
   const types = graph.nodes.filter((node) =>
-    ["component", "type"].includes(nodeCategory(node)) || ["html_document", "stylesheet"].includes(node.kind)
+    ["component", "type"].includes(nodeCategory(node)) || ["html_document", "stylesheet", "inline_script"].includes(node.kind)
   );
   const functions = graph.nodes.filter((node) =>
-    ["callable", "data"].includes(nodeCategory(node)) || ["html_element", "css_rule", "keyframes"].includes(node.kind)
+    ["callable", "data"].includes(nodeCategory(node)) || ["html_element", "jsx_element", "css_rule", "keyframes"].includes(node.kind)
   );
   const modules = graph.nodes.filter((node) => node.kind === "module");
+  const assets = graph.nodes.filter((node) => node.category === "asset");
   const edgesByFrom = groupEdgesByFrom(graph.edges);
   const definesByFrom = groupEdgesByFrom(graph.edges, "defines");
+  const ownedMembersByFrom = groupEdgesByFrom(graph.edges.filter((edge) =>
+    edge.kind === "defines" || edge.kind === "contains"
+  ));
   const layout = [];
   const layoutById = new Map();
   const fileChildTypesById = mapFileChildTypes(files, types, definesByFrom);
@@ -99,11 +103,22 @@ function buildLayout(graph) {
       ...dimensionsForNode(moduleNode, edgesByFrom, graph.nodes)
     });
   });
+  const assetOriginZ = moduleOriginZ - Math.max(90, Math.ceil(modules.length / 6) * 76 + 40);
+  assets.forEach((assetNode, index) => {
+    addLayoutNode(layout, layoutById, {
+      ...assetNode,
+      ...gridPosition(index, Math.max(1, assets.length), 78, 66, 0, assetOriginZ),
+      y: 34,
+      ...dimensionsForNode(assetNode, edgesByFrom, graph.nodes)
+    });
+  });
 
   types.forEach((type) => {
     const parent = layoutById.get(type.id);
     if (!parent) return;
-    const memberIds = new Set((definesByFrom.get(type.id) || []).map((edge) => edge.to));
+    const memberIds = new Set((ownedMembersByFrom.get(type.id) || [])
+      .filter((edge) => edge.kind === "defines" || type.kind === "html_document")
+      .map((edge) => edge.to));
     const members = functions.filter((candidate) => memberIds.has(candidate.id));
     const spacing = spacingForNodes(members, edgesByFrom, graph.nodes, 24, 24, 12);
     members.forEach((node, index) => {
@@ -270,6 +285,7 @@ function boundsForLayout(items) {
 }
 
 function dimensionsForNode(node, edgesByFrom, allNodes) {
+  if (node.kind?.endsWith("_asset")) return assetDimensionsForNode(node);
   const base = baseDimensionsForKind(node.kind);
   if (node.kind === "repository" || node.kind === "module") return base;
   const city = cityMetricsForNode(node, edgesByFrom, allNodes);
@@ -285,6 +301,17 @@ function dimensionsForNode(node, edgesByFrom, allNodes) {
   const height = clamp(base.height * 0.55 + city.heightScore * 2.4, base.height * 0.85, 440);
   const depth = clamp(base.depth * 0.55 + city.depthScore * 4.2, base.depth * 0.75, 170);
   return { width: Math.round(width), height: Math.round(height), depth: Math.round(depth) };
+}
+
+function assetDimensionsForNode(node) {
+  const pixelWidth = Math.max(1, Number(node?.attributes?.pixelWidth) || 1);
+  const pixelHeight = Math.max(1, Number(node?.attributes?.pixelHeight) || 1);
+  const aspect = clamp(pixelWidth / pixelHeight, 0.35, 2.8);
+  return {
+    width: clamp(34 * Math.sqrt(aspect), 24, 58),
+    depth: clamp(34 / Math.sqrt(aspect), 18, 52),
+    height: 8
+  };
 }
 
 function cityMetricsForNode(node, edgesByFrom, allNodes) {
@@ -341,6 +368,9 @@ function axisMetricsForNode(node, edgesByFrom, allNodes) {
 
 function complexityForNode(node, edgesByFrom) {
   if (node.kind === "file") return 1;
+  if (["html_document", "html_element", "jsx_element"].includes(node.kind) && Number.isFinite(node.metrics?.complexity)) {
+    return clamp(node.metrics.complexity, 0.9, 100);
+  }
   const edgeCounts = graphEdgeCountsForNode(node.id, edgesByFrom);
   if (nodeCategory(node) === "callable") {
     const lineWeight = Math.sqrt(node.metrics?.lines || 2) * 0.42;
@@ -385,8 +415,9 @@ function baseDimensionsForKind(kind) {
   if (["function", "method", "constructor"].includes(kind)) return { width: 10, depth: 10, height: 12 };
   if (kind === "property" || kind === "variable") return { width: 8, depth: 8, height: 8 };
   if (kind === "module") return { width: 38, depth: 38, height: 10 };
+  if (kind?.endsWith("_asset")) return { width: 34, depth: 34, height: 8 };
   if (kind === "protocol" || kind === "interface") return { width: 26, depth: 26, height: 40 };
-  if (kind === "html_element" || kind === "css_rule") return { width: 24, depth: 24, height: 18 };
+  if (kind === "html_element" || kind === "jsx_element" || kind === "css_rule") return { width: 24, depth: 24, height: 18 };
   if (kind === "html_document" || kind === "stylesheet") return { width: 30, depth: 30, height: 24 };
   return { width: 30, depth: 30, height: 30 };
 }
@@ -397,7 +428,8 @@ function nodeCategory(node) {
   if (["swiftui_view", "react_component"].includes(kind)) return "component";
   if (["function", "method", "constructor"].includes(kind)) return "callable";
   if (["property", "variable", "css_custom_property"].includes(kind)) return "data";
-  if (["html_document", "html_element"].includes(kind)) return "markup";
+  if (["html_document", "html_element", "jsx_element"].includes(kind)) return "markup";
+  if (kind?.endsWith("_asset")) return "asset";
   if (["stylesheet", "css_rule", "keyframes"].includes(kind)) return "style";
   if (["repository", "file", "module"].includes(kind)) return kind;
   return "type";

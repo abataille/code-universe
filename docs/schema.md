@@ -77,8 +77,13 @@ Neutral categories:
 - `data`
 - `markup`
 - `style`
+- `asset`
 
-`kind` is extensible and language-specific. Current kinds include the existing Swift kinds plus `react_component`, `interface`, `type_alias`, `method`, `constructor`, `variable`, `html_document`, `html_element`, `stylesheet`, `css_rule`, and `keyframes`.
+`kind` is extensible and language-specific. Current kinds include the existing Swift kinds plus `react_component`, `interface`, `record`, `implementation`, `category`, `type_alias`, `method`, `constructor`, `external_symbol`, `variable`, `inline_script`, `html_document`, `html_element`, `jsx_element`, `image_asset`, `video_asset`, `audio_asset`, `font_asset`, `web_asset`, `stylesheet`, `css_rule`, `css_custom_property`, and `keyframes`.
+
+Adapter-specific attributes may add semantic data without changing the neutral contract. Current examples include `semanticName`, `framework`, `component`, `cssModuleClasses`, `domReferences`, C# namespaces/base types, Objective-C selectors/protocols/categories, CSS selector classes/IDs/dimensions, HTML/JSX tag/class/ID metadata, and asset source, existence, byte size, pixel dimensions, alternative-text, sizing, loading, media-role, and responsive-candidate metadata.
+
+HTML document and element metrics use a `full-dom` model. `lines` is the physical source span; `elements`, `divs`, `spans`, `images`, `missingAlt`, `responsiveSources`, `attributes`, `eventHandlers`, `conditionals`, `templates`, `controls`, `maxDepth`, and `complexity` include collapsed anonymous descendants. These descendants affect measurements without requiring individual graph nodes.
 
 ## Edges
 
@@ -114,6 +119,11 @@ Supported relationships include:
 - `uses_member`
 - `loads`
 - `styles`
+- `links_to`
+- `displays`
+- `embeds`
+- `downloads`
+- `submits_to`
 
 The legacy Swift relationship names remain supported. Future migrations may normalize `conforms_to` to `implements` at query time, but existing Swift graph output is intentionally preserved.
 

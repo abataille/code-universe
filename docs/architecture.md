@@ -3,7 +3,7 @@
 ```text
 Project folder or source file
   -> shared discovery and language detection
-  -> Swift, JavaScript/TypeScript, and HTML/CSS adapters
+  -> Swift, JavaScript/TypeScript, HTML/CSS, C#, and Objective-C adapters
   -> validated schema-v2 graph
   -> browser/macOS 3D explorer, reviews, and MCP
 ```
@@ -11,6 +11,8 @@ Project folder or source file
 The app is split into language adapters, a local Node server, a browser-based Three.js viewer, and a small macOS WebKit shell. Each part communicates through the same versioned graph contract so the viewer can evolve independently from scanner quality. The existing Swift scanners are preserved behind the Swift adapter.
 
 See `language-adapters.md` for detection, adapter, editor, and migration details.
+
+JavaScript and TypeScript semantic relationships are resolved through a project-aware TypeScript compiler program. C# and Objective-C use dependency-free structural adapters with language-specific declaration, inheritance, member, import, and call/message-send resolution. Project and adapter fingerprints avoid repeating unchanged work while keeping scanner profiles and adapter versions isolated.
 
 ## Current Analysis Limits
 

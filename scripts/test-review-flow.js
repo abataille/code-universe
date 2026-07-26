@@ -19,6 +19,8 @@ await writeFile(join(patchRoot, "Other.swift"), "struct Other {}\n");
 await writeFile(join(patchRoot, "Feature.ts"), "export const value = 1;\n");
 await writeFile(join(nonGitRoot, "Standalone.swift"), "struct Standalone {\n    let value = 1\n}\n");
 await writeFile(join(nonGitRoot, "index.html"), "<main id=\"app\">Before</main>\n");
+const previewPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+await writeFile(join(nonGitRoot, "preview.png"), previewPng);
 await writeFile(join(dataRoot, "Outside.swift"), "struct Outside {}\n");
 await symlink(join(dataRoot, "Outside.swift"), join(patchRoot, "Escape.swift"));
 await execFileAsync("git", ["init", "-q"], { cwd: patchRoot });
@@ -72,6 +74,15 @@ try {
     })
   });
   assert(escapedSourceResponse.status === 403, "source access should reject symlinks that escape the project root");
+  const assetResponse = await fetch(
+    `http://127.0.0.1:${port}/api/asset?sourceRoot=${encodeURIComponent(nonGitRoot)}&file=${encodeURIComponent("preview.png")}`
+  );
+  assert(assetResponse.ok && assetResponse.headers.get("content-type") === "image/png", "asset endpoint should serve selected local images");
+  assert(Buffer.from(await assetResponse.arrayBuffer()).equals(previewPng), "asset endpoint should preserve image bytes");
+  const nonImageAssetResponse = await fetch(
+    `http://127.0.0.1:${port}/api/asset?sourceRoot=${encodeURIComponent(nonGitRoot)}&file=${encodeURIComponent("Standalone.swift")}`
+  );
+  assert(nonImageAssetResponse.status === 415, "asset endpoint should reject non-image files");
 
   const started = await post("/api/reviews/start", {
     sourceRoot,

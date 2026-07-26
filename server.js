@@ -40,6 +40,17 @@ const contentTypes = new Map([
   [".js", "text/javascript; charset=utf-8"],
   [".json", "application/json; charset=utf-8"]
 ]);
+const imageContentTypes = new Map([
+  [".avif", "image/avif"],
+  [".bmp", "image/bmp"],
+  [".gif", "image/gif"],
+  [".ico", "image/x-icon"],
+  [".jpeg", "image/jpeg"],
+  [".jpg", "image/jpeg"],
+  [".png", "image/png"],
+  [".svg", "image/svg+xml"],
+  [".webp", "image/webp"]
+]);
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url || "/", `http://${host}:${port}`);
@@ -101,6 +112,11 @@ const server = createServer(async (request, response) => {
       const body = await readJsonBody(request);
       const payload = await readSourceSnippet(body);
       sendJson(response, 200, payload);
+      return;
+    }
+
+    if (url.pathname === "/api/asset" && request.method === "GET") {
+      await serveProjectImage(url, response);
       return;
     }
 
@@ -783,6 +799,23 @@ async function readSourceSnippet(body) {
   };
 }
 
+async function serveProjectImage(url, response) {
+  const sourceRoot = url.searchParams.get("sourceRoot");
+  const file = url.searchParams.get("file");
+  const extension = extname(file || "").toLowerCase();
+  const contentType = imageContentTypes.get(extension);
+  if (!contentType) throw responseError(415, "Only supported image assets can be previewed.");
+  const { resolvedFile } = await resolveSourceLocation({ sourceRoot, file, line: 1 });
+  const body = await readFile(resolvedFile);
+  response.writeHead(200, {
+    "Content-Type": contentType,
+    "Content-Length": body.length,
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff"
+  });
+  response.end(body);
+}
+
 async function openSourceInXcode(body) {
   const { resolvedFile, relativeFile, targetLine } = await resolveSourceLocation(body);
   const project = universeScanCache.get(resolve(body.sourceRoot))?.graph?.project || null;
@@ -1118,7 +1151,7 @@ function classifyCodexCommand(command) {
 }
 
 function isSourceInventoryCommand(command) {
-  return /(?:rg\s+--files|find\b[^\n]*(?:-name|-path)[^\n]*\*\.(?:swift|[cm]?[jt]sx?|html?|css))/i.test(command);
+  return /(?:rg\s+--files|find\b[^\n]*(?:-name|-path)[^\n]*\*\.(?:swift|[cm]?[jt]sx?|html?|css|cs|h|m|mm))/i.test(command);
 }
 
 function summarizeCodexCommand(command, kind, outcome) {
@@ -1135,7 +1168,7 @@ function summarizeCodexCommand(command, kind, outcome) {
 function sourceFilesInText(text, sourceRoot) {
   const matches = [];
   const seen = new Set();
-  const pattern = /((?:\/?[A-Za-z0-9_@+.-]+\/)*[A-Za-z0-9_@+.-]+\.(?:swift|mjs|cjs|jsx|mts|cts|tsx|js|ts|html?|css))(?::(\d+))?(?::(\d+))?/gi;
+  const pattern = /((?:\/?[A-Za-z0-9_@+.-]+\/)*[A-Za-z0-9_@+.-]+\.(?:swift|mjs|cjs|jsx|mts|cts|tsx|js|ts|html?|css|cs|h|m|mm))(?::(\d+))?(?::(\d+))?/gi;
   for (const match of String(text || "").matchAll(pattern)) {
     const file = normalizeTraceSourceFile(match[1], sourceRoot);
     const key = `${file}:${match[2] || ""}`;
@@ -1816,7 +1849,7 @@ if choice is false then error number -128
 if item 1 of choice is "Project folder" then
   set chosenItem to choose folder with prompt "Choose a project folder"
 else
-  set chosenItem to choose file with prompt "Choose a Swift, JavaScript, TypeScript, HTML, or CSS source file"
+  set chosenItem to choose file with prompt "Choose a Swift, JavaScript, TypeScript, HTML, CSS, C#, or Objective-C source file"
 end if
 POSIX path of chosenItem
 `;
