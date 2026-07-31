@@ -14,7 +14,7 @@ const server = new McpServer(
     version: "0.1.0"
   },
   {
-    instructions: "Use these read-only tools to inspect the active Swift project's architecture before broad shell searches. Start with get_project_summary or search_nodes, inspect exact nodes and relationships, then read only the source excerpts needed to confirm conclusions. These tools never modify source."
+    instructions: "Use these read-only tools to inspect the active project's language-neutral architecture before broad shell searches. Start with get_project_summary to identify its languages, then search nodes, inspect exact relationships, and read only the source excerpts needed to confirm conclusions. Use each node's language and file extension instead of assuming Swift. These tools never modify source."
   }
 );
 
@@ -58,7 +58,7 @@ registerTool(
 );
 registerTool(
   "read_source",
-  "Read a bounded Swift source excerpt inside the active project.",
+  "Read a bounded source excerpt in any supported language inside the active project.",
   {
     file: z.string().min(1),
     line: z.number().int().min(1).optional(),

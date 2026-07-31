@@ -168,7 +168,7 @@ Review Mode overlays observable Codex activity on the existing source city. Insp
 - **Node-focused navigation**: selecting a trace step highlights its mapped object without opening a popup or moving the camera.
 - **Complete token ledger**: view total, input, uncached input, cached input, output, visible output, reasoning-output tokens, and metered model turns without double-counting subsets.
 - **Readable final report**: preserve long conclusions and render headings, lists, source references, inline code, and code blocks in a copyable result panel.
-- **Integrated source view**: open the complete Swift file, highlight the relevant line, or jump directly to Xcode.
+- **Integrated source view**: open the complete source file, highlight the relevant range, or jump directly to the configured editor.
 - **Trace replay**: replay the investigation with progressive highlights and route streets, pause or resume it, and choose 0.5×, 1×, or 2× speed.
 - **Project trace history**: automatically load the latest saved trace for the selected project or restore it with `Load Latest Trace`.
 - **Import and automation**: import JSON traces or send review events through the command-line bridge.
@@ -177,6 +177,8 @@ Choose the project in Code Universe, enter the behavior in the `Behavior review`
 
 - `Inspect only` launches Codex in a read-only sandbox and cannot change source files.
 - `Inspect and fix` allows Codex to edit the selected project and run focused verification.
+
+Git repositories retain Codex's normal repository trust check. When the selected project is a plain source folder—common for standalone HTML/CSS/JavaScript sites—Code Universe detects that it is not a Git work tree and launches `codex exec` with the explicit `--skip-git-repo-check` option. The sandbox, selected `sourceRoot`, MCP token, and project-scoped file validation remain unchanged.
 
 After an `Inspect only` review completes, select `Apply findings` in the final-result card or drawer. Code Universe starts a new `Inspect and fix` review for the same project, includes the previous report as a hypothesis, and stores the originating review in `parentReviewId`.
 
@@ -198,7 +200,7 @@ The MCP server exposes seven bounded, read-only tools:
 
 Codex uses these tools to query the graph before broad source searches. MCP calls are labeled in the review timeline and mapped to the returned file or object. The MCP server cannot edit files, run shell commands, open Xcode, or access a different project. In `Inspect and fix` mode, source changes still use Codex's normal workspace tools, approvals, Git patch capture, and focused verification.
 
-Trace extraction is project-scoped: generated build folders and external files are ignored, project-wide source inventories are collapsed, repeated inspection/search events are deduplicated within each review phase, and build/test commands use concise outcome labels. Fix reviews use a bounded Swift source snapshot when a Git baseline is unavailable, so edit steps can still show their unified diff.
+Trace extraction is project-scoped and language-neutral: generated build folders and external files are ignored, project-wide source inventories are collapsed, repeated inspection/search events are deduplicated within each review phase, and build/test commands use concise outcome labels. The review records the detected primary language and full language mix so Codex uses appropriate terminology and tools for Swift, web, C#, Objective-C, or mixed projects. Fix reviews use a bounded supported-source snapshot when a Git baseline is unavailable, so edit steps can still show their unified diff.
 
 Completed and imported traces can be replayed from the `Review path` panel. Replay progressively reveals mapped nodes and route streets, supports pause/resume and 0.5×, 1×, or 2× speed, and reveals the final report only when the conclusion step is reached.
 

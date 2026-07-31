@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 import { scanSwiftFolder } from "./scripts/scan-swift-core.js";
 import { enrichGraphWithXcodeIndex } from "./scripts/scan-xcode-index.js";
 import { executeMcpGraphTool, mcpGraphToolNames, mcpTraceEvent } from "./lib/mcp-queries.js";
+import { languageForFile } from "./lib/graph/schema.js";
 import { scanProject, profileForScanner, scannerForProfile } from "./lib/projects/scan-project.js";
 import { discoverProjectFiles, isSupportedSourceFile } from "./lib/projects/discover-files.js";
 import { openSourceInEditor } from "./lib/editors/registry.js";
@@ -782,14 +783,16 @@ async function readSourceSnippet(body) {
   const source = await readFile(resolvedFile, "utf8");
   const lines = source.split(/\r?\n/);
   const clampedLine = Math.max(1, Math.min(lines.length, targetLine));
+  const clampedEndLine = Math.max(clampedLine, Math.min(lines.length, Number(body?.endLine || clampedLine)));
   const context = Math.max(4, Math.min(80, Number(body?.context || 12)));
   const fullFile = body?.fullFile === true;
   const startLine = fullFile ? 1 : Math.max(1, clampedLine - context);
-  const endLine = fullFile ? lines.length : Math.min(lines.length, clampedLine + context);
+  const endLine = fullFile ? lines.length : Math.min(lines.length, clampedEndLine + context);
 
   return {
     file: relativeFile,
     line: clampedLine,
+    endLine: clampedEndLine,
     startLine,
     endLine,
     code: lines.slice(startLine - 1, endLine).map((content, index) => ({
@@ -822,7 +825,9 @@ async function openSourceInXcode(body) {
   const opened = await openSourceInEditor({
     file: resolvedFile,
     line: targetLine,
-    column: Number(body?.column || 1)
+    column: Number(body?.column || 1),
+    endLine: Number(body?.endLine || targetLine),
+    endColumn: Number(body?.endColumn || body?.column || 1)
   }, project, {
     editor: body?.editor
   });
@@ -830,6 +835,7 @@ async function openSourceInXcode(body) {
     opened: true,
     file: relativeFile,
     line: targetLine,
+    selection: opened.selection,
     editor: opened.editor,
     editorName: opened.displayName
   };
@@ -898,6 +904,8 @@ async function launchCodexReview(body) {
   const effectiveModel = requestedModel || defaults.model;
   const effectiveReasoningEffort = requestedReasoningEffort || defaults.reasoningEffort;
   const codex = await resolveCodexCommand();
+  const skipGitRepoCheck = !await isGitWorkTree(sourceRoot);
+  const languageContext = await reviewLanguageContext(sourceRoot);
   const { review } = await startReview({
     ...body,
     sourceRoot,
@@ -913,6 +921,9 @@ async function launchCodexReview(body) {
     reasoningEffort: effectiveReasoningEffort,
     modelOverride: Boolean(requestedModel),
     reasoningOverride: Boolean(requestedReasoningEffort),
+    skipGitRepoCheck,
+    primaryLanguage: languageContext.primaryLanguage,
+    languages: languageContext.languages,
     threadId: null,
     startedAt: new Date().toISOString(),
     finishedAt: null,
@@ -945,6 +956,7 @@ async function launchCodexReview(body) {
     ...(requestedReasoningEffort ? ["--config", `model_reasoning_effort="${requestedReasoningEffort}"`] : []),
     ...mcpConfig,
     "exec",
+    ...(skipGitRepoCheck ? ["--skip-git-repo-check"] : []),
     "--json",
     "--ephemeral",
     "--sandbox",
@@ -1029,19 +1041,36 @@ async function resolveCodexCommand() {
   throw new Error("Codex CLI was not found. Install it or set CODE_UNIVERSE_CODEX_PATH.");
 }
 
+async function isGitWorkTree(sourceRoot) {
+  try {
+    const { stdout } = await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: sourceRoot });
+    return stdout.trim() === "true";
+  } catch {
+    return false;
+  }
+}
+
 function codexReviewPrompt(review, mode, parentReview = null) {
   const behavior = review.behavior || review.title;
+  const primaryLanguage = review.codex?.primaryLanguage;
+  const languageNames = (review.codex?.languages || [])
+    .map((entry) => reviewLanguageName(entry.id))
+    .filter(Boolean);
   const action = mode === "fix"
     ? "Find the root cause, implement the smallest safe fix, and run focused verification."
     : "Investigate only. Do not modify source files. Find the most likely root cause and gather concrete evidence.";
   const prompt = [
     `Review this behavior: ${behavior}`,
+    languageNames.length > 0
+      ? `Detected project languages: ${languageNames.join(", ")}.${primaryLanguage ? ` Primary language: ${reviewLanguageName(primaryLanguage)}.` : ""}`
+      : "The project language could not be determined; infer it from file extensions and source syntax.",
     action,
     "Use the code_universe MCP tools first to locate relevant objects, relationships, and bounded source excerpts.",
     "Treat the MCP map as architectural context; confirm important conclusions against the actual source.",
     "Inspect the relevant source code instead of guessing.",
     "Run only focused, non-destructive commands and tests that help establish the behavior.",
-    "In the final response, name the relevant Swift files and symbols, explain the evidence, and clearly separate confirmed facts from hypotheses."
+    "Use language-appropriate terminology, source conventions, and focused build/test tools; do not assume the project is Swift.",
+    "In the final response, name the relevant source files and symbols, explain the evidence, and clearly separate confirmed facts from hypotheses."
   ];
   if (parentReview?.codex?.lastMessage) {
     prompt.push(
@@ -1053,6 +1082,43 @@ function codexReviewPrompt(review, mode, parentReview = null) {
     );
   }
   return prompt.join("\n");
+}
+
+async function reviewLanguageContext(sourceRoot) {
+  const cachedLanguages = universeScanCache.get(resolve(sourceRoot))?.graph?.project?.languages;
+  const cachedPrimary = universeScanCache.get(resolve(sourceRoot))?.graph?.project?.primaryLanguage;
+  if (Array.isArray(cachedLanguages) && cachedLanguages.length > 0) {
+    return {
+      primaryLanguage: cachedPrimary || cachedLanguages[0]?.id || null,
+      languages: cachedLanguages.map((entry) => ({
+        id: entry.id,
+        fileCount: Number(entry.fileCount) || 0
+      }))
+    };
+  }
+  const files = await discoverProjectFiles(sourceRoot);
+  const counts = new Map();
+  for (const file of files) {
+    const language = languageForFile(file.relative);
+    if (language) counts.set(language, (counts.get(language) || 0) + 1);
+  }
+  const languages = [...counts]
+    .map(([id, fileCount]) => ({ id, fileCount }))
+    .sort((left, right) => right.fileCount - left.fileCount || left.id.localeCompare(right.id));
+  return { primaryLanguage: languages[0]?.id || null, languages };
+}
+
+function reviewLanguageName(language) {
+  return ({
+    swift: "Swift",
+    javascript: "JavaScript",
+    typescript: "TypeScript",
+    html: "HTML",
+    css: "CSS",
+    csharp: "C#",
+    "objective-c": "Objective-C",
+    "objective-cpp": "Objective-C++"
+  })[language] || language || "";
 }
 
 function queueReviewUpdate(reviewId, update) {

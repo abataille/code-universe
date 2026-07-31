@@ -70,6 +70,7 @@ const contentDrawerCloseButton = document.querySelector("#contentDrawerCloseButt
 
 const colors = {
   repository: 0x45d9ff,
+  directory: 0x324d61,
   file: 0x263746,
   swiftui_view: 0x18ff9a,
   service: 0xffc928,
@@ -100,6 +101,8 @@ const colors = {
   keyframes: 0xff5ec4,
   module: 0x7d8cff
 };
+const htmlArchitecturalTags = new Set(["main", "nav", "header", "footer", "section", "article", "form", "template", "dialog"]);
+const htmlControlTags = new Set(["button", "input", "select", "textarea", "details", "summary"]);
 
 const geometryCache = new Map();
 const materialCache = new Map();
@@ -117,7 +120,7 @@ const reviewReasoningKey = "codeUniverse.reviewReasoning";
 const uiThemeKey = "codeUniverse.uiTheme";
 
 const importantKinds = new Set([
-  "file", "swiftui_view", "service", "class", "model", "struct", "enum", "protocol",
+  "directory", "file", "swiftui_view", "service", "class", "model", "struct", "enum", "protocol",
   "image_asset", "video_asset", "audio_asset"
 ]);
 
@@ -471,6 +474,9 @@ async function compareParsers() {
 }
 
 async function loadGraph(graph, descriptor) {
+  const previousStableId = state.selectedId
+    ? state.nodeById.get(state.selectedId)?.identity?.stableId
+    : null;
   state.graph = normalizeGraphForViewer(graph);
   graph = state.graph;
   state.largeGraphMode = isLargeGraph(graph);
@@ -506,7 +512,10 @@ async function loadGraph(graph, descriptor) {
   buildScene();
   appendGraphScaleNotice();
   markFiltersDirty();
-  selectNode(state.layout.find((item) => item.kind === "repository")?.id || state.layout[0]?.id);
+  const restoredSelection = previousStableId
+    ? state.layout.find((item) => item.identity?.stableId === previousStableId)?.id
+    : null;
+  selectNode(restoredSelection || state.layout.find((item) => item.kind === "repository")?.id || state.layout[0]?.id);
   syncButtons();
   await refreshActiveReview(true);
 }
@@ -565,15 +574,16 @@ function focusSelectedFile(diagnostics) {
 }
 
 function buildLayout(graph) {
-  const files = graph.nodes.filter((node) => node.kind === "file");
+  const files = graph.nodes.filter((node) => node.kind === "file").sort(compareStableNode);
+  const directories = graph.nodes.filter((node) => node.kind === "directory").sort(compareStableNode);
   const types = graph.nodes.filter((node) =>
     ["component", "type"].includes(nodeCategory(node)) || ["html_document", "stylesheet", "inline_script"].includes(node.kind)
-  );
+  ).sort(compareStableNode);
   const functions = graph.nodes.filter((node) =>
     ["callable", "data"].includes(nodeCategory(node)) || ["html_element", "jsx_element", "css_rule", "keyframes"].includes(node.kind)
-  );
-  const modules = graph.nodes.filter((node) => node.kind === "module");
-  const assets = graph.nodes.filter((node) => node.category === "asset");
+  ).sort(compareStableNode);
+  const modules = graph.nodes.filter((node) => node.kind === "module").sort(compareStableNode);
+  const assets = graph.nodes.filter((node) => node.category === "asset").sort(compareStableNode);
   const definesByFrom = groupEdgesByFrom(graph.edges, "defines");
   const ownedMembersByFrom = groupEdgesByFrom(graph.edges.filter((edge) =>
     edge.kind === "defines" || edge.kind === "contains"
@@ -581,20 +591,35 @@ function buildLayout(graph) {
   const layout = [];
   const layoutById = new Map();
   const fileChildTypesById = mapFileChildTypes(files, types, definesByFrom);
-  const fileDistricts = packFileDistricts(files, fileChildTypesById);
+  const directoryDistricts = planDirectoryDistricts(directories, files, fileChildTypesById);
+  const directoryBounds = boundsForLayout([...directoryDistricts.values()]);
+  const rootFiles = files.filter((file) => !directoryDistricts.has(file.hierarchy?.parentId));
+  const rootFileDistricts = packFileDistricts(rootFiles, fileChildTypesById);
+  const rootFileOriginZ = directoryBounds.maxZ + 100;
 
   addLayoutNode(layout, layoutById, {
     ...graph.nodes.find((node) => node.kind === "repository"),
-    ...gridPosition(0, 1, 170, 150, 0, -150),
+    ...gridPosition(0, 1, 170, 150, 0, directoryBounds.minZ - 120),
     y: 0,
     ...dimensionsForNode({ kind: "repository" })
   });
+  placeDirectories(directories, layout, layoutById, directoryDistricts);
 
   files.forEach((file, index) => {
     const dimensions = dimensionsForNode(file);
-    const district = fileDistricts.get(file.id) || {
+    const directoryParent = layoutById.get(file.hierarchy?.parentId);
+    const directoryPlan = directoryDistricts.get(file.hierarchy?.parentId);
+    const localFile = directoryPlan?.files.get(file.id);
+    const district = directoryParent?.kind === "directory" && localFile ? {
+      ...localFile,
+      x: directoryParent.x + localFile.x,
+      z: directoryParent.z + localFile.z
+    } : {
+      ...(rootFileDistricts.get(file.id) || {
       ...fileDistrictDimensions(file, fileChildTypesById.get(file.id) || []),
       ...gridPosition(index, Math.max(1, files.length), 130, 110, 0, 20)
+      }),
+      z: (rootFileDistricts.get(file.id)?.z || 0) + rootFileOriginZ
     };
     addLayoutNode(layout, layoutById, {
       ...file,
@@ -605,7 +630,8 @@ function buildLayout(graph) {
       depth: Math.max(dimensions.depth, district.depth),
       x: district.x,
       z: district.z,
-      y: 0,
+      y: directoryParent?.kind === "directory" ? directoryParent.y + directoryParent.height + 2 : 0,
+      parentId: directoryParent?.kind === "directory" ? directoryParent.id : null,
       visualWidth: Math.max(dimensions.width, district.width),
       visualDepth: Math.max(dimensions.depth, district.depth)
     });
@@ -688,8 +714,65 @@ function buildLayout(graph) {
     });
   });
 
+  placeHierarchyDescendants(graph.nodes, layout, layoutById, edgesByFrom);
   separateLargeObjects(layout);
   return layout;
+}
+
+function compareStableNode(left, right) {
+  return String(left.identity?.stableId || left.id).localeCompare(String(right.identity?.stableId || right.id));
+}
+
+function placeDirectories(directories, layout, layoutById, directoryDistricts) {
+  for (const directory of directories) {
+    const district = directoryDistricts.get(directory.id);
+    if (!district) continue;
+    addLayoutNode(layout, layoutById, {
+      ...directory,
+      x: district.x,
+      z: district.z,
+      y: 1,
+      width: district.width,
+      depth: district.depth,
+      height: 2,
+      parentId: directory.hierarchy?.parentId || null
+    });
+  }
+}
+
+function placeHierarchyDescendants(nodes, layout, layoutById, edgesByFrom) {
+  const pending = nodes.filter((node) =>
+    !layoutById.has(node.id)
+    && node.hierarchy?.parentId
+    && !["repository", "file", "module"].includes(node.kind)
+  );
+  for (let pass = 0; pass < 32 && pending.length; pass += 1) {
+    let placed = 0;
+    for (let index = pending.length - 1; index >= 0; index -= 1) {
+      const node = pending[index];
+      const parent = layoutById.get(node.hierarchy.parentId);
+      if (!parent) continue;
+      const siblings = nodes.filter((candidate) =>
+        candidate.hierarchy?.parentId === node.hierarchy.parentId && !layoutById.has(candidate.id)
+      );
+      const siblingIndex = Math.max(0, siblings.findIndex((candidate) => candidate.id === node.id));
+      const angle = (Math.PI * 2 * siblingIndex) / Math.max(1, siblings.length);
+      const dimensions = dimensionsForNode(node, edgesByFrom, nodes);
+      const radius = Math.max(parent.width || 20, parent.depth || 20) * 0.55
+        + Math.max(dimensions.width, dimensions.depth) * 0.55 + 5;
+      addLayoutNode(layout, layoutById, {
+        ...node,
+        ...dimensions,
+        x: parent.x + Math.cos(angle) * radius,
+        z: parent.z + Math.sin(angle) * radius,
+        y: parent.y + parent.height + 6,
+        parentId: parent.id
+      });
+      pending.splice(index, 1);
+      placed += 1;
+    }
+    if (!placed) break;
+  }
 }
 
 function addLayoutNode(layout, layoutById, node) {
@@ -725,6 +808,79 @@ function mapFileChildTypes(files, types, definesByFrom) {
     groups.set(file.id, childTypes);
     return groups;
   }, new Map());
+}
+
+function planDirectoryDistricts(directories, files, fileChildTypesById) {
+  if (directories.length === 0) return new Map();
+  const directoryPlans = [...directories]
+    .sort((left, right) => String(left.qualifiedName || left.name).localeCompare(String(right.qualifiedName || right.name)))
+    .map((directory) => {
+    const directFiles = files.filter((file) => file.hierarchy?.parentId === directory.id);
+    const packedFiles = packFileDistricts(directFiles, fileChildTypesById);
+    const fileItems = [...packedFiles.entries()].map(([id, district]) => ({ id, ...district }));
+    const fileBounds = boundsForLayout(fileItems);
+    const contentWidth = fileItems.length > 0 ? fileBounds.maxX - fileBounds.minX : 0;
+    const contentDepth = fileItems.length > 0 ? fileBounds.maxZ - fileBounds.minZ : 0;
+    const centerX = fileItems.length > 0 ? (fileBounds.minX + fileBounds.maxX) / 2 : 0;
+    const centerZ = fileItems.length > 0 ? (fileBounds.minZ + fileBounds.maxZ) / 2 : 0;
+    const localFiles = new Map(fileItems.map((item) => [item.id, {
+      x: item.x - centerX,
+      z: item.z - centerZ,
+      width: item.width,
+      depth: item.depth
+    }]));
+      return {
+        id: directory.id,
+        directory,
+        width: Math.max(96, contentWidth + 28),
+        depth: Math.max(70, contentDepth + 28),
+        files: localFiles
+      };
+    });
+  const packedDirectories = packDistrictRectangles(directoryPlans, 38);
+  return new Map(directoryPlans.map((plan) => [plan.id, {
+    ...plan,
+    ...packedDirectories.get(plan.id)
+  }]));
+}
+
+function packDistrictRectangles(districts, gap) {
+  if (districts.length === 0) return new Map();
+  const totalArea = districts.reduce((sum, district) => sum + (district.width + gap) * (district.depth + gap), 0);
+  const widest = districts.reduce((value, district) => Math.max(value, district.width), 0);
+  const targetWidth = Math.max(widest, Math.sqrt(totalArea) * 1.12);
+  const rows = [];
+  let current = [];
+  let rowWidth = 0;
+  let rowDepth = 0;
+  for (const district of districts) {
+    const nextWidth = current.length === 0 ? district.width : rowWidth + gap + district.width;
+    if (current.length > 0 && nextWidth > targetWidth) {
+      rows.push({ items: current, width: rowWidth, depth: rowDepth });
+      current = [];
+      rowWidth = 0;
+      rowDepth = 0;
+    }
+    current.push(district);
+    rowWidth = rowWidth === 0 ? district.width : rowWidth + gap + district.width;
+    rowDepth = Math.max(rowDepth, district.depth);
+  }
+  if (current.length > 0) rows.push({ items: current, width: rowWidth, depth: rowDepth });
+  const totalDepth = rows.reduce((sum, row, index) => sum + row.depth + (index > 0 ? gap : 0), 0);
+  const positions = new Map();
+  let rowTop = 20 - totalDepth / 2;
+  for (const row of rows) {
+    let left = -row.width / 2;
+    for (const district of row.items) {
+      positions.set(district.id, {
+        x: left + district.width / 2,
+        z: rowTop + row.depth / 2
+      });
+      left += district.width + gap;
+    }
+    rowTop += row.depth + gap;
+  }
+  return positions;
 }
 
 function packFileDistricts(files, fileChildTypesById) {
@@ -2099,7 +2255,8 @@ function isGeneratedReviewFile(file) {
 }
 
 function isReviewInventoryCommand(command) {
-  return typeof command === "string" && /(?:rg\s+--files|find\b[^\n]*(?:-name|-path)[^\n]*\*\.swift)/i.test(command);
+  return typeof command === "string"
+    && /(?:rg\s+--files|find\b[^\n]*(?:-name|-path)[^\n]*\*\.(?:swift|[cm]?[jt]sx?|html?|css|cs|h|m|mm))/i.test(command);
 }
 
 function isFalseExecutionEvent(event) {
@@ -3115,6 +3272,10 @@ function renderDetails(node) {
         <div><span>Funcs</span><strong>${formatNumber(axis.functions)}</strong></div>
         <div><span>Size</span><strong>${dimensions.width}×${dimensions.height}×${dimensions.depth}</strong></div>
         ${node.language ? `<div><span>Language</span><strong>${escapeHtml(node.language)}</strong></div>` : ""}
+        <div><span>Symbol kind</span><strong>${escapeHtml(node.kind)}</strong></div>
+        ${node.identity?.stableId ? `<div><span>Stable identity</span><strong>${escapeHtml(node.identity.stableId)}</strong></div>` : ""}
+        ${node.location?.range ? `<div><span>Range</span><strong>${node.location.range.start.line}:${node.location.range.start.column}–${node.location.range.end.line}:${node.location.range.end.column}</strong></div>` : ""}
+        ${node.hierarchy ? `<div><span>Hierarchy</span><strong>depth ${node.hierarchy.depth}${node.hierarchy.parentId ? ` · parent ${escapeHtml(node.hierarchy.parentId)}` : ""}</strong></div>` : ""}
         ${node.attributes?.framework ? `<div><span>Framework</span><strong>${escapeHtml(node.attributes.framework)}</strong></div>` : ""}
         ${node.file ? `<div><span>File</span><strong>${escapeHtml(node.file)}:${node.line}</strong></div>` : ""}
       </div>
@@ -3211,6 +3372,8 @@ async function openSourceInEditor(node, targetPreview = null) {
         file: node.file,
         line: node.line,
         column: node.column || node.location?.range?.start?.column || 1,
+        endLine: node.location?.range?.end?.line || node.endLine || node.line,
+        endColumn: node.location?.range?.end?.column || node.endColumn || node.column || 1,
         context: state.sourceContext
       })
     });
@@ -3267,6 +3430,8 @@ async function fetchSource(node, options = {}) {
       file: node.file,
       line: node.line,
       column: node.column || node.location?.range?.start?.column || 1,
+      endLine: node.location?.range?.end?.line || node.endLine || node.line,
+      endColumn: node.location?.range?.end?.column || node.endColumn || node.column || 1,
       context: options.context,
       fullFile: options.fullFile === true
     })
@@ -3278,12 +3443,12 @@ async function fetchSource(node, options = {}) {
 
 function renderSourceSnippet(payload) {
   const rows = payload.code.map((line) => {
-    const isTarget = line.number === payload.line;
+    const isTarget = line.number >= payload.line && line.number <= payload.endLine;
     return `<span class="${isTarget ? "is-target" : ""}"><b>${line.number}</b><code>${escapeHtml(line.content || " ")}</code></span>`;
   }).join("");
 
   return `
-    <p><strong>${escapeHtml(payload.file)}:${payload.line}</strong></p>
+    <p><strong>${escapeHtml(payload.file)}:${payload.line}–${payload.endLine}</strong></p>
     <pre>${rows}</pre>
   `;
 }
@@ -3726,8 +3891,9 @@ function axisMetricsForNode(node) {
     .filter(Boolean);
   const definedFunctions = definedMembers.filter((member) => member.kind === "function").length;
   const definedProperties = definedMembers.filter((member) => member.kind === "property").length;
-  const memberLines = definedMembers.reduce((sum, member) => sum + (member.metrics?.lines || 1), 0);
-  const fileLines = state.graph.nodes.find((candidate) => candidate.kind === "file" && candidate.file === node.file)?.metrics?.lines || 0;
+  const memberLines = definedMembers.reduce((sum, member) => sum + (member.metrics?.sourceLines || member.metrics?.lines || 1), 0);
+  const fileMetrics = state.graph.nodes.find((candidate) => candidate.kind === "file" && candidate.file === node.file)?.metrics;
+  const fileLines = fileMetrics?.sourceLines || fileMetrics?.lines || 0;
 
   const variables = Math.max(
     node.kind === "property" ? 1 : 0,
@@ -3741,9 +3907,10 @@ function axisMetricsForNode(node) {
     definedFunctions,
     node.kind === "function" ? (metrics.calls || 0) + (metrics.branches || 0) * 2 : 0
   );
-  const hasExplicitLines = Number.isFinite(metrics.lines) && metrics.lines > 0;
+  const explicitLines = metrics.sourceLines || metrics.lines;
+  const hasExplicitLines = Number.isFinite(explicitLines) && explicitLines > 0;
   let lines = hasExplicitLines
-    ? metrics.lines
+    ? explicitLines
     : Math.max(1, memberLines || (node.kind === "file" ? fileLines || 30 : 8));
   if (!hasExplicitLines) {
     lines = Math.max(lines, variables, functions);
@@ -3754,6 +3921,7 @@ function axisMetricsForNode(node) {
 
 function complexityForNode(node) {
   if (node.kind === "file") return 1;
+  if (Number.isFinite(node.display?.complexity)) return clamp(node.display.complexity, 1, 100);
   if (["html_document", "html_element", "jsx_element"].includes(node.kind) && Number.isFinite(node.metrics?.complexity)) {
     return clamp(node.metrics.complexity, 0.9, 100);
   }
@@ -3797,6 +3965,7 @@ function graphEdgeCountsForNode(nodeId) {
 function baseDimensionsForKind(kind) {
   if (kind === "repository") return { width: 72, depth: 72, height: 34 };
   if (kind === "file") return { width: 72, depth: 48, height: 3 };
+  if (kind === "directory") return { width: 110, depth: 82, height: 2 };
   if (kind === "swiftui_view" || kind === "react_component") return { width: 34, depth: 34, height: 34 };
   if (kind === "service" || kind === "class") return { width: 32, depth: 32, height: 52 };
   if (kind === "function" || kind === "method" || kind === "constructor") return { width: 10, depth: 10, height: 12 };
@@ -4455,7 +4624,7 @@ function buildMemberPopup() {
     ? popupHtmlDomLayout(memberNodes)
     : isFilePopup
       ? popupFileChildLayout(shellNode, memberNodes, parentDimensions)
-      : popupContainedChildLayout(memberNodes, parentDimensions);
+      : popupLanguageCityLayout(memberNodes, parentDimensions);
   const dependencyLayout = popupGridLayout(dependencyNodes, popupDimensionsForDependency);
   const maxMemberHeight = memberNodes.reduce((value, node, index) => {
     const dimensions = isHtmlPopup
@@ -4472,7 +4641,7 @@ function buildMemberPopup() {
   const frameHeight = Math.max(
     190,
     parentDimensions.height + 72,
-    maxMemberHeight + 92,
+    maxMemberHeight + (memberLayout.height || 0) + 92,
     maxDependencyHeight + 154
   );
   const frameDepth = Math.max(230, contentDepth + parentDimensions.depth + 82);
@@ -4536,6 +4705,8 @@ function buildMemberPopup() {
   popupRoot.add(parentMesh);
   if (shellNode.kind === "file") {
     addPopupFileLocInlay(parentMesh, shellNode, parentDimensions);
+  } else if (!isHtmlPopup) {
+    addPopupLanguageBuildingStructure(parentMesh, parentDimensions, memberLayout);
   }
   positions.set(shellNode.id, parentPosition.clone());
   const parentLabel = makeLabel(shellNode.name, "#e6fbff", 66, 10);
@@ -4543,11 +4714,12 @@ function buildMemberPopup() {
   popupRoot.add(parentLabel);
 
   if (isHtmlPopup) {
+    addPopupHtmlCityInfrastructure(parentPosition, parentDimensions, memberLayout);
     placePopupHtmlElements(visibleMemberIds, parentPosition, parentDimensions, positions, memberLayout);
   } else if (isFilePopup) {
     placePopupFileChildren(visibleMemberIds, parentPosition, parentDimensions, shellNode, positions, memberLayout);
   } else {
-    placePopupContainedMembers(visibleMemberIds, parentPosition, parentDimensions, positions, memberLayout);
+    placePopupLanguageCityMembers(visibleMemberIds, parentPosition, parentDimensions, positions, memberLayout);
   }
   placePopupDependencies(dependencyIds, origin, frameHeight, positions, dependencyLayout, isHtmlPopup ? memberLayout.depth : 0);
 
@@ -4560,32 +4732,96 @@ function placePopupHtmlElements(elementIds, parentPosition, parentDimensions, po
     if (!node) return;
     const base = layoutInfo.positions[index] || { x: 0, z: 0 };
     const dimensions = layoutInfo.dimensions[index] || popupDimensionsForHtmlElement(node);
+    const role = layoutInfo.roles[index] || "landmark";
     const position = new THREE.Vector3(
       parentPosition.x + base.x,
-      parentPosition.y + parentDimensions.height / 2 + 12 + dimensions.height / 2,
+      parentPosition.y + parentDimensions.height / 2 + 12 + dimensions.height / 2 + (base.y || 0),
       parentPosition.z + base.z
     );
-    const material = getNodeMaterial(node.kind, "popup-html-element", {
+    const isTerrace = role === "terrace";
+    const material = getNodeMaterial(node.kind, `popup-html-${role}-${node.attributes?.navigation ? "nav" : node.attributes?.image ? "image" : "default"}`, {
       color: node.attributes?.navigation ? 0x57e6c2 : node.attributes?.image ? 0xffb86c : colorForNode(node),
-      roughness: 0.62,
-      metalness: 0.06,
+      roughness: isTerrace ? 0.82 : 0.62,
+      metalness: role === "building" ? 0.16 : 0.06,
       emissive: node.attributes?.navigation ? 0x174b40 : node.attributes?.image ? 0x4f3216 : emissiveForNode(node),
-      emissiveIntensity: node.attributes?.navigation || node.attributes?.image ? 0.3 : 0.12,
-      transparent: false,
-      opacity: 1,
-      depthWrite: true
+      emissiveIntensity: node.attributes?.navigation || node.attributes?.image ? 0.3 : isTerrace ? 0.2 : 0.12,
+      transparent: isTerrace,
+      opacity: isTerrace ? 0.68 : 1,
+      depthWrite: !isTerrace
     });
-    const mesh = new THREE.Mesh(makeNodeGeometry(node.kind, dimensions.width, dimensions.height, dimensions.depth), material);
+    const mesh = new THREE.Mesh(makePopupHtmlCityGeometry(role, dimensions), material);
     mesh.position.copy(position);
     mesh.userData.nodeId = elementId;
     mesh.castShadow = true;
     popupRoot.add(mesh);
     positions.set(elementId, position.clone());
 
+    if (isTerrace || role === "building") addPopupCityOutline(mesh, role);
     const label = makeLabel(node.name, node.attributes?.navigation ? "#baffed" : node.attributes?.image ? "#ffe0b5" : "#ffffff", 52, 9);
     label.position.set(position.x, position.y + dimensions.height / 2 + 10, position.z);
     popupRoot.add(label);
   });
+}
+
+function addPopupHtmlCityInfrastructure(parentPosition, parentDimensions, layoutInfo) {
+  const baseY = parentPosition.y + parentDimensions.height / 2 + 9;
+  const lotMaterial = getStandardMaterial("popup-html-city-lot", {
+    color: 0x102b35,
+    roughness: 0.94,
+    metalness: 0.02,
+    transparent: true,
+    opacity: 0.9
+  });
+  const curbMaterial = getBasicMaterial("popup-html-city-curb", {
+    color: 0x4c8296,
+    transparent: true,
+    opacity: 0.54,
+    depthWrite: false
+  });
+  for (const lot of layoutInfo.lots || []) {
+    const geometry = new THREE.BoxGeometry(lot.width, 3, lot.depth);
+    const plate = new THREE.Mesh(geometry, lotMaterial);
+    plate.position.set(parentPosition.x + lot.x, baseY, parentPosition.z + lot.z);
+    plate.receiveShadow = true;
+    plate.userData = { role: "html-city-lot" };
+    popupRoot.add(plate);
+    const curb = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), curbMaterial);
+    curb.position.copy(plate.position);
+    curb.userData = { role: "html-city-lot" };
+    popupRoot.add(curb);
+  }
+}
+
+function addPopupCityOutline(mesh, role) {
+  const outline = new THREE.LineSegments(
+    new THREE.EdgesGeometry(mesh.geometry),
+    getBasicMaterial(`popup-city-${role}-outline`, {
+      color: role === "terrace" || role === "floor" ? 0x7fc8de : 0xd8f6ff,
+      transparent: true,
+      opacity: role === "terrace" || role === "floor" ? 0.58 : 0.42,
+      depthWrite: false
+    })
+  );
+  outline.userData = { role: "city-outline" };
+  mesh.add(outline);
+}
+
+function makePopupHtmlCityGeometry(role, dimensions) {
+  if (role === "navigation") {
+    const radius = Math.max(5, Math.min(dimensions.width, dimensions.depth) / 2);
+    const geometry = new THREE.TorusGeometry(radius, Math.max(1.8, dimensions.height * 0.12), 8, 20);
+    geometry.rotateX(Math.PI / 2);
+    return geometry;
+  }
+  if (role === "control") {
+    return new THREE.CylinderGeometry(
+      Math.max(3, dimensions.width * 0.34),
+      Math.max(4, dimensions.width * 0.46),
+      dimensions.height,
+      10
+    );
+  }
+  return new THREE.BoxGeometry(dimensions.width, dimensions.height, dimensions.depth);
 }
 
 function placePopupFileChildren(childIds, parentPosition, parentDimensions, shellNode, positions, layoutInfo) {
@@ -4661,38 +4897,49 @@ function placePopupMembers(memberIds, origin, frameHeight, positions, layoutInfo
   });
 }
 
-function placePopupContainedMembers(memberIds, parentPosition, parentDimensions, positions, layoutInfo) {
+function placePopupLanguageCityMembers(memberIds, parentPosition, parentDimensions, positions, layoutInfo) {
   memberIds.forEach((memberId, index) => {
     const node = state.layoutById.get(memberId);
     if (!node) return;
-    const base = layoutInfo.positions[index] || { x: 0, z: 0, y: 0.5 };
-    const dimensions = layoutInfo.dimensions[index] || popupDimensionsForContainedMember(node, layoutInfo.itemSize || 8);
-    const minY = parentPosition.y - parentDimensions.height / 2 + dimensions.height / 2 + 6;
-    const maxY = parentPosition.y + parentDimensions.height / 2 - dimensions.height / 2 - 6;
+    const base = layoutInfo.positions[index] || { x: 0, z: 0, y: 0 };
+    const dimensions = layoutInfo.dimensions[index] || popupDimensionsForLanguageCityMember(node);
+    const role = layoutInfo.roles[index] || languageCityRole(node);
     const position = new THREE.Vector3(
       parentPosition.x + base.x,
-      clamp(parentPosition.y + base.y, minY, Math.max(minY, maxY)),
+      parentPosition.y - parentDimensions.height / 2 + dimensions.height / 2 + base.y,
       parentPosition.z + base.z
     );
-    const material = getNodeMaterial(node.kind, "popup-contained-member", {
+    const isOffice = role === "office";
+    const isFacade = role === "facade";
+    const material = getNodeMaterial(node.kind, `popup-language-city-${role}`, {
       color: colorForNode(node),
-      roughness: 0.56,
-      metalness: 0.1,
+      roughness: isOffice || isFacade ? 0.72 : 0.56,
+      metalness: role === "annex" ? 0.18 : 0.1,
       emissive: emissiveForNode(node),
-      emissiveIntensity: 0.14,
+      emissiveIntensity: isFacade ? 0.42 : isOffice ? 0.22 : 0.14,
       transparent: false,
       opacity: cityObjectOpacity(node.kind),
       depthWrite: true
     });
-    const mesh = new THREE.Mesh(makeNodeGeometry(node.kind, dimensions.width, dimensions.height, dimensions.depth), material);
+    const geometry = isOffice || isFacade
+      ? new THREE.BoxGeometry(dimensions.width, dimensions.height, dimensions.depth)
+      : makeNodeGeometry(node.kind, dimensions.width, dimensions.height, dimensions.depth);
+    const mesh = new THREE.Mesh(geometry, material);
     mesh.position.copy(position);
     applyKindRotation(mesh, node.kind);
+    mesh.rotation.y += base.rotationY || 0;
     mesh.userData.nodeId = memberId;
     mesh.castShadow = true;
     popupRoot.add(mesh);
     positions.set(memberId, position.clone());
+    if (isOffice || role === "annex") addPopupCityOutline(mesh, role);
 
-    if (index < 80) {
+    const showLabel = role === "facade"
+      ? memberIds.length <= 16
+      : role === "office"
+        ? memberIds.length <= 36
+        : index < 40;
+    if (showLabel) {
       const label = makeLabel(node.name, node.kind === "property" ? "#d7e3ea" : "#ffffff", 44, 8);
       label.position.set(position.x, position.y + dimensions.height / 2 + 9, position.z);
       popupRoot.add(label);
@@ -4765,67 +5012,254 @@ function popupFileChildLayout(shellNode, childNodes, parentDimensions) {
   };
 }
 
-function popupContainedChildLayout(nodes, parentDimensions) {
+function popupLanguageCityLayout(nodes, parentDimensions) {
   if (nodes.length === 0) {
-    return { width: parentDimensions.width, depth: parentDimensions.depth, positions: [], dimensions: [], itemSize: 8 };
+    return { width: parentDimensions.width, height: 0, depth: parentDimensions.depth, positions: [], dimensions: [], roles: [] };
   }
-  const columns = Math.max(1, Math.ceil(Math.sqrt(nodes.length)));
-  const rows = Math.max(1, Math.ceil(nodes.length / columns));
-  const usableWidth = Math.max(20, parentDimensions.width * 0.76);
-  const usableDepth = Math.max(20, parentDimensions.depth * 0.76);
-  const spacingX = columns <= 1 ? 0 : usableWidth / (columns - 1);
-  const spacingZ = rows <= 1 ? 0 : usableDepth / (rows - 1);
-  const itemSize = clamp(Math.min(usableWidth / Math.max(1, columns), usableDepth / Math.max(1, rows)) * 0.72, 3.5, 14);
-  const minY = -parentDimensions.height * 0.32;
-  const maxY = parentDimensions.height * 0.32;
-  const positions = nodes.map((_, index) => {
-    const column = index % columns;
-    const row = Math.floor(index / columns);
-    const verticalT = nodes.length === 1 ? 0.5 : index / Math.max(1, nodes.length - 1);
-    return {
-      x: columns === 1 ? 0 : column * spacingX - usableWidth / 2,
-      z: rows === 1 ? 0 : row * spacingZ - usableDepth / 2,
-      y: minY + (maxY - minY) * verticalT
+  const roles = nodes.map(languageCityRole);
+  const dimensions = nodes.map(popupDimensionsForLanguageCityMember);
+  const positions = new Array(nodes.length);
+  const officeIndexes = roles.map((role, index) => role === "office" ? index : -1).filter((index) => index >= 0);
+  const facadeIndexes = roles.map((role, index) => role === "facade" ? index : -1).filter((index) => index >= 0);
+  const annexIndexes = roles.map((role, index) => role === "annex" ? index : -1).filter((index) => index >= 0);
+  officeIndexes.forEach((nodeIndex, officeIndex) => {
+    positions[nodeIndex] = popupFacadePosition(
+      officeIndex,
+      officeIndexes.length,
+      dimensions[nodeIndex],
+      parentDimensions,
+      { perLevel: 16, minHeight: 0.28, maxHeight: 0.88, outset: 7 }
+    );
+  });
+  facadeIndexes.forEach((nodeIndex, facadeIndex) => {
+    positions[nodeIndex] = popupFacadePosition(
+      facadeIndex,
+      facadeIndexes.length,
+      dimensions[nodeIndex],
+      parentDimensions,
+      { perLevel: 28, minHeight: 0.1, maxHeight: 0.76, outset: 1.5 }
+    );
+  });
+  annexIndexes.forEach((nodeIndex, annexIndex) => {
+    const side = annexIndex % 2 === 0 ? -1 : 1;
+    const row = Math.floor(annexIndex / 2);
+    positions[nodeIndex] = {
+      x: side * (parentDimensions.width / 2 + 34),
+      y: 0,
+      z: (row - (annexIndexes.length - 1) / 4) * 42
     };
   });
+  nodes.forEach((_, index) => {
+    if (positions[index]) return;
+    const landmarkIndex = positions.filter(Boolean).length;
+    const angle = (Math.PI * 2 * landmarkIndex) / Math.max(1, nodes.length);
+    positions[index] = {
+      x: Math.cos(angle) * (parentDimensions.width / 2 + 24),
+      y: parentDimensions.height + 8,
+      z: Math.sin(angle) * (parentDimensions.depth / 2 + 24)
+    };
+  });
+  const bounds = layoutBounds(positions, dimensions);
   return {
-    width: parentDimensions.width,
-    depth: parentDimensions.depth,
+    width: Math.max(parentDimensions.width, bounds.width),
+    height: bounds.height,
+    depth: Math.max(parentDimensions.depth, bounds.depth),
     positions,
-    dimensions: nodes.map((node) => popupDimensionsForContainedMember(node, itemSize)),
-    itemSize
+    dimensions,
+    roles
   };
+}
+
+function languageCityRole(node) {
+  const category = nodeCategory(node);
+  if (category === "callable") return "office";
+  if (category === "data") return "facade";
+  if (["type", "component"].includes(category)) return "annex";
+  return "landmark";
+}
+
+function popupDimensionsForLanguageCityMember(node) {
+  const role = languageCityRole(node);
+  if (role === "office") {
+    return {
+      width: clamp((node.width || 10) * 0.95, 10, 18),
+      height: clamp((node.height || 10) * 0.34, 5, 9),
+      depth: 7
+    };
+  }
+  if (role === "facade") {
+    return { width: 5, height: 5, depth: 2.4 };
+  }
+  if (role === "annex") {
+    return {
+      width: clamp(node.width || 24, 18, 38),
+      height: clamp((node.height || 24) * 0.7, 22, 52),
+      depth: clamp(node.depth || 24, 18, 38)
+    };
+  }
+  return popupDimensionsForContainedMember(node, 10);
+}
+
+function popupFacadePosition(index, count, dimensions, parentDimensions, options) {
+  const perLevel = options.perLevel;
+  const level = Math.floor(index / perLevel);
+  const withinLevel = index % perLevel;
+  const levelCount = Math.min(perLevel, count - level * perLevel);
+  const side = withinLevel % 4;
+  const slot = Math.floor(withinLevel / 4);
+  const slotsOnSide = Math.ceil(Math.max(0, levelCount - side) / 4);
+  const alongRatio = slotsOnSide <= 1 ? 0 : slot / (slotsOnSide - 1) - 0.5;
+  const levels = Math.max(1, Math.ceil(count / perLevel));
+  const verticalRatio = levels <= 1
+    ? (options.minHeight + options.maxHeight) / 2
+    : options.minHeight + (options.maxHeight - options.minHeight) * (level / (levels - 1));
+  const position = {
+    x: 0,
+    y: Math.max(0, parentDimensions.height * verticalRatio - dimensions.height / 2),
+    z: 0,
+    rotationY: 0
+  };
+  if (side === 0 || side === 2) {
+    position.x = alongRatio * parentDimensions.width * 0.72;
+    position.z = (side === 0 ? 1 : -1) * (parentDimensions.depth / 2 + dimensions.depth / 2 + options.outset);
+  } else {
+    position.x = (side === 1 ? 1 : -1) * (parentDimensions.width / 2 + dimensions.depth / 2 + options.outset);
+    position.z = alongRatio * parentDimensions.depth * 0.72;
+    position.rotationY = Math.PI / 2;
+  }
+  return position;
 }
 
 function popupHtmlDomLayout(nodes) {
   if (nodes.length === 0) {
-    return { columns: 1, rows: 0, width: 0, depth: 0, positions: [], dimensions: [] };
+    return { columns: 1, rows: 0, width: 0, height: 0, depth: 0, positions: [], dimensions: [], roles: [], lots: [] };
   }
-  const dimensions = nodes.map(popupDimensionsForHtmlElement);
-  const columns = Math.max(1, Math.min(8, Math.ceil(Math.sqrt(nodes.length * 1.35))));
-  const rows = Math.max(1, Math.ceil(nodes.length / columns));
-  const maxWidth = dimensions.reduce((value, item) => Math.max(value, item.width), 0);
-  const maxDepth = dimensions.reduce((value, item) => Math.max(value, item.depth), 0);
-  const cellWidth = Math.max(76, maxWidth + 34);
-  const cellDepth = Math.max(64, maxDepth + 36);
-  const width = columns * cellWidth;
-  const depth = rows * cellDepth;
+  const nodeIndexById = new Map(nodes.map((node, index) => [node.id, index]));
+  const childCounts = new Map();
+  nodes.forEach((node) => {
+    const parentId = node.hierarchy?.parentId;
+    if (nodeIndexById.has(parentId)) childCounts.set(parentId, (childCounts.get(parentId) || 0) + 1);
+  });
+  const roles = nodes.map((node) => htmlCityRole(node, childCounts.get(node.id) || 0));
+  const dimensions = nodes.map((node, index) => popupDimensionsForHtmlCityElement(node, roles[index]));
+  const rootIndexFor = (nodeIndex) => {
+    let current = nodes[nodeIndex];
+    const seen = new Set();
+    while (nodeIndexById.has(current?.hierarchy?.parentId) && !seen.has(current.id)) {
+      seen.add(current.id);
+      current = nodes[nodeIndexById.get(current.hierarchy.parentId)];
+    }
+    return nodeIndexById.get(current?.id) ?? nodeIndex;
+  };
+  const groups = new Map();
+  nodes.forEach((node, index) => {
+    const rootIndex = rootIndexFor(index);
+    if (!groups.has(rootIndex)) groups.set(rootIndex, []);
+    groups.get(rootIndex).push(index);
+  });
+  const positions = new Array(nodes.length);
+  const groupEntries = [...groups.entries()];
+  const columns = Math.max(1, Math.ceil(Math.sqrt(groupEntries.length)));
+  const rows = Math.max(1, Math.ceil(groupEntries.length / columns));
+  const groupPlans = groupEntries.map(([rootIndex, indexes]) => {
+    const minimumDepth = Math.min(...indexes.map((index) => nodes[index].hierarchy?.depth || 0));
+    const layers = new Map();
+    indexes.forEach((index) => {
+      const layer = Math.max(0, (nodes[index].hierarchy?.depth || minimumDepth) - minimumDepth);
+      if (!layers.has(layer)) layers.set(layer, []);
+      layers.get(layer).push(index);
+    });
+    const widestLayer = Math.max(...[...layers.values()].map((indexesAtDepth) => indexesAtDepth.length));
+    const layerColumns = Math.max(1, Math.min(5, Math.ceil(Math.sqrt(widestLayer * 1.4))));
+    const layerRows = Math.max(1, Math.ceil(widestLayer / layerColumns));
+    return {
+      rootIndex,
+      indexes,
+      layers,
+      width: Math.max(116, layerColumns * 58 + 30),
+      depth: Math.max(96, layerRows * 50 + 30)
+    };
+  });
+  const lotWidth = Math.max(...groupPlans.map((plan) => plan.width));
+  const lotDepth = Math.max(...groupPlans.map((plan) => plan.depth));
+  const lots = [];
+  groupPlans.forEach((plan, groupIndex) => {
+    const groupColumn = groupIndex % columns;
+    const groupRow = Math.floor(groupIndex / columns);
+    const centerX = groupColumn * (lotWidth + 34) - ((columns - 1) * (lotWidth + 34)) / 2;
+    const centerZ = groupRow * (lotDepth + 34) - ((rows - 1) * (lotDepth + 34)) / 2;
+    lots.push({ x: centerX, z: centerZ, width: plan.width, depth: plan.depth, rootId: nodes[plan.rootIndex].id });
+    for (const [layer, indexes] of [...plan.layers.entries()].sort((left, right) => left[0] - right[0])) {
+      const layerColumns = Math.max(1, Math.min(5, Math.ceil(Math.sqrt(indexes.length * 1.4))));
+      const layerRows = Math.max(1, Math.ceil(indexes.length / layerColumns));
+      indexes.forEach((nodeIndex, positionIndex) => {
+        const column = positionIndex % layerColumns;
+        const row = Math.floor(positionIndex / layerColumns);
+        positions[nodeIndex] = {
+          x: centerX + (column - (layerColumns - 1) / 2) * 54,
+          y: layer * 40,
+          z: centerZ + (row - (layerRows - 1) / 2) * 46
+        };
+      });
+    }
+  });
+  const bounds = layoutBounds(positions, dimensions);
   return {
     columns,
     rows,
-    width,
-    depth,
-    cellWidth,
-    cellDepth,
+    width: Math.max(bounds.width, columns * (lotWidth + 34)),
+    height: bounds.height,
+    depth: Math.max(bounds.depth, rows * (lotDepth + 34)),
     dimensions,
-    positions: nodes.map((_, index) => {
-      const column = index % columns;
-      const row = Math.floor(index / columns);
-      return {
-        x: column * cellWidth - ((columns - 1) * cellWidth) / 2,
-        z: row * cellDepth - ((rows - 1) * cellDepth) / 2
-      };
-    })
+    positions,
+    roles,
+    lots
+  };
+}
+
+function htmlCityRole(node, childCount) {
+  const tag = node.attributes?.tag;
+  if (node.attributes?.image) return "image";
+  if (node.attributes?.navigation) return "navigation";
+  if (htmlControlTags.has(tag)) return "control";
+  if (htmlArchitecturalTags.has(tag)) return "building";
+  if (childCount > 0) return "terrace";
+  return "landmark";
+}
+
+function popupDimensionsForHtmlCityElement(node, role) {
+  const base = popupDimensionsForHtmlElement(node);
+  if (role === "building") return { width: Math.max(36, base.width), height: Math.max(24, base.height), depth: Math.max(30, base.depth) };
+  if (role === "terrace") return { width: Math.max(42, base.width), height: 5, depth: Math.max(34, base.depth) };
+  if (role === "image") return { width: Math.max(46, base.width), height: Math.max(22, base.height), depth: 8 };
+  if (role === "navigation") return { width: Math.max(24, base.width * 0.72), height: 12, depth: Math.max(24, base.depth) };
+  if (role === "control") return { width: 18, height: Math.max(18, base.height), depth: 18 };
+  return { width: Math.max(16, base.width * 0.64), height: Math.max(14, base.height), depth: Math.max(16, base.depth * 0.72) };
+}
+
+function layoutBounds(positions, dimensions) {
+  const bounds = positions.reduce((result, position, index) => {
+    const size = dimensions[index] || { width: 0, height: 0, depth: 0 };
+    result.minX = Math.min(result.minX, position.x - size.width / 2);
+    result.maxX = Math.max(result.maxX, position.x + size.width / 2);
+    result.minY = Math.min(result.minY, position.y);
+    result.maxY = Math.max(result.maxY, position.y + size.height);
+    result.minZ = Math.min(result.minZ, position.z - size.depth / 2);
+    result.maxZ = Math.max(result.maxZ, position.z + size.depth / 2);
+    return result;
+  }, {
+    minX: Number.POSITIVE_INFINITY,
+    maxX: Number.NEGATIVE_INFINITY,
+    minY: Number.POSITIVE_INFINITY,
+    maxY: Number.NEGATIVE_INFINITY,
+    minZ: Number.POSITIVE_INFINITY,
+    maxZ: Number.NEGATIVE_INFINITY
+  });
+  return {
+    ...bounds,
+    width: Math.max(0, bounds.maxX - bounds.minX),
+    height: Math.max(0, bounds.maxY - bounds.minY),
+    depth: Math.max(0, bounds.maxZ - bounds.minZ)
   };
 }
 
@@ -4921,6 +5355,48 @@ function addPopupFileLocInlay(parentMesh, shellNode, parentDimensions) {
   parentMesh.add(inlay);
 }
 
+function addPopupLanguageBuildingStructure(parentMesh, parentDimensions, layoutInfo) {
+  const officeCount = (layoutInfo.roles || []).filter((role) => role === "office").length;
+  const levels = clamp(Math.ceil(officeCount / 4), 3, 10);
+  const floorMaterial = getBasicMaterial("popup-language-building-floor", {
+    color: 0x79c9dd,
+    transparent: true,
+    opacity: 0.16,
+    depthWrite: false
+  });
+  const frameMaterial = getBasicMaterial("popup-language-building-frame", {
+    color: 0xb9eaff,
+    transparent: true,
+    opacity: 0.3,
+    depthWrite: false
+  });
+  for (let level = 1; level < levels; level += 1) {
+    const floor = new THREE.Mesh(
+      new THREE.BoxGeometry(parentDimensions.width * 0.94, 0.8, parentDimensions.depth * 0.94),
+      floorMaterial
+    );
+    floor.position.y = -parentDimensions.height / 2 + (parentDimensions.height / levels) * level;
+    floor.userData = { role: "language-building-structure" };
+    parentMesh.add(floor);
+  }
+  const beamWidth = clamp(Math.min(parentDimensions.width, parentDimensions.depth) * 0.018, 0.9, 2.2);
+  for (const xSide of [-1, 1]) {
+    for (const zSide of [-1, 1]) {
+      const beam = new THREE.Mesh(
+        new THREE.BoxGeometry(beamWidth, parentDimensions.height * 0.96, beamWidth),
+        frameMaterial
+      );
+      beam.position.set(
+        xSide * (parentDimensions.width / 2 - beamWidth),
+        0,
+        zSide * (parentDimensions.depth / 2 - beamWidth)
+      );
+      beam.userData = { role: "language-building-structure" };
+      parentMesh.add(beam);
+    }
+  }
+}
+
 function popupDimensionsForDependency(node) {
   return {
     width: Math.max(18, (node.width || 24) * 0.9),
@@ -4950,7 +5426,7 @@ function getPopupEdges(parentId, memberIds, dependencyIds) {
   candidates.forEach((edge, edgeIndex) => {
     if (!isEdgeVisible(edge)) return;
     edge.__renderKey = edge.__renderKey || edgeKey(edge, edgeIndex);
-    if (edge.kind === "defines" && visibleIds.has(edge.from) && visibleIds.has(edge.to)) edges.push(edge);
+    if (["defines", "contains"].includes(edge.kind) && visibleIds.has(edge.from) && visibleIds.has(edge.to)) edges.push(edge);
     if (edge.kind === "owns_state" && edge.from === parentId && visibleIds.has(edge.to)) edges.push(edge);
     if (["uses", "calls", "conforms_to", "extends", "implements", "imports", "exports", "loads", "styles", "links_to", "displays", "embeds", "downloads", "submits_to"].includes(edge.kind)
       && visibleIds.has(edge.from) && visibleIds.has(edge.to)) edges.push(edge);

@@ -36,7 +36,34 @@ struct GraphNode: Encodable {
   let name: String
   let file: String
   let line: Int
+  let column: Int?
+  let endLine: Int?
+  let endColumn: Int?
   let metrics: [String: Int]
+
+  init(
+    id: String,
+    kind: String,
+    declarationKind: String?,
+    name: String,
+    file: String,
+    line: Int,
+    column: Int? = nil,
+    endLine: Int? = nil,
+    endColumn: Int? = nil,
+    metrics: [String: Int]
+  ) {
+    self.id = id
+    self.kind = kind
+    self.declarationKind = declarationKind
+    self.name = name
+    self.file = file
+    self.line = line
+    self.column = column
+    self.endLine = endLine
+    self.endColumn = endColumn
+    self.metrics = metrics
+  }
 }
 
 struct GraphEdge: Encodable, Hashable {
@@ -61,6 +88,7 @@ struct TypeContext {
   let id: String
   let name: String
   let file: String
+  let kind: String
   var methods: Int
   var properties: Int
 }
@@ -78,6 +106,7 @@ final class Collector: SyntaxVisitor {
   var functionSources: [(id: String, parentType: String, source: String)] = []
   var properties: [(id: String, parentType: String, name: String)] = []
   var conformances: [(from: String, name: String)] = []
+  var topLevelNodeIds: Set<String> = []
 
   init(file: String, source: String, sourceFile: SourceFileSyntax) {
     self.file = file
@@ -122,6 +151,94 @@ final class Collector: SyntaxVisitor {
     return .visitChildren
   }
 
+  override func visit(_ node: ExtensionDeclSyntax) -> SyntaxVisitorContinueKind {
+    let name = node.extendedType.trimmedDescription
+    let syntax = Syntax(node)
+    let range = sourceRange(for: syntax)
+    let id = "extension:\(file):\(name):\(range.endLine):\(lineNumber(for: syntax))"
+    nodes[id] = GraphNode(
+      id: id, kind: "extension", declarationKind: "extension", name: name,
+      file: file, line: lineNumber(for: syntax), column: range.column,
+      endLine: range.endLine, endColumn: range.endColumn,
+      metrics: ["lines": max(1, range.endLine - lineNumber(for: syntax) + 1)]
+    )
+    topLevelNodeIds.insert(id)
+    typeStack.append(TypeContext(id: id, name: name, file: file, kind: "extension", methods: 0, properties: 0))
+    return .visitChildren
+  }
+
+  override func visitPost(_ node: ExtensionDeclSyntax) {
+    leaveType()
+  }
+
+  override func visit(_ node: InitializerDeclSyntax) -> SyntaxVisitorContinueKind {
+    guard var currentType = typeStack.popLast() else { return .skipChildren }
+    let syntax = Syntax(node)
+    let range = sourceRange(for: syntax)
+    let name = "init"
+    let id = memberNodeId(kind: "constructor", file: currentType.file, typeName: currentType.name, name: name, line: lineNumber(for: syntax))
+    nodes[id] = GraphNode(
+      id: id, kind: "constructor", declarationKind: "initializer", name: name,
+      file: file, line: lineNumber(for: syntax), column: range.column,
+      endLine: range.endLine, endColumn: range.endColumn,
+      metrics: metricsForFunctionSource(stripSwiftComments(node.trimmedDescription))
+    )
+    edges.append(GraphEdge(from: currentType.id, to: id, kind: "defines"))
+    currentType.methods += 1
+    typeStack.append(currentType)
+    return .skipChildren
+  }
+
+  private func collectFunctionLocals(_ function: FunctionDeclSyntax, ownerId: String) {
+    guard let body = function.body else { return }
+    for statement in body.statements {
+      guard let variable = statement.item.as(VariableDeclSyntax.self) else { continue }
+      for binding in variable.bindings {
+        guard let identifier = binding.pattern.as(IdentifierPatternSyntax.self) else { continue }
+        let syntax = Syntax(binding)
+        let range = sourceRange(for: syntax)
+        let name = identifier.identifier.text
+        let id = memberNodeId(kind: "local_variable", file: file, typeName: ownerId, name: name, line: lineNumber(for: syntax))
+        nodes[id] = GraphNode(
+          id: id, kind: "local_variable", declarationKind: "local", name: name,
+          file: file, line: lineNumber(for: syntax), column: range.column,
+          endLine: range.endLine, endColumn: range.endColumn,
+          metrics: ["lines": max(1, range.endLine - lineNumber(for: syntax) + 1)]
+        )
+        edges.append(GraphEdge(from: ownerId, to: id, kind: "defines"))
+        if let closure = binding.initializer?.value.as(ClosureExprSyntax.self) {
+          let closureSyntax = Syntax(closure)
+          let closureRange = sourceRange(for: closureSyntax)
+          let closureId = memberNodeId(kind: "closure", file: file, typeName: ownerId, name: name, line: lineNumber(for: closureSyntax))
+          nodes[closureId] = GraphNode(
+            id: closureId, kind: "closure", declarationKind: "closure", name: "\(name) closure",
+            file: file, line: lineNumber(for: closureSyntax), column: closureRange.column,
+            endLine: closureRange.endLine, endColumn: closureRange.endColumn,
+            metrics: metricsForFunctionSource(stripSwiftComments(closure.trimmedDescription))
+          )
+          edges.append(GraphEdge(from: id, to: closureId, kind: "defines"))
+        }
+      }
+    }
+  }
+
+  override func visit(_ node: EnumCaseDeclSyntax) -> SyntaxVisitorContinueKind {
+    guard let currentType = typeStack.last, currentType.kind == "enum" else { return .skipChildren }
+    for element in node.elements {
+      let syntax = Syntax(element)
+      let range = sourceRange(for: syntax)
+      let name = element.name.text
+      let id = memberNodeId(kind: "enum_case", file: currentType.file, typeName: currentType.name, name: name, line: lineNumber(for: syntax))
+      nodes[id] = GraphNode(
+        id: id, kind: "enum_case", declarationKind: "case", name: name,
+        file: file, line: lineNumber(for: syntax), column: range.column,
+        endLine: range.endLine, endColumn: range.endColumn, metrics: ["lines": 1]
+      )
+      edges.append(GraphEdge(from: currentType.id, to: id, kind: "defines"))
+    }
+    return .skipChildren
+  }
+
   override func visitPost(_ node: ProtocolDeclSyntax) {
     leaveType()
   }
@@ -134,6 +251,7 @@ final class Collector: SyntaxVisitor {
     let name = node.name.text
     let functionSource = stripSwiftComments(node.trimmedDescription)
     let line = lineNumber(for: Syntax(node))
+    let range = sourceRange(for: Syntax(node))
     let id = memberNodeId(kind: "function", file: currentType.file, typeName: currentType.name, name: name, line: line)
     nodes[id] = GraphNode(
       id: id,
@@ -142,9 +260,13 @@ final class Collector: SyntaxVisitor {
       name: name,
       file: file,
       line: line,
+      column: range.column,
+      endLine: range.endLine,
+      endColumn: range.endColumn,
       metrics: metricsForFunctionSource(functionSource)
     )
     edges.append(GraphEdge(from: currentType.id, to: id, kind: "defines"))
+    collectFunctionLocals(node, ownerId: id)
     currentType.methods += 1
     functionSources.append((id: id, parentType: currentType.name, source: functionSource))
     typeStack.append(currentType)
@@ -162,6 +284,7 @@ final class Collector: SyntaxVisitor {
       }
       let name = identifier.identifier.text
       let line = lineNumber(for: Syntax(node))
+      let range = sourceRange(for: Syntax(node))
       let id = memberNodeId(kind: "property", file: currentType.file, typeName: currentType.name, name: name, line: line)
       nodes[id] = GraphNode(
         id: id,
@@ -170,6 +293,9 @@ final class Collector: SyntaxVisitor {
         name: name,
         file: file,
         line: line,
+        column: range.column,
+        endLine: range.endLine,
+        endColumn: range.endColumn,
         metrics: [:]
       )
       edges.append(GraphEdge(from: currentType.id, to: id, kind: "defines"))
@@ -193,6 +319,7 @@ final class Collector: SyntaxVisitor {
     let conformances = inheritanceConformances(inheritanceText)
     let source = stripSwiftComments(syntax.trimmedDescription)
     let kind = classifyType(declarationKind: declarationKind, name: name, conformances: conformances, source: source)
+    let range = sourceRange(for: syntax)
     let id = typeNodeId(file: file, name: name)
     let node = GraphNode(
       id: id,
@@ -201,12 +328,16 @@ final class Collector: SyntaxVisitor {
       name: name,
       file: file,
       line: lineNumber(for: syntax),
+      column: range.column,
+      endLine: range.endLine,
+      endColumn: range.endColumn,
       metrics: ["lines": countSourceLines(source), "methods": 0, "properties": 0]
     )
     nodes[id] = node
     typeNames.insert(name)
     typeSources[id] = source
-    typeStack.append(TypeContext(id: id, name: name, file: file, methods: 0, properties: 0))
+    topLevelNodeIds.insert(id)
+    typeStack.append(TypeContext(id: id, name: name, file: file, kind: declarationKind, methods: 0, properties: 0))
 
     conformances
       .forEach { conformance in
@@ -226,6 +357,9 @@ final class Collector: SyntaxVisitor {
       name: node.name,
       file: node.file,
       line: node.line,
+      column: node.column,
+      endLine: node.endLine,
+      endColumn: node.endColumn,
       metrics: [
         "lines": node.metrics["lines"] ?? 1,
         "methods": context.methods,
@@ -238,6 +372,12 @@ final class Collector: SyntaxVisitor {
   private func lineNumber(for syntax: Syntax) -> Int {
     let location = syntax.startLocation(converter: converter)
     return location.line
+  }
+
+  private func sourceRange(for syntax: Syntax) -> (column: Int, endLine: Int, endColumn: Int) {
+    let start = syntax.startLocation(converter: converter)
+    let end = syntax.endLocation(converter: converter)
+    return (start.column, end.line, end.column)
   }
 }
 
@@ -275,6 +415,7 @@ for fileURL in files {
   let fileId = "file:\(relativeFile)"
   let sourceFile = Parser.parse(source: source)
   let lineCount = source.split(whereSeparator: \.isNewline).count
+  let sourceLines = source.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
 
   nodes[fileId] = GraphNode(
     id: fileId,
@@ -283,6 +424,9 @@ for fileURL in files {
     name: relativeFile,
     file: relativeFile,
     line: 1,
+    column: 1,
+    endLine: max(1, sourceLines.count),
+    endColumn: (sourceLines.last?.count ?? 0) + 1,
     metrics: ["lines": lineCount]
   )
   edges.append(GraphEdge(from: "repo:root", to: fileId, kind: "contains"))
@@ -292,8 +436,10 @@ for fileURL in files {
 
   for node in collector.nodes.values {
     nodes[node.id] = node
-    if node.id.starts(with: "type:") {
+    if collector.topLevelNodeIds.contains(node.id) {
       edges.append(GraphEdge(from: fileId, to: node.id, kind: "defines"))
+    }
+    if node.id.starts(with: "type:") {
       typeIdsByName[node.name, default: []].append(node.id)
     }
   }
@@ -497,13 +643,15 @@ func countSourceLines(_ source: String) -> Int {
 }
 
 func metricsForFunctionSource(_ source: String) -> [String: Int] {
-  [
+  let branches = matchCount(
+    in: source,
+    pattern: "\\b(if|else\\s+if|switch|case|for|while|guard|catch|async\\s+let|Task)\\b|\\?\\s*[^:]+:"
+  )
+  return [
     "lines": countSourceLines(source),
-    "branches": matchCount(
-      in: source,
-      pattern: "\\b(if|else\\s+if|switch|case|for|while|guard|catch|async\\s+let|Task)\\b|\\?\\s*[^:]+:"
-    ),
-    "calls": matchCount(in: source, pattern: "\\b[A-Za-z_][A-Za-z0-9_]*\\s*\\(")
+    "branches": branches,
+    "calls": matchCount(in: source, pattern: "\\b[A-Za-z_][A-Za-z0-9_]*\\s*\\("),
+    "complexity": 1 + branches
   ]
 }
 

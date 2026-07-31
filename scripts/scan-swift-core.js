@@ -17,6 +17,9 @@ const excludedDirectoryNames = new Set([
 
 const declarationPattern = /^\s*(?:(?:public|private|fileprivate|internal|open|final)\s+)*(struct|class|enum|protocol)\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*:\s*([^{]+))?/;
 const functionPattern = /^\s*(?:(?:public|private|fileprivate|internal|open|static|mutating|nonisolated)\s+)*func\s+([A-Za-z_][A-Za-z0-9_]*)/;
+const initializerPattern = /^\s*(?:(?:public|private|fileprivate|internal|required|convenience|override)\s+)*init[?!]?\s*\(/;
+const extensionPattern = /^\s*(?:(?:public|private|fileprivate|internal)\s+)*extension\s+([A-Za-z_][A-Za-z0-9_.]*)/;
+const enumCasePattern = /^\s*case\s+([A-Za-z_][A-Za-z0-9_]*)/;
 const propertyPattern = /^\s*(?:@[A-Za-z][A-Za-z0-9_]*(?:\([^)]*\))?\s+)*(?:(?:public|private|fileprivate|internal|open|static)\s+)*(?:let|var)\s+([A-Za-z_][A-Za-z0-9_]*)/;
 const importPattern = /^\s*import\s+([A-Za-z_][A-Za-z0-9_]*)/;
 
@@ -54,6 +57,9 @@ export async function scanSwiftFolder(inputRoot) {
       name: fileName,
       file: fileName,
       line: 1,
+      column: 1,
+      endLine: Math.max(1, lines.length),
+      endColumn: (lines.at(-1)?.length || 0) + 1,
       metrics: { lines: lines.length }
     });
     addEdge(edges, "repo:root", fileId, "contains");
@@ -71,6 +77,7 @@ export async function scanSwiftFolder(inputRoot) {
         const [, declarationKind, name, inheritance = ""] = declarationMatch;
         const nodeKind = classifyType(declarationKind, name, inheritance, code);
         const declarationSource = extractDeclarationBody(codeLines, index);
+        const range = sourceRangeForLines(lines, index, declarationSource);
         const typeId = typeNodeId(fileName, name);
         const node = {
           id: typeId,
@@ -79,6 +86,7 @@ export async function scanSwiftFolder(inputRoot) {
           name,
           file: fileName,
           line: lineNumber,
+          ...range,
           metrics: { lines: countSourceLines(declarationSource), methods: 0, properties: 0 }
         };
 
@@ -99,17 +107,36 @@ export async function scanSwiftFolder(inputRoot) {
         return;
       }
 
+      const extensionMatch = line.match(extensionPattern);
+      if (extensionMatch) {
+        const name = extensionMatch[1];
+        const declarationSource = extractDeclarationBody(codeLines, index);
+        const range = sourceRangeForLines(lines, index, declarationSource);
+        const id = `extension:${fileName}:${name}:${lineNumber}`;
+        const node = {
+          id, kind: "extension", declarationKind: "extension", name,
+          file: fileName, line: lineNumber, ...range,
+          metrics: { lines: declarationSource.split(/\r?\n/).length, methods: 0, properties: 0 }
+        };
+        addNode(nodes, node);
+        addEdge(edges, fileId, id, "defines");
+        currentType = nodes.get(id);
+        return;
+      }
+
       const functionMatch = line.match(functionPattern);
       if (functionMatch && currentType) {
         const name = functionMatch[1];
         const functionId = memberNodeId("function", currentType.file, currentType.name, name, lineNumber);
         const source = extractFunctionBody(codeLines, index);
+        const range = sourceRangeForLines(lines, index, source);
         addNode(nodes, {
           id: functionId,
           kind: "function",
           name,
           file: fileName,
           line: lineNumber,
+          ...range,
           metrics: metricsForFunctionSource(source)
         });
         addEdge(edges, currentType.id, functionId, "defines");
@@ -119,6 +146,33 @@ export async function scanSwiftFolder(inputRoot) {
           parentTypeName: currentType.name,
           source
         });
+        return;
+      }
+
+      if (initializerPattern.test(line) && currentType) {
+        const name = "init";
+        const constructorId = memberNodeId("constructor", currentType.file, currentType.name, name, lineNumber);
+        const constructorSource = extractFunctionBody(codeLines, index);
+        addNode(nodes, {
+          id: constructorId, kind: "constructor", name, file: fileName, line: lineNumber,
+          ...sourceRangeForLines(lines, index, constructorSource),
+          metrics: metricsForFunctionSource(constructorSource)
+        });
+        addEdge(edges, currentType.id, constructorId, "defines");
+        currentType.metrics.methods += 1;
+        return;
+      }
+
+      const enumCaseMatch = line.match(enumCasePattern);
+      if (enumCaseMatch && currentType?.declarationKind === "enum") {
+        const name = enumCaseMatch[1];
+        const id = memberNodeId("enum_case", currentType.file, currentType.name, name, lineNumber);
+        addNode(nodes, {
+          id, kind: "enum_case", name, file: fileName, line: lineNumber,
+          column: Math.max(1, lines[index].indexOf(name) + 1),
+          endLine: lineNumber, endColumn: lines[index].length + 1, metrics: { lines: 1 }
+        });
+        addEdge(edges, currentType.id, id, "defines");
         return;
       }
 
@@ -132,7 +186,10 @@ export async function scanSwiftFolder(inputRoot) {
           name,
           file: fileName,
           line: lineNumber,
-          metrics: {}
+          column: Math.max(1, lines[index].indexOf(name) + 1),
+          endLine: lineNumber,
+          endColumn: lines[index].length + 1,
+          metrics: { lines: 1 }
         });
         addEdge(edges, currentType.id, propertyId, "defines");
         currentType.metrics.properties += 1;
@@ -320,6 +377,16 @@ function extractDeclarationBody(lines, startIndex) {
   return collected.join("\n");
 }
 
+function sourceRangeForLines(lines, startIndex, declarationSource) {
+  const declarationLines = declarationSource.split(/\r?\n/);
+  const endIndex = Math.min(lines.length - 1, startIndex + declarationLines.length - 1);
+  return {
+    column: Math.max(1, lines[startIndex].search(/\S/) + 1),
+    endLine: endIndex + 1,
+    endColumn: (lines[endIndex]?.length || 0) + 1
+  };
+}
+
 function createBraceScanState() {
   return {
     inString: false,
@@ -380,7 +447,8 @@ function metricsForFunctionSource(source) {
   return {
     lines: countSourceLines(source),
     branches: branchMatches.length,
-    calls: callMatches.length
+    calls: callMatches.length,
+    complexity: 1 + branchMatches.length
   };
 }
 

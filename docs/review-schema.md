@@ -24,6 +24,11 @@ Review traces overlay observable Codex activity on an existing source graph. The
     "reasoningEffort": "high",
     "modelOverride": false,
     "reasoningOverride": false,
+    "skipGitRepoCheck": false,
+    "primaryLanguage": "swift",
+    "languages": [
+      { "id": "swift", "fileCount": 42 }
+    ],
     "threadId": null,
     "startedAt": "2026-07-22T09:00:00.000Z",
     "usage": {
@@ -68,13 +73,17 @@ Review traces overlay observable Codex activity on an existing source graph. The
 
 `codex.model` and `codex.reasoningEffort` record the effective settings used for the review. The `Override` fields distinguish explicit per-review choices from values inherited from `~/.codex/config.toml`. The model selector includes recommended presets plus an editable `Custom model` option, while the reasoning picker offers `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`; actual availability depends on the selected model and account.
 
+`codex.skipGitRepoCheck` records whether Code Universe added `codex exec --skip-git-repo-check`. It is `true` only when the user-selected `sourceRoot` is not inside a Git work tree. Git projects continue using Codex's normal repository check; non-Git website folders keep the same read-only/workspace-write sandbox and project boundary.
+
+`codex.primaryLanguage` and `codex.languages` capture the language context supplied to the review. The context comes from the active Code Universe graph when available and otherwise from supported project source extensions. Review prompts, MCP instructions, source terminology, and tool choices use this context rather than assuming Swift.
+
 Token usage is aggregated from every `turn.completed` or `turn.failed` record. The UI lists total tokens, input total, uncached input, cached input, output total, visible output, reasoning output, and the number of metered model turns. Cached input is a subset of input total, and reasoning output is a subset of output total, so neither is added twice. Tool execution does not expose a separate token counter; tool results are included when they return to the model as input.
 
-Automatic traces retain only project-local Swift files, exclude `.build`, `build`, `DerivedData`, and `.git` output, collapse project-wide file inventories, and suppress duplicate search/inspection events until the next edit, build, test, or conclusion phase.
+Automatic traces retain project-local files in every supported language, exclude `.build`, `build`, `DerivedData`, and `.git` output, collapse project-wide file inventories, and suppress duplicate search/inspection events until the next edit, build, test, or conclusion phase.
 
 During an automatic Codex review, Code Universe also exposes a temporary read-only MCP server. MCP searches, graph inspections, relationship traversal, impact traversal, bounded source reads, and trace reads use the same active `sourceRoot`. The MCP bridge requires the running review ID and a short-lived bearer token created for that review.
 
-For Git projects, Code Universe creates a non-destructive baseline when the review starts and compares the completed working tree against it. This isolates changes made during the review from modifications that already existed. Fix reviews also create a bounded Swift source snapshot. When no Git patch is available, Code Universe compares edited files with that snapshot and sets `git.diff.source` to `snapshot`. `git.diff.files` contains per-file unified patches and added/deleted counts. Newly created untracked Swift files are included; patches are capped at 500,000 characters and marked with `truncated` when necessary.
+For Git projects, Code Universe creates a non-destructive baseline when the review starts and compares the completed working tree against it. This isolates changes made during the review from modifications that already existed. Fix reviews also create a bounded source snapshot across all supported languages. When no Git patch is available, Code Universe compares edited files with that snapshot and sets `git.diff.source` to `snapshot`. `git.diff.files` contains per-file unified patches and added/deleted counts. Newly created untracked source files are included; patches are capped at 500,000 characters and marked with `truncated` when necessary.
 
 ## Events
 

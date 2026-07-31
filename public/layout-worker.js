@@ -11,15 +11,16 @@ self.onmessage = (event) => {
 const fileChildGap = 4;
 
 function buildLayout(graph) {
-  const files = graph.nodes.filter((node) => node.kind === "file");
+  const files = graph.nodes.filter((node) => node.kind === "file").sort(compareStableNode);
+  const directories = graph.nodes.filter((node) => node.kind === "directory").sort(compareStableNode);
   const types = graph.nodes.filter((node) =>
     ["component", "type"].includes(nodeCategory(node)) || ["html_document", "stylesheet", "inline_script"].includes(node.kind)
-  );
+  ).sort(compareStableNode);
   const functions = graph.nodes.filter((node) =>
     ["callable", "data"].includes(nodeCategory(node)) || ["html_element", "jsx_element", "css_rule", "keyframes"].includes(node.kind)
-  );
-  const modules = graph.nodes.filter((node) => node.kind === "module");
-  const assets = graph.nodes.filter((node) => node.category === "asset");
+  ).sort(compareStableNode);
+  const modules = graph.nodes.filter((node) => node.kind === "module").sort(compareStableNode);
+  const assets = graph.nodes.filter((node) => node.category === "asset").sort(compareStableNode);
   const edgesByFrom = groupEdgesByFrom(graph.edges);
   const definesByFrom = groupEdgesByFrom(graph.edges, "defines");
   const ownedMembersByFrom = groupEdgesByFrom(graph.edges.filter((edge) =>
@@ -28,20 +29,35 @@ function buildLayout(graph) {
   const layout = [];
   const layoutById = new Map();
   const fileChildTypesById = mapFileChildTypes(files, types, definesByFrom);
-  const fileDistricts = packFileDistricts(files, fileChildTypesById, edgesByFrom, graph.nodes);
+  const directoryDistricts = planDirectoryDistricts(directories, files, fileChildTypesById, edgesByFrom, graph.nodes);
+  const directoryBounds = boundsForLayout([...directoryDistricts.values()]);
+  const rootFiles = files.filter((file) => !directoryDistricts.has(file.hierarchy?.parentId));
+  const rootFileDistricts = packFileDistricts(rootFiles, fileChildTypesById, edgesByFrom, graph.nodes);
+  const rootFileOriginZ = directoryBounds.maxZ + 100;
 
   addLayoutNode(layout, layoutById, {
     ...graph.nodes.find((node) => node.kind === "repository"),
-    ...gridPosition(0, 1, 170, 150, 0, -150),
+    ...gridPosition(0, 1, 170, 150, 0, directoryBounds.minZ - 120),
     y: 0,
     ...dimensionsForNode({ kind: "repository" }, edgesByFrom, graph.nodes)
   });
+  placeDirectories(directories, layout, layoutById, directoryDistricts);
 
   files.forEach((file, index) => {
     const dimensions = dimensionsForNode(file, edgesByFrom, graph.nodes);
-    const district = fileDistricts.get(file.id) || {
+    const directoryParent = layoutById.get(file.hierarchy?.parentId);
+    const directoryPlan = directoryDistricts.get(file.hierarchy?.parentId);
+    const localFile = directoryPlan?.files.get(file.id);
+    const district = directoryParent?.kind === "directory" && localFile ? {
+      ...localFile,
+      x: directoryParent.x + localFile.x,
+      z: directoryParent.z + localFile.z
+    } : {
+      ...(rootFileDistricts.get(file.id) || {
       ...fileDistrictDimensions(file, fileChildTypesById.get(file.id) || [], edgesByFrom, graph.nodes),
       ...gridPosition(index, Math.max(1, files.length), 130, 110, 0, 20)
+      }),
+      z: (rootFileDistricts.get(file.id)?.z || 0) + rootFileOriginZ
     };
     addLayoutNode(layout, layoutById, {
       ...file,
@@ -52,7 +68,8 @@ function buildLayout(graph) {
       depth: Math.max(dimensions.depth, district.depth),
       x: district.x,
       z: district.z,
-      y: 0,
+      y: directoryParent?.kind === "directory" ? directoryParent.y + directoryParent.height + 2 : 0,
+      parentId: directoryParent?.kind === "directory" ? directoryParent.id : null,
       visualWidth: Math.max(dimensions.width, district.width),
       visualDepth: Math.max(dimensions.depth, district.depth)
     });
@@ -135,8 +152,65 @@ function buildLayout(graph) {
     });
   });
 
+  placeHierarchyDescendants(graph.nodes, layout, layoutById, edgesByFrom);
   separateLargeObjects(layout);
   return layout;
+}
+
+function compareStableNode(left, right) {
+  return String(left.identity?.stableId || left.id).localeCompare(String(right.identity?.stableId || right.id));
+}
+
+function placeDirectories(directories, layout, layoutById, directoryDistricts) {
+  for (const directory of directories) {
+    const district = directoryDistricts.get(directory.id);
+    if (!district) continue;
+    addLayoutNode(layout, layoutById, {
+      ...directory,
+      x: district.x,
+      z: district.z,
+      y: 1,
+      width: district.width,
+      depth: district.depth,
+      height: 2,
+      parentId: directory.hierarchy?.parentId || null
+    });
+  }
+}
+
+function placeHierarchyDescendants(nodes, layout, layoutById, edgesByFrom) {
+  const pending = nodes.filter((node) =>
+    !layoutById.has(node.id)
+    && node.hierarchy?.parentId
+    && !["repository", "file", "module"].includes(node.kind)
+  );
+  for (let pass = 0; pass < 32 && pending.length; pass += 1) {
+    let placed = 0;
+    for (let index = pending.length - 1; index >= 0; index -= 1) {
+      const node = pending[index];
+      const parent = layoutById.get(node.hierarchy.parentId);
+      if (!parent) continue;
+      const siblings = nodes.filter((candidate) =>
+        candidate.hierarchy?.parentId === node.hierarchy.parentId && !layoutById.has(candidate.id)
+      );
+      const siblingIndex = Math.max(0, siblings.findIndex((candidate) => candidate.id === node.id));
+      const angle = (Math.PI * 2 * siblingIndex) / Math.max(1, siblings.length);
+      const dimensions = dimensionsForNode(node, edgesByFrom, nodes);
+      const radius = Math.max(parent.width || 20, parent.depth || 20) * 0.55
+        + Math.max(dimensions.width, dimensions.depth) * 0.55 + 5;
+      addLayoutNode(layout, layoutById, {
+        ...node,
+        ...dimensions,
+        x: parent.x + Math.cos(angle) * radius,
+        z: parent.z + Math.sin(angle) * radius,
+        y: parent.y + parent.height + 6,
+        parentId: parent.id
+      });
+      pending.splice(index, 1);
+      placed += 1;
+    }
+    if (!placed) break;
+  }
 }
 
 function addLayoutNode(layout, layoutById, node) {
@@ -162,6 +236,79 @@ function mapFileChildTypes(files, types, definesByFrom) {
     groups.set(file.id, childTypes);
     return groups;
   }, new Map());
+}
+
+function planDirectoryDistricts(directories, files, fileChildTypesById, edgesByFrom, allNodes) {
+  if (directories.length === 0) return new Map();
+  const directoryPlans = [...directories]
+    .sort((left, right) => String(left.qualifiedName || left.name).localeCompare(String(right.qualifiedName || right.name)))
+    .map((directory) => {
+      const directFiles = files.filter((file) => file.hierarchy?.parentId === directory.id);
+      const packedFiles = packFileDistricts(directFiles, fileChildTypesById, edgesByFrom, allNodes);
+      const fileItems = [...packedFiles.entries()].map(([id, district]) => ({ id, ...district }));
+      const fileBounds = boundsForLayout(fileItems);
+      const contentWidth = fileItems.length > 0 ? fileBounds.maxX - fileBounds.minX : 0;
+      const contentDepth = fileItems.length > 0 ? fileBounds.maxZ - fileBounds.minZ : 0;
+      const centerX = fileItems.length > 0 ? (fileBounds.minX + fileBounds.maxX) / 2 : 0;
+      const centerZ = fileItems.length > 0 ? (fileBounds.minZ + fileBounds.maxZ) / 2 : 0;
+      const localFiles = new Map(fileItems.map((item) => [item.id, {
+        x: item.x - centerX,
+        z: item.z - centerZ,
+        width: item.width,
+        depth: item.depth
+      }]));
+      return {
+        id: directory.id,
+        directory,
+        width: Math.max(96, contentWidth + 28),
+        depth: Math.max(70, contentDepth + 28),
+        files: localFiles
+      };
+    });
+  const packedDirectories = packDistrictRectangles(directoryPlans, 38);
+  return new Map(directoryPlans.map((plan) => [plan.id, {
+    ...plan,
+    ...packedDirectories.get(plan.id)
+  }]));
+}
+
+function packDistrictRectangles(districts, gap) {
+  if (districts.length === 0) return new Map();
+  const totalArea = districts.reduce((sum, district) => sum + (district.width + gap) * (district.depth + gap), 0);
+  const widest = districts.reduce((value, district) => Math.max(value, district.width), 0);
+  const targetWidth = Math.max(widest, Math.sqrt(totalArea) * 1.12);
+  const rows = [];
+  let current = [];
+  let rowWidth = 0;
+  let rowDepth = 0;
+  for (const district of districts) {
+    const nextWidth = current.length === 0 ? district.width : rowWidth + gap + district.width;
+    if (current.length > 0 && nextWidth > targetWidth) {
+      rows.push({ items: current, width: rowWidth, depth: rowDepth });
+      current = [];
+      rowWidth = 0;
+      rowDepth = 0;
+    }
+    current.push(district);
+    rowWidth = rowWidth === 0 ? district.width : rowWidth + gap + district.width;
+    rowDepth = Math.max(rowDepth, district.depth);
+  }
+  if (current.length > 0) rows.push({ items: current, width: rowWidth, depth: rowDepth });
+  const totalDepth = rows.reduce((sum, row, index) => sum + row.depth + (index > 0 ? gap : 0), 0);
+  const positions = new Map();
+  let rowTop = 20 - totalDepth / 2;
+  for (const row of rows) {
+    let left = -row.width / 2;
+    for (const district of row.items) {
+      positions.set(district.id, {
+        x: left + district.width / 2,
+        z: rowTop + row.depth / 2
+      });
+      left += district.width + gap;
+    }
+    rowTop += row.depth + gap;
+  }
+  return positions;
 }
 
 function packFileDistricts(files, fileChildTypesById, edgesByFrom, allNodes) {
@@ -350,8 +497,9 @@ function axisMetricsForNode(node, edgesByFrom, allNodes) {
   const definedMembers = definedMemberIds.map((id) => nodeById.get(id)).filter(Boolean);
   const definedFunctions = definedMembers.filter((member) => nodeCategory(member) === "callable").length;
   const definedProperties = definedMembers.filter((member) => nodeCategory(member) === "data").length;
-  const memberLines = definedMembers.reduce((sum, member) => sum + (member.metrics?.lines || 1), 0);
-  const fileLines = allNodes.find((candidate) => candidate.kind === "file" && candidate.file === node.file)?.metrics?.lines || 0;
+  const memberLines = definedMembers.reduce((sum, member) => sum + (member.metrics?.sourceLines || member.metrics?.lines || 1), 0);
+  const fileMetrics = allNodes.find((candidate) => candidate.kind === "file" && candidate.file === node.file)?.metrics;
+  const fileLines = fileMetrics?.sourceLines || fileMetrics?.lines || 0;
   const edgeCounts = graphEdgeCountsForNode(node.id, edgesByFrom);
   const variables = Math.max(nodeCategory(node) === "data" ? 1 : 0, metrics.properties || 0, definedProperties, edgeCounts.ownedState || 0);
   const functions = Math.max(
@@ -360,14 +508,16 @@ function axisMetricsForNode(node, edgesByFrom, allNodes) {
     definedFunctions,
     nodeCategory(node) === "callable" ? (metrics.calls || 0) + (metrics.branches || 0) * 2 : 0
   );
-  const hasExplicitLines = Number.isFinite(metrics.lines) && metrics.lines > 0;
-  let lines = hasExplicitLines ? metrics.lines : Math.max(1, memberLines || (node.kind === "file" ? fileLines || 30 : 8));
+  const explicitLines = metrics.sourceLines || metrics.lines;
+  const hasExplicitLines = Number.isFinite(explicitLines) && explicitLines > 0;
+  let lines = hasExplicitLines ? explicitLines : Math.max(1, memberLines || (node.kind === "file" ? fileLines || 30 : 8));
   if (!hasExplicitLines) lines = Math.max(lines, variables, functions);
   return { lines, variables, functions };
 }
 
 function complexityForNode(node, edgesByFrom) {
   if (node.kind === "file") return 1;
+  if (Number.isFinite(node.display?.complexity)) return clamp(node.display.complexity, 1, 100);
   if (["html_document", "html_element", "jsx_element"].includes(node.kind) && Number.isFinite(node.metrics?.complexity)) {
     return clamp(node.metrics.complexity, 0.9, 100);
   }
@@ -410,6 +560,7 @@ function graphEdgeCountsForNode(nodeId, edgesByFrom) {
 function baseDimensionsForKind(kind) {
   if (kind === "repository") return { width: 72, depth: 72, height: 34 };
   if (kind === "file") return { width: 72, depth: 48, height: 3 };
+  if (kind === "directory") return { width: 110, depth: 82, height: 2 };
   if (kind === "swiftui_view" || kind === "react_component") return { width: 34, depth: 34, height: 34 };
   if (kind === "service" || kind === "class") return { width: 32, depth: 32, height: 52 };
   if (["function", "method", "constructor"].includes(kind)) return { width: 10, depth: 10, height: 12 };

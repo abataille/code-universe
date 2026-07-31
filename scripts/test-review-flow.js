@@ -13,12 +13,16 @@ const dataRoot = await mkdtemp(join(tmpdir(), "code-universe-review-test-"));
 const codexHome = await mkdtemp(join(tmpdir(), "code-universe-codex-home-test-"));
 const patchRoot = await mkdtemp(join(tmpdir(), "code-universe-patch-test-"));
 const nonGitRoot = await mkdtemp(join(tmpdir(), "code-universe-source-snapshot-test-"));
+const objectiveCRoot = await mkdtemp(join(tmpdir(), "code-universe-objective-c-review-test-"));
 await writeFile(join(codexHome, "config.toml"), "model = \"gpt-5.6-sol\"\nmodel_reasoning_effort = \"high\"\n");
 await writeFile(join(patchRoot, "Feature.swift"), "struct Feature {\n    let value = 1\n}\n");
 await writeFile(join(patchRoot, "Other.swift"), "struct Other {}\n");
 await writeFile(join(patchRoot, "Feature.ts"), "export const value = 1;\n");
 await writeFile(join(nonGitRoot, "Standalone.swift"), "struct Standalone {\n    let value = 1\n}\n");
 await writeFile(join(nonGitRoot, "index.html"), "<main id=\"app\">Before</main>\n");
+await writeFile(join(nonGitRoot, "app.js"), "export const state = { ready: true };\n");
+await writeFile(join(objectiveCRoot, "Widget.h"), "@interface Widget : NSObject\n@property(nonatomic, copy) NSString *title;\n- (void)refresh;\n@end\n");
+await writeFile(join(objectiveCRoot, "Widget.m"), "#import \"Widget.h\"\n@implementation Widget\n- (void)refresh { self.title = @\"Ready\"; }\n@end\n");
 const previewPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 await writeFile(join(nonGitRoot, "preview.png"), previewPng);
 await writeFile(join(dataRoot, "Outside.swift"), "struct Outside {}\n");
@@ -130,6 +134,7 @@ try {
   assert(launched.review.codex.model === "gpt-5.6-terra", "selected model should be stored with the trace");
   assert(launched.review.codex.reasoningEffort === "low", "selected reasoning effort should be stored with the trace");
   assert(launched.review.codex.modelOverride === true && launched.review.codex.reasoningOverride === true, "explicit settings should be marked as overrides");
+  assert(launched.review.codex.skipGitRepoCheck === false, "reviews inside a Git work tree should retain the Codex repository trust check");
   const unauthorizedMcpResponse = await fetch(`http://127.0.0.1:${port}/api/mcp/tool`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -175,6 +180,44 @@ try {
   assert(appliedLaunch.review.codex.mode === "fix", "applying findings should launch an editable review");
   const applied = await waitForReview(appliedLaunch.review.id);
   assert(applied.status === "completed", "the linked fix review should complete");
+
+  const nonGitLaunch = await post("/api/reviews/launch", {
+    sourceRoot: nonGitRoot,
+    title: "Standalone website review",
+    behavior: "Inspect a plain HTML and JavaScript folder",
+    mode: "inspect"
+  });
+  assert(nonGitLaunch.review.codex.skipGitRepoCheck === true,
+    "reviews of non-Git HTML/JavaScript folders should explicitly skip the Codex repository check");
+  const nonGitAutomatic = await waitForReview(nonGitLaunch.review.id, nonGitRoot);
+  assert(nonGitAutomatic.status === "completed", "Codex inspect should run in a trusted user-selected non-Git folder");
+  assert(nonGitAutomatic.codex.lastMessage.includes("Standalone.swift"),
+    "non-Git review results should retain source evidence");
+  const nonGitFixLaunch = await post("/api/reviews/launch", {
+    sourceRoot: nonGitRoot,
+    title: "Standalone website fix",
+    behavior: "Verify editable review startup in a plain website folder",
+    mode: "fix"
+  });
+  assert(nonGitFixLaunch.review.codex.skipGitRepoCheck === true,
+    "editable reviews of non-Git websites should use the same explicit repository-check bypass");
+  const nonGitFix = await waitForReview(nonGitFixLaunch.review.id, nonGitRoot);
+  assert(nonGitFix.status === "completed" && nonGitFix.codex.mode === "fix",
+    "Codex fix mode should run in a user-selected non-Git HTML/JavaScript folder");
+
+  const objectiveCLaunch = await post("/api/reviews/launch", {
+    sourceRoot: objectiveCRoot,
+    title: "Objective-C language review",
+    behavior: "Inspect Widget refresh behavior",
+    mode: "inspect"
+  });
+  assert(objectiveCLaunch.review.codex.primaryLanguage === "objective-c",
+    "Objective-C sources should set the review's primary language");
+  assert(objectiveCLaunch.review.codex.languages.some((entry) => entry.id === "objective-c" && entry.fileCount === 2),
+    "Objective-C headers and implementations should be recorded in review language context");
+  const objectiveCReview = await waitForReview(objectiveCLaunch.review.id, objectiveCRoot);
+  assert(objectiveCReview.status === "completed" && objectiveCReview.codex.lastMessage.includes("Widget.m"),
+    "Objective-C review should complete with Objective-C source evidence");
 
   const patchReview = await post("/api/reviews/start", {
     sourceRoot: patchRoot,
@@ -250,6 +293,7 @@ try {
   await rm(codexHome, { recursive: true, force: true });
   await rm(patchRoot, { recursive: true, force: true });
   await rm(nonGitRoot, { recursive: true, force: true });
+  await rm(objectiveCRoot, { recursive: true, force: true });
 }
 
 async function waitForServer() {
@@ -275,9 +319,9 @@ async function post(path, body) {
   return payload;
 }
 
-async function waitForReview(reviewId) {
+async function waitForReview(reviewId, reviewRoot = sourceRoot) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
-    const response = await fetch(`http://127.0.0.1:${port}/api/reviews/active?sourceRoot=${encodeURIComponent(sourceRoot)}`);
+    const response = await fetch(`http://127.0.0.1:${port}/api/reviews/active?sourceRoot=${encodeURIComponent(reviewRoot)}`);
     const payload = await response.json();
     if (payload.review?.id === reviewId && payload.review.status !== "running") return payload.review;
     await new Promise((resolveWait) => setTimeout(resolveWait, 50));

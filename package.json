@@ -8,7 +8,8 @@
     "mcp": "node scripts/code-universe-mcp.js",
     "test:scan": "node scripts/test-scan-fixtures.js",
     "test:languages": "node scripts/test-language-adapters.js",
-    "test": "npm run test:scan && npm run test:languages && npm run test:review && npm run test:mcp",
+    "test:visual": "node scripts/test-visual-regression.js",
+    "test": "npm run test:scan && npm run test:languages && npm run test:visual && npm run test:review && npm run test:mcp",
     "test:review": "node scripts/test-review-flow.js",
     "test:mcp": "node scripts/test-mcp.js",
     "scan:sample": "node scripts/scan-swift.js examples/SampleSwiftApp public/sample-graph.json",
@@ -29,5 +30,8 @@
   },
   "overrides": {
     "@hono/node-server": "2.0.11"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.62.0"
   }
 }

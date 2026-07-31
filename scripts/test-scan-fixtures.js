@@ -11,6 +11,15 @@ import SwiftUI
 
 struct Duplicate: Identifiable {
   let id: String
+  init(id: String) { self.id = id }
+}
+
+enum Status {
+  case ready
+}
+
+extension Duplicate {
+  func label() -> String { id }
 }
 
 struct UsesTarget {
@@ -50,7 +59,7 @@ final class WorkerService {
 
   const { graph, diagnostics } = await scanSwiftFolder(root);
   const ids = graph.nodes.map((node) => node.id);
-  const duplicateTypeIds = graph.nodes.filter((node) => node.kind !== "file" && node.name === "Duplicate").map((node) => node.id);
+  const duplicateTypeIds = graph.nodes.filter((node) => node.id.startsWith("type:") && node.name === "Duplicate").map((node) => node.id);
   const loadFunctionIds = graph.nodes.filter((node) => node.kind === "function" && node.name === "load").map((node) => node.id);
   const usesTarget = graph.nodes.find((node) => node.name === "UsesTarget");
   const target = graph.nodes.find((node) => node.name === "Target");
@@ -63,6 +72,16 @@ final class WorkerService {
   assert(usesTarget && target, "fixture target nodes should exist");
   assert(graph.edges.some((edge) => edge.from === usesTarget.id && edge.to === target.id && edge.kind === "uses"), "UsesTarget should reference Target");
   assert(!graph.edges.some((edge) => edge.from === scopedOnly?.id && edge.to === target.id), "ScopedOnly should not inherit references from sibling declarations");
+  assert(graph.nodes.filter((node) => node.file).every((node) =>
+    Number.isInteger(node.column) && Number.isInteger(node.endLine) && Number.isInteger(node.endColumn)
+    && node.endLine >= node.line
+  ), "heuristic Swift nodes should retain declaration source ranges");
+  assert(graph.nodes.filter((node) => node.kind === "function").every((node) =>
+    node.metrics?.complexity === 1 + Number(node.metrics?.branches || 0)
+  ), "Swift callable display metrics should include cyclomatic complexity");
+  assert(graph.nodes.some((node) => node.kind === "constructor"), "heuristic Swift scanning should represent initializers");
+  assert(graph.nodes.some((node) => node.kind === "enum_case" && node.name === "ready"), "heuristic Swift scanning should represent enum cases");
+  assert(graph.nodes.some((node) => node.kind === "extension" && node.name === "Duplicate"), "heuristic Swift scanning should represent extensions");
 
   console.log(`Scan fixture tests passed with ${graph.nodes.length} nodes and ${graph.edges.length} edges.`);
 } finally {
