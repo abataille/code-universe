@@ -19,7 +19,7 @@ The app runs on your Mac. Source code is scanned locally and stays local.
 - Validate local web assets, flag broken references, and distinguish images, video, audio, fonts, embeds, and downloads.
 - Reuse unchanged full graphs and independently fingerprinted adapter fragments.
 - Inspect files, types, functions, properties, dependencies, and source code.
-- Compare heuristic, SwiftSyntax, merged, and Xcode-index analysis.
+- Compare heuristic, SwiftSyntax, merged, and Xcode-index analysis for Swift, and compare the current web adapters with the optional Tree-sitter WASM parser for JavaScript, TypeScript, HTML, and CSS.
 - Ask Codex to investigate or fix a specific application behavior.
 - Watch Codex activity appear as a project-scoped trace across the city.
 - Review complete token usage, readable conclusions, and verification results.
@@ -95,7 +95,7 @@ Connection detail defaults to only `Uses` checked so the map starts readable. En
 ### Project Panel
 
 - `Choose Project or File`: scan a project folder or a single Swift, JavaScript, TypeScript, HTML, CSS, C#, Objective-C, or Objective-C++ file.
-- `Compare Parsers`: compare heuristic, SwiftSyntax, merged, and Xcode-index analysis for the selected project.
+- `Compare Parsers`: compare Swift parser layers and, for web projects, the semantic/DOM adapters against Tree-sitter WASM. Mixed projects show both comparisons while retaining the legacy Swift response.
 - `Load Sample Universe`: reload the bundled SampleSwiftApp graph.
 
 ### Map Layers

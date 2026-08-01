@@ -13,6 +13,7 @@ import { executeMcpGraphTool, mcpGraphToolNames, mcpTraceEvent } from "./lib/mcp
 import { languageForFile } from "./lib/graph/schema.js";
 import { scanProject, profileForScanner, scannerForProfile } from "./lib/projects/scan-project.js";
 import { discoverProjectFiles, isSupportedSourceFile } from "./lib/projects/discover-files.js";
+import { detectProjectLanguages } from "./lib/projects/detect.js";
 import { openSourceInEditor } from "./lib/editors/registry.js";
 
 const execFileAsync = promisify(execFile);
@@ -34,6 +35,7 @@ const activeCodexRuns = new Map();
 const activeMcpSessions = new Map();
 const reviewWriteQueues = new Map();
 const reviewEventKinds = new Set(["inspect", "search", "suspect", "edit", "build", "test", "conclusion"]);
+const TREE_SITTER_COMPARISON_LANGUAGES = new Set(["javascript", "typescript", "html", "css"]);
 
 const contentTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -418,6 +420,55 @@ async function compareParsers(inputPath) {
 
   const resolvedInput = resolve(inputPath);
   const projectRoot = await resolveProjectRoot(resolvedInput);
+  const files = await discoverProjectFiles(projectRoot);
+  const detection = await detectProjectLanguages(projectRoot, files);
+  const languageIds = new Set(detection.languages.map((language) => language.id));
+  const comparisons = [];
+  let swiftComparison = null;
+
+  if (languageIds.has("swift")) {
+    swiftComparison = await compareSwiftParsers(projectRoot, resolvedInput);
+    comparisons.push({
+      ...swiftComparison,
+      kind: "swift",
+      title: "Swift parser comparison"
+    });
+  }
+
+  let baselineScan = null;
+  if ([...languageIds].some((language) => TREE_SITTER_COMPARISON_LANGUAGES.has(language))) {
+    baselineScan = await scanProject(projectRoot, {
+      profile: "balanced",
+      legacyScanner: "merged",
+      scanSwift: scanSwiftForAdapter
+    });
+    comparisons.push(await compareTreeSitterParsers(projectRoot, resolvedInput, baselineScan));
+  }
+
+  if (!comparisons.length) {
+    throw new Error("Parser comparison requires Swift, JavaScript, TypeScript, HTML, or CSS source files.");
+  }
+
+  const project = {
+    name: swiftComparison?.project?.name || baselineScan?.graph?.project?.name || basename(projectRoot),
+    pickedPath: resolvedInput,
+    sourceRoot: projectRoot
+  };
+  const comparedAt = new Date().toISOString();
+  const response = {
+    project,
+    comparedAt,
+    comparisons
+  };
+
+  // Keep the original Swift response shape for existing clients and saved links.
+  if (swiftComparison) {
+    Object.assign(response, swiftComparison, { project, comparedAt, comparisons });
+  }
+  return response;
+}
+
+async function compareSwiftParsers(projectRoot, resolvedInput) {
   const [heuristicScan, swiftSyntaxScan] = await Promise.all([
     scanSwiftFolder(projectRoot),
     scanSwiftFolderWithSwiftSyntax(projectRoot)
@@ -457,6 +508,72 @@ async function compareParsers(inputPath) {
       xcodeIndexOnlyDetails: mergedVsIndexEdges.onlyRightDetails
     }
   };
+}
+
+async function compareTreeSitterParsers(projectRoot, resolvedInput, baselineScan) {
+  const treeSitterScan = await scanProject(projectRoot, {
+    profile: "tree-sitter",
+    legacyScanner: "tree-sitter",
+    scanSwift: scanSwiftForAdapter
+  });
+  const nodeComparison = compareNodeSets(baselineScan.graph.nodes, treeSitterScan.graph.nodes);
+  const edgeComparison = compareEdges(
+    baselineScan.graph.edges,
+    treeSitterScan.graph.edges,
+    treeSitterScan.graph.nodes
+  );
+
+  return {
+    kind: "tree-sitter",
+    title: "Web adapter vs Tree-sitter WASM",
+    project: {
+      name: baselineScan.graph.project.name,
+      pickedPath: resolvedInput,
+      sourceRoot: projectRoot
+    },
+    baseline: summarizeGraph(baselineScan.graph),
+    treeSitter: summarizeGraph(treeSitterScan.graph),
+    nodes: nodeComparison,
+    edges: edgeComparison,
+    diagnostics: {
+      baseline: summarizeAdapterDiagnostics(baselineScan.diagnostics),
+      treeSitter: treeSitterScan.diagnostics.treeSitter || null
+    },
+    files: treeSitterFileSummaries(treeSitterScan.graph)
+  };
+}
+
+function summarizeAdapterDiagnostics(diagnostics = {}) {
+  return {
+    scanner: diagnostics.scanner || null,
+    scanProfile: diagnostics.scanProfile || null,
+    filesScanned: diagnostics.filesScanned || 0,
+    nodeCount: diagnostics.nodeCount || 0,
+    edgeCount: diagnostics.edgeCount || 0,
+    languages: diagnostics.languages || [],
+    warnings: (diagnostics.adapters || [])
+      .flatMap((adapter) => adapter.warnings || [])
+      .slice(0, 20)
+  };
+}
+
+function treeSitterFileSummaries(graph) {
+  return graph.nodes
+    .filter((node) => node.kind === "file" && TREE_SITTER_COMPARISON_LANGUAGES.has(node.language))
+    .map((node) => ({
+      file: node.file,
+      language: node.language || null,
+      parsed: Boolean(node.attributes?.treeSitter),
+      grammar: node.attributes?.treeSitter?.grammar || null,
+      nodeType: node.attributes?.treeSitter?.nodeType || null,
+      embeddedLanguages: [...new Set(graph.nodes
+        .filter((candidate) => candidate.file === node.file)
+        .map((candidate) => candidate.attributes?.treeSitter?.embeddedLanguage)
+        .filter(Boolean))],
+      hasError: node.attributes?.treeSitter?.hasError === true,
+      errorCount: Number(node.attributes?.treeSitter?.errorCount || 0)
+    }))
+    .sort((left, right) => left.file.localeCompare(right.file));
 }
 
 function resolveScannerMode(scanner) {

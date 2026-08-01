@@ -457,15 +457,22 @@ async function scanPath(path, descriptor) {
 async function compareParsers() {
   const sourceRoot = state.graph?.project?.sourceRoot || localStorage.getItem(lastProjectPathKey);
   if (!sourceRoot) {
-    parserDiff.innerHTML = "<p>Choose a real Swift project first, then compare its Swift analysis modes.</p>";
+    parserDiff.innerHTML = "<p>Choose a project first, then compare its language adapters.</p>";
     return;
   }
 
-  if (!state.graph?.project?.languages?.some((language) => language.id === "swift")) {
-    parserDiff.innerHTML = "<p>Parser comparison currently applies to the preserved Swift analysis pipeline.</p>";
+  const languages = state.graph?.project?.languages || [];
+  const hasSwift = languages.some((language) => language.id === "swift");
+  const hasWeb = languages.some((language) => ["javascript", "typescript", "html", "css"].includes(language.id));
+  if (!hasSwift && !hasWeb) {
+    parserDiff.innerHTML = "<p>Parser comparison needs Swift, JavaScript, TypeScript, HTML, or CSS source files.</p>";
     return;
   }
-  parserDiff.innerHTML = "<p>Running fast heuristic and SwiftSyntax scans...</p>";
+  parserDiff.innerHTML = hasSwift && hasWeb
+    ? "<p>Running Swift parser and Tree-sitter WASM comparisons...</p>"
+    : hasSwift
+      ? "<p>Running Swift parser comparison...</p>"
+      : "<p>Running web adapter and Tree-sitter WASM comparisons...</p>";
   const response = await fetch("/api/compare-parsers", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -478,7 +485,9 @@ async function compareParsers() {
   }
 
   state.parserComparison = payload;
-  parserDiff.innerHTML = renderParserComparison(payload);
+  parserDiff.innerHTML = Array.isArray(payload.comparisons) && payload.comparisons.length
+    ? payload.comparisons.map(renderParserComparisonSection).join("")
+    : renderParserComparison(payload);
 }
 
 async function loadGraph(graph, descriptor) {
@@ -2843,6 +2852,16 @@ function formatScanSummary(diagnostics) {
   return parts.join(" · ");
 }
 
+function renderParserComparisonSection(comparison) {
+  if (comparison.kind === "tree-sitter") return renderTreeSitterComparison(comparison);
+  return `
+    <section class="diff-comparison">
+      <h3>${escapeHtml(comparison.title || "Swift parser comparison")}</h3>
+      ${renderParserComparison(comparison)}
+    </section>
+  `;
+}
+
 function renderParserComparison(comparison) {
   const heuristicOnly = comparison.nodes.onlyHeuristic;
   const swiftSyntaxOnly = comparison.nodes.onlySwiftSyntax;
@@ -2870,6 +2889,99 @@ function renderParserComparison(comparison) {
     ${renderKindDelta("Merged layered only", mergedOnly, comparison.nodes.onlyMergedByKind || {}, "merged")}
     ${renderKindDelta("Xcode Index nodes only", xcodeIndexOnly, comparison.nodes.onlyXcodeIndexByKind || {}, "xcode-index")}
     ${renderEdgeDelta("Xcode Index edges only", xcodeOnlyEdges)}
+  `;
+}
+
+function renderTreeSitterComparison(comparison) {
+  const baseline = comparison.baseline || {};
+  const treeSitter = comparison.treeSitter || {};
+  const nodes = comparison.nodes || {};
+  const edges = comparison.edges || {};
+  const diagnostics = comparison.diagnostics?.treeSitter || {};
+  const files = comparison.files || [];
+  const syntaxErrorFiles = files.filter((file) => file.hasError || file.errorCount > 0);
+  const parsedFiles = files.filter((file) => file.parsed);
+  const grammars = parsedFiles.reduce((counts, file) => {
+    const grammar = file.grammar || "unknown";
+    counts[grammar] = (counts[grammar] || 0) + 1;
+    return counts;
+  }, {});
+  const grammarSummary = Object.entries(grammars)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([grammar, count]) => `<span><code>${escapeHtml(grammar)}</code> ${count}</span>`)
+    .join("");
+  const embeddedLanguages = [...new Set(files.flatMap((file) => file.embeddedLanguages || []))].sort();
+  const status = diagnostics.fallback
+    ? `Fallback active${diagnostics.reason ? `: ${escapeHtml(diagnostics.reason)}` : ""}`
+    : `${diagnostics.parsedFiles || 0} files parsed${diagnostics.skippedFiles ? ` · ${diagnostics.skippedFiles} skipped` : ""}`;
+  const warnings = (diagnostics.warnings || []).slice(0, 8)
+    .map((warning) => `<li><code>${escapeHtml(warning)}</code></li>`)
+    .join("");
+  const syntaxFiles = syntaxErrorFiles.slice(0, 40)
+    .map((file) => `<li><code>${escapeHtml(file.file)}</code> · ${escapeHtml(file.grammar || "unknown")} · ${file.errorCount || 0} syntax errors</li>`)
+    .join("");
+
+  return `
+    <section class="diff-comparison">
+      <h3>${escapeHtml(comparison.title || "Web adapter vs Tree-sitter WASM")}</h3>
+      <div class="diff-summary">
+        <div><span>Current graph</span><strong>${baseline.nodeCount || 0}</strong></div>
+        <div><span>Tree-sitter graph</span><strong>${treeSitter.nodeCount || 0}</strong></div>
+        <div><span>Shared nodes</span><strong>${nodes.shared || 0}</strong></div>
+        <div><span>Shared edges</span><strong>${edges.shared || 0}</strong></div>
+      </div>
+      <p class="diff-compact-line">${nodes.onlyLeft?.length || 0} adapter-only nodes · ${nodes.onlyRight?.length || 0} Tree-sitter-only nodes · ${edges.onlyLeft || 0} adapter-only edges · ${edges.onlyRight || 0} Tree-sitter-only edges</p>
+      <details class="diff-group diff-meta">
+        <summary>Tree-sitter WASM status</summary>
+        <p>${status}${diagnostics.runtime ? ` · runtime <code>${escapeHtml(diagnostics.runtime)}</code>` : ""}</p>
+        ${diagnostics.grammars ? `<div class="diff-kinds">${Object.entries(diagnostics.grammars).map(([name, version]) => `<span><code>${escapeHtml(name)}</code> ${escapeHtml(version || "unknown")}</span>`).join("")}</div>` : ""}
+        ${warnings ? `<ul>${warnings}</ul>` : ""}
+      </details>
+      ${grammarSummary ? `
+        <details class="diff-group">
+          <summary>Parsed file grammars <span>${parsedFiles.length}/${files.length}</span></summary>
+          <div class="diff-kinds">${grammarSummary}</div>
+        </details>
+      ` : ""}
+      ${embeddedLanguages.length ? `
+        <details class="diff-group">
+          <summary>Embedded languages <span>${embeddedLanguages.length}</span></summary>
+          <div class="diff-kinds">${embeddedLanguages.map((language) => `<span><code>${escapeHtml(language)}</code></span>`).join("")}</div>
+        </details>
+      ` : ""}
+      <details class="diff-group">
+        <summary>Syntax diagnostics <span>${syntaxErrorFiles.length}</span></summary>
+        <div class="diff-list">${syntaxFiles ? `<ul>${syntaxFiles}</ul>` : "<p>No syntax errors reported by Tree-sitter.</p>"}</div>
+        ${syntaxErrorFiles.length > 40 ? `<p class="status-copy">Showing first 40 of ${syntaxErrorFiles.length} files with syntax diagnostics.</p>` : ""}
+      </details>
+      ${renderWebKindDelta("Current adapters only", nodes.onlyLeft || [], nodes.onlyLeftByKind || {})}
+      ${renderWebKindDelta("Tree-sitter nodes only", nodes.onlyRight || [], nodes.onlyRightByKind || {})}
+      ${renderEdgeDelta("Current adapter edges only", edges.onlyLeftDetails || [])}
+      ${renderEdgeDelta("Tree-sitter edges only", edges.onlyRightDetails || [])}
+    </section>
+  `;
+}
+
+function renderWebKindDelta(title, nodes, byKind) {
+  const kindSummary = Object.entries(byKind)
+    .sort(([leftKind], [rightKind]) => leftKind.localeCompare(rightKind))
+    .map(([kind, count]) => `<span><code>${escapeHtml(kind)}</code> ${count}</span>`)
+    .join("");
+  const items = nodes.slice(0, 40).map((node) => `
+    <article class="diff-item">
+      <div>
+        <strong>${escapeHtml(node.name)}</strong>
+        <span><code>${escapeHtml(node.kind)}</code> ${escapeHtml(node.file || "no source location")}${node.line ? `:${node.line}` : ""}</span>
+      </div>
+    </article>
+  `).join("");
+  return `
+    <details class="diff-group">
+      <summary>${escapeHtml(title)} <span>${nodes.length}</span></summary>
+      <div class="diff-kinds">${kindSummary || "<span>No parser-only nodes.</span>"}</div>
+      <div class="diff-list">${items || "<p>No differences in this direction.</p>"}</div>
+      ${nodes.length > 40 ? `<p class="status-copy">Showing first 40 of ${nodes.length} parser-only nodes.</p>` : ""}
+    </details>
   `;
 }
 

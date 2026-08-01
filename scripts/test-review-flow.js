@@ -13,6 +13,7 @@ const dataRoot = await mkdtemp(join(tmpdir(), "code-universe-review-test-"));
 const codexHome = await mkdtemp(join(tmpdir(), "code-universe-codex-home-test-"));
 const patchRoot = await mkdtemp(join(tmpdir(), "code-universe-patch-test-"));
 const nonGitRoot = await mkdtemp(join(tmpdir(), "code-universe-source-snapshot-test-"));
+const webOnlyRoot = await mkdtemp(join(tmpdir(), "code-universe-web-comparison-test-"));
 const objectiveCRoot = await mkdtemp(join(tmpdir(), "code-universe-objective-c-review-test-"));
 await writeFile(join(codexHome, "config.toml"), "model = \"gpt-5.6-sol\"\nmodel_reasoning_effort = \"high\"\n");
 await writeFile(join(patchRoot, "Feature.swift"), "struct Feature {\n    let value = 1\n}\n");
@@ -21,6 +22,9 @@ await writeFile(join(patchRoot, "Feature.ts"), "export const value = 1;\n");
 await writeFile(join(nonGitRoot, "Standalone.swift"), "struct Standalone {\n    let value = 1\n}\n");
 await writeFile(join(nonGitRoot, "index.html"), "<main id=\"app\">Before</main>\n");
 await writeFile(join(nonGitRoot, "app.js"), "export const state = { ready: true };\n");
+await writeFile(join(webOnlyRoot, "index.html"), "<main id=\"app\"><script src=\"app.js\"></script></main>\n");
+await writeFile(join(webOnlyRoot, "app.js"), "export const state = { ready: true };\n");
+await writeFile(join(webOnlyRoot, "styles.css"), "#app { color: red; }\n");
 await writeFile(join(objectiveCRoot, "Widget.h"), "@interface Widget : NSObject\n@property(nonatomic, copy) NSString *title;\n- (void)refresh;\n@end\n");
 await writeFile(join(objectiveCRoot, "Widget.m"), "#import \"Widget.h\"\n@implementation Widget\n- (void)refresh { self.title = @\"Ready\"; }\n@end\n");
 const previewPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -87,6 +91,21 @@ try {
     `http://127.0.0.1:${port}/api/asset?sourceRoot=${encodeURIComponent(nonGitRoot)}&file=${encodeURIComponent("Standalone.swift")}`
   );
   assert(nonImageAssetResponse.status === 415, "asset endpoint should reject non-image files");
+
+  const webComparison = await post("/api/compare-parsers", { path: webOnlyRoot });
+  assert(webComparison.comparisons?.length === 1, "web-only parser comparison should return one comparison");
+  assert(webComparison.comparisons[0].kind === "tree-sitter", "web-only comparison should use the Tree-sitter comparison");
+  assert(webComparison.comparisons[0].baseline && webComparison.comparisons[0].treeSitter,
+    "web comparison should include both graph summaries");
+  assert(webComparison.comparisons[0].diagnostics?.treeSitter, "web comparison should expose Tree-sitter diagnostics");
+
+  const mixedComparison = await post("/api/compare-parsers", { path: patchRoot });
+  assert(mixedComparison.comparisons?.some((comparison) => comparison.kind === "swift"),
+    "mixed parser comparison should retain the Swift comparison");
+  assert(mixedComparison.comparisons?.some((comparison) => comparison.kind === "tree-sitter"),
+    "mixed parser comparison should add the Tree-sitter comparison");
+  assert(mixedComparison.heuristic && mixedComparison.swiftsyntax,
+    "mixed parser comparison should preserve the legacy Swift response fields");
 
   const started = await post("/api/reviews/start", {
     sourceRoot,
@@ -293,6 +312,7 @@ try {
   await rm(codexHome, { recursive: true, force: true });
   await rm(patchRoot, { recursive: true, force: true });
   await rm(nonGitRoot, { recursive: true, force: true });
+  await rm(webOnlyRoot, { recursive: true, force: true });
   await rm(objectiveCRoot, { recursive: true, force: true });
 }
 

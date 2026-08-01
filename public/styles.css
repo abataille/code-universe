@@ -1403,6 +1403,22 @@ h1 {
   overflow-wrap: anywhere;
 }
 
+.diff-comparison {
+  display: grid;
+  gap: 8px;
+}
+
+.diff-comparison + .diff-comparison {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.diff-comparison h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+}
+
 .diff-summary {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

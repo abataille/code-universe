@@ -94,6 +94,14 @@ fingerprint in scan caches, and falls back to the current adapters when the runt
 a grammar is unavailable. HTML `<script>` and `<style>` ranges are parsed with their
 embedded grammars, while the outer DOM remains owned by the existing HTML adapter.
 
+`Compare Parsers` now uses the same neutral graph for side-by-side parser checks. A
+web project compares the semantic/DOM adapter graph with the Tree-sitter graph and
+reports shared and parser-only nodes and edges, grammar coverage, embedded-language
+coverage, and syntax diagnostics. Swift projects retain the existing heuristic,
+SwiftSyntax, merged, and Xcode-index comparison. Mixed projects return both panels;
+the original Swift fields remain at the response root for compatibility with older
+clients.
+
 ### C#
 
 The C# adapter handles `.cs` files and detects `.sln`, `.csproj`, `global.json`, and `Directory.Build.props` project evidence. It emits namespace nodes, classes, records, structs, interfaces, enums, delegates, events, constructors, methods, properties, `using` modules, inheritance, interface implementation, type usage, and locally resolvable call relationships.
