@@ -98,6 +98,37 @@ function outer() {
 const commonModel = require("./model");
 const loadHome = () => import("./pages/Home");
 `);
+  await write("src/analytics.py", `
+from collections import Counter
+
+class Analytics:
+    def summarize(self, values):
+        return Counter(values)
+
+def load_report(path):
+    return Analytics().summarize(path)
+`);
+  await write("backend/Portal.php", `
+<?php
+namespace Demo;
+
+use DateTime;
+
+class Portal {
+    public function render(): string { return "ready"; }
+}
+`);
+  await write("java/com/example/App.java", `
+package com.example;
+
+import java.util.List;
+
+public class App {
+    private String title;
+    public App() {}
+    public String render() { return title; }
+}
+`);
   await write("public/assets.html", `
 <!doctype html>
 <html>
@@ -133,7 +164,7 @@ const loadHome = () => import("./pages/Home");
   assert(!files.some((file) => file.relative.includes("node_modules")), "generated dependency folders must be excluded");
   const detection = await detectProjectLanguages(root, files);
   assert(detection.primaryLanguage === "typescript", "tsconfig and TypeScript sources should select TypeScript as primary");
-  assert(["typescript", "html", "css"].every((language) => detection.languages.some((entry) => entry.id === language)), "mixed web languages should all be detected");
+  assert(["typescript", "html", "css", "python", "php", "java"].every((language) => detection.languages.some((entry) => entry.id === language)), "mixed language fixture should detect web, Python, PHP, and Java");
 
   const { graph, diagnostics } = await scanProject(root, {
     profile: "balanced",
@@ -147,6 +178,7 @@ const loadHome = () => import("./pages/Home");
   assert(graph.schemaVersion === 2, "adapter orchestration should emit schema v2");
   assert(graph.project.adapters.some((adapter) => adapter.id === "typescript"), "TypeScript adapter metadata should be recorded");
   assert(graph.project.adapters.some((adapter) => adapter.id === "web-assets"), "web adapter metadata should be recorded");
+  assert(graph.project.adapters.some((adapter) => adapter.id === "tree-sitter-languages"), "Python, PHP, and Java adapter metadata should be recorded");
   assert(graph.project.adapters.some((adapter) => adapter.id === "project-assets"), "project image adapter metadata should be recorded");
   assert(graph.nodes.every((node) => node.hierarchy && Number.isInteger(node.hierarchy.depth)), "every node should have normalized spatial hierarchy metadata");
   assert(graph.nodes.every((node) => node.display && Number.isFinite(node.display.weight)), "every node should have normalized display metrics");
@@ -225,6 +257,15 @@ const loadHome = () => import("./pages/Home");
   assert(carousel && graph.edges.filter((edge) => edge.from === carousel.id && edge.kind === "displays").length === 2, "JavaScript carousel arrays should expose static image assets");
   assert(graph.nodes.some((node) => node.kind === "method" && node.name === "next"), "object-literal methods should be represented");
   assert(graph.nodes.some((node) => node.kind === "function" && node.name === "nested"), "nested functions should be represented");
+  assert(graph.nodes.some((node) => node.language === "python" && node.kind === "class" && node.name === "Analytics"), "Python classes should be represented");
+  assert(graph.nodes.some((node) => node.language === "python" && node.kind === "function" && node.name === "load_report"), "Python functions should be represented");
+  assert(graph.nodes.some((node) => node.language === "php" && node.kind === "class" && node.name === "Portal"), "PHP classes should be represented");
+  assert(graph.nodes.some((node) => node.language === "php" && node.kind === "method" && node.name === "render"), "PHP methods should be represented");
+  assert(graph.nodes.some((node) => node.language === "java" && node.kind === "class" && node.name === "App"), "Java classes should be represented");
+  assert(graph.nodes.some((node) => node.language === "java" && node.kind === "method" && node.name === "render"), "Java methods should be represented");
+  assert(graph.edges.some((edge) => edge.kind === "imports" && graph.nodes.find((node) => node.id === edge.from)?.language === "python"), "Python imports should be represented");
+  assert(graph.edges.some((edge) => edge.kind === "imports" && graph.nodes.find((node) => node.id === edge.from)?.language === "php"), "PHP imports should be represented");
+  assert(graph.edges.some((edge) => edge.kind === "imports" && graph.nodes.find((node) => node.id === edge.from)?.language === "java"), "Java imports should be represented");
   assert(graph.nodes.some((node) => node.kind === "variable" && node.name === "speed")
     && graph.nodes.some((node) => node.kind === "variable" && node.name === "galleryTheme"), "destructured variables should be represented");
   assert(graph.edges.some((edge) => edge.source === "commonjs") && graph.edges.some((edge) => edge.source === "typescript-dynamic-import"), "CommonJS and dynamic imports should be represented");
@@ -272,7 +313,7 @@ const loadHome = () => import("./pages/Home");
   assert(laidOutDetails?.parentId === laidOutDetailsParent?.id && laidOutDetails.y > laidOutDetailsParent.y,
     "nested DOM objects should retain their spatial parent and elevation");
   assert(diagnostics.adapters.some((adapter) => adapter.semanticIndex === "typescript-program" && adapter.semanticEdges > 0), "diagnostics should report the TypeScript semantic index");
-  assert(diagnostics.filesScanned === 8, `expected 8 source files, got ${diagnostics.filesScanned}`);
+  assert(diagnostics.filesScanned === 11, `expected 11 source files, got ${diagnostics.filesScanned}`);
   assert(diagnostics.cacheHit === false, "the first scan should not be served from cache");
 
   const cachedScan = await scanProject(root, {

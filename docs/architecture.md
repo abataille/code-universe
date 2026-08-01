@@ -3,8 +3,8 @@
 ```text
 Project folder or source file
   -> shared discovery and language detection
-  -> Swift, JavaScript/TypeScript, HTML/CSS, C#, and Objective-C adapters
-  -> optional Tree-sitter WASM syntax metadata for web files
+  -> Swift, JavaScript/TypeScript, HTML/CSS, Python, PHP, Java, C#, and Objective-C adapters
+  -> optional Tree-sitter WASM syntax metadata for supported languages
   -> validated schema-v2 graph
   -> browser/macOS 3D explorer, reviews, and MCP
 ```
@@ -13,7 +13,7 @@ The app is split into language adapters, a local Node server, a browser-based Th
 
 See `language-adapters.md` for detection, adapter, editor, and migration details.
 
-JavaScript and TypeScript semantic relationships are resolved through a project-aware TypeScript compiler program. C# and Objective-C use dependency-free structural adapters with language-specific declaration, inheritance, member, import, and call/message-send resolution. The optional Tree-sitter WASM backend annotates web nodes with concrete syntax ranges and embedded-language parse status while leaving those semantic and DOM producers authoritative. Project, adapter, and parser fingerprints avoid repeating unchanged work while keeping scanner profiles and adapter versions isolated.
+JavaScript and TypeScript semantic relationships are resolved through a project-aware TypeScript compiler program. C# and Objective-C use dependency-free structural adapters with language-specific declaration, inheritance, member, import, and call/message-send resolution. Python, PHP, and Java use a neutral structural adapter with optional Tree-sitter WASM syntax metadata and exact ranges. The optional Tree-sitter backend annotates web and programming-language nodes with concrete syntax ranges and parse status while leaving semantic and DOM producers authoritative. Project, adapter, and parser fingerprints avoid repeating unchanged work while keeping scanner profiles and adapter versions isolated.
 
 ## Current Analysis Limits
 

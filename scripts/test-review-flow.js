@@ -25,6 +25,9 @@ await writeFile(join(nonGitRoot, "app.js"), "export const state = { ready: true 
 await writeFile(join(webOnlyRoot, "index.html"), "<main id=\"app\"><script src=\"app.js\"></script></main>\n");
 await writeFile(join(webOnlyRoot, "app.js"), "export const state = { ready: true };\n");
 await writeFile(join(webOnlyRoot, "styles.css"), "#app { color: red; }\n");
+await writeFile(join(webOnlyRoot, "analytics.py"), "class Analytics:\n    def summarize(self, values):\n        return values\n");
+await writeFile(join(webOnlyRoot, "Portal.php"), "<?php\nclass Portal { public function render(): string { return \"ready\"; } }\n");
+await writeFile(join(webOnlyRoot, "App.java"), "package demo;\npublic class App { public String render() { return \"ready\"; } }\n");
 await writeFile(join(objectiveCRoot, "Widget.h"), "@interface Widget : NSObject\n@property(nonatomic, copy) NSString *title;\n- (void)refresh;\n@end\n");
 await writeFile(join(objectiveCRoot, "Widget.m"), "#import \"Widget.h\"\n@implementation Widget\n- (void)refresh { self.title = @\"Ready\"; }\n@end\n");
 const previewPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -98,6 +101,9 @@ try {
   assert(webComparison.comparisons[0].baseline && webComparison.comparisons[0].treeSitter,
     "web comparison should include both graph summaries");
   assert(webComparison.comparisons[0].diagnostics?.treeSitter, "web comparison should expose Tree-sitter diagnostics");
+  assert(["analytics.py", "Portal.php", "App.java"].every((file) =>
+    webComparison.comparisons[0].files?.some((entry) => entry.file === file && entry.parsed === true)
+  ), "Tree-sitter comparison should report Python, PHP, and Java grammar coverage");
 
   const mixedComparison = await post("/api/compare-parsers", { path: patchRoot });
   assert(mixedComparison.comparisons?.some((comparison) => comparison.kind === "swift"),

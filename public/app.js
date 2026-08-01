@@ -463,16 +463,18 @@ async function compareParsers() {
 
   const languages = state.graph?.project?.languages || [];
   const hasSwift = languages.some((language) => language.id === "swift");
-  const hasWeb = languages.some((language) => ["javascript", "typescript", "html", "css"].includes(language.id));
-  if (!hasSwift && !hasWeb) {
-    parserDiff.innerHTML = "<p>Parser comparison needs Swift, JavaScript, TypeScript, HTML, or CSS source files.</p>";
+  const hasTreeSitterLanguage = languages.some((language) => [
+    "javascript", "typescript", "html", "css", "python", "php", "java"
+  ].includes(language.id));
+  if (!hasSwift && !hasTreeSitterLanguage) {
+    parserDiff.innerHTML = "<p>Parser comparison needs Swift, JavaScript, TypeScript, HTML, CSS, Python, PHP, or Java source files.</p>";
     return;
   }
-  parserDiff.innerHTML = hasSwift && hasWeb
+  parserDiff.innerHTML = hasSwift && hasTreeSitterLanguage
     ? "<p>Running Swift parser and Tree-sitter WASM comparisons...</p>"
     : hasSwift
       ? "<p>Running Swift parser comparison...</p>"
-      : "<p>Running web adapter and Tree-sitter WASM comparisons...</p>";
+      : "<p>Running language adapter and Tree-sitter WASM comparisons...</p>";
   const response = await fetch("/api/compare-parsers", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2923,7 +2925,7 @@ function renderTreeSitterComparison(comparison) {
 
   return `
     <section class="diff-comparison">
-      <h3>${escapeHtml(comparison.title || "Web adapter vs Tree-sitter WASM")}</h3>
+      <h3>${escapeHtml(comparison.title || "Language adapters vs Tree-sitter WASM")}</h3>
       <div class="diff-summary">
         <div><span>Current graph</span><strong>${baseline.nodeCount || 0}</strong></div>
         <div><span>Tree-sitter graph</span><strong>${treeSitter.nodeCount || 0}</strong></div>

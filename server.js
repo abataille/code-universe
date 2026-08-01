@@ -35,7 +35,9 @@ const activeCodexRuns = new Map();
 const activeMcpSessions = new Map();
 const reviewWriteQueues = new Map();
 const reviewEventKinds = new Set(["inspect", "search", "suspect", "edit", "build", "test", "conclusion"]);
-const TREE_SITTER_COMPARISON_LANGUAGES = new Set(["javascript", "typescript", "html", "css"]);
+const TREE_SITTER_COMPARISON_LANGUAGES = new Set([
+  "javascript", "typescript", "html", "css", "python", "php", "java"
+]);
 
 const contentTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -446,7 +448,7 @@ async function compareParsers(inputPath) {
   }
 
   if (!comparisons.length) {
-    throw new Error("Parser comparison requires Swift, JavaScript, TypeScript, HTML, or CSS source files.");
+    throw new Error("Parser comparison requires Swift, JavaScript, TypeScript, HTML, CSS, Python, PHP, or Java source files.");
   }
 
   const project = {
@@ -525,7 +527,7 @@ async function compareTreeSitterParsers(projectRoot, resolvedInput, baselineScan
 
   return {
     kind: "tree-sitter",
-    title: "Web adapter vs Tree-sitter WASM",
+    title: "Language adapters vs Tree-sitter WASM",
     project: {
       name: baselineScan.graph.project.name,
       pickedPath: resolvedInput,
@@ -1235,6 +1237,9 @@ function reviewLanguageName(language) {
     typescript: "TypeScript",
     html: "HTML",
     css: "CSS",
+    python: "Python",
+    php: "PHP",
+    java: "Java",
     csharp: "C#",
     "objective-c": "Objective-C",
     "objective-cpp": "Objective-C++"
@@ -2035,7 +2040,7 @@ if choice is false then error number -128
 if item 1 of choice is "Project folder" then
   set chosenItem to choose folder with prompt "Choose a project folder"
 else
-  set chosenItem to choose file with prompt "Choose a Swift, JavaScript, TypeScript, HTML, CSS, C#, or Objective-C source file"
+  set chosenItem to choose file with prompt "Choose a Swift, JavaScript, TypeScript, HTML, CSS, Python, PHP, Java, C#, or Objective-C source file"
 end if
 POSIX path of chosenItem
 `;

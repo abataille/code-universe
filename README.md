@@ -1,6 +1,6 @@
 # Code Universe
 
-Code Universe is a local 3D architecture map for Swift, JavaScript, TypeScript, HTML, CSS, C#, Objective-C, and Objective-C++ projects. It turns a codebase into a navigable city where files, components, types, functions, properties, modules, markup, styles, imports, and usage relationships can be inspected visually.
+Code Universe is a local 3D architecture map for Swift, JavaScript, TypeScript, HTML, CSS, Python, PHP, Java, C#, Objective-C, and Objective-C++ projects. It turns a codebase into a navigable city where files, components, types, functions, properties, modules, markup, styles, imports, and usage relationships can be inspected visually.
 
 The app runs on your Mac. Source code is scanned locally and stays local.
 
@@ -10,7 +10,7 @@ The app runs on your Mac. Source code is scanned locally and stays local.
 
 ## Highlights
 
-- Explore Swift, web, .NET, and Objective-C projects as a navigable 3D code city.
+- Explore Swift, web, Python, PHP, Java, .NET, and Objective-C projects as a navigable 3D code city.
 - Scan mixed-language projects through versioned language adapters.
 - Resolve JavaScript/TypeScript calls and types through the TypeScript semantic checker.
 - Connect CSS Modules and HTML/CSS selectors to the components and elements they style.
@@ -19,7 +19,7 @@ The app runs on your Mac. Source code is scanned locally and stays local.
 - Validate local web assets, flag broken references, and distinguish images, video, audio, fonts, embeds, and downloads.
 - Reuse unchanged full graphs and independently fingerprinted adapter fragments.
 - Inspect files, types, functions, properties, dependencies, and source code.
-- Compare heuristic, SwiftSyntax, merged, and Xcode-index analysis for Swift, and compare the current web adapters with the optional Tree-sitter WASM parser for JavaScript, TypeScript, HTML, and CSS.
+- Compare heuristic, SwiftSyntax, merged, and Xcode-index analysis for Swift, and compare language adapters with the optional Tree-sitter WASM parser for JavaScript, TypeScript, HTML, CSS, Python, PHP, and Java.
 - Ask Codex to investigate or fix a specific application behavior.
 - Watch Codex activity appear as a project-scoped trace across the city.
 - Review complete token usage, readable conclusions, and verification results.
@@ -94,8 +94,8 @@ Connection detail defaults to only `Uses` checked so the map starts readable. En
 
 ### Project Panel
 
-- `Choose Project or File`: scan a project folder or a single Swift, JavaScript, TypeScript, HTML, CSS, C#, Objective-C, or Objective-C++ file.
-- `Compare Parsers`: compare Swift parser layers and, for web projects, the semantic/DOM adapters against Tree-sitter WASM. Mixed projects show both comparisons while retaining the legacy Swift response.
+- `Choose Project or File`: scan a project folder or a single Swift, JavaScript, TypeScript, HTML, CSS, Python, PHP, Java, C#, Objective-C, or Objective-C++ file.
+- `Compare Parsers`: compare Swift parser layers and language adapters against Tree-sitter WASM. Mixed projects show both comparisons while retaining the legacy Swift response.
 - `Load Sample Universe`: reload the bundled SampleSwiftApp graph.
 
 ### Map Layers
@@ -126,10 +126,10 @@ Available modes:
 - `Best combined view`: balanced structure and relationship resolution.
 - `Accurate parse`: strongest local parser mode.
 - `Tree-sitter WASM`: optional WebAssembly syntax pass for JavaScript/TypeScript,
-  HTML, and CSS with graceful fallback to the existing adapters.
+  HTML, CSS, Python, PHP, and Java with graceful fallback to structural adapters.
 - `Indexed map`: local semantic indexes when an adapter supports them.
 
-For Swift these profiles preserve the existing heuristic, merged, SwiftSyntax, and Xcode-index implementations. JavaScript and TypeScript use the TypeScript compiler parser; HTML and CSS use parse5 and PostCSS. The optional Tree-sitter profile adds WebAssembly syntax metadata without replacing those semantic and DOM adapters.
+For Swift these profiles preserve the existing heuristic, merged, SwiftSyntax, and Xcode-index implementations. JavaScript and TypeScript use the TypeScript compiler parser; HTML and CSS use parse5 and PostCSS. Python, PHP, and Java use the neutral Tree-sitter language adapter, with exact syntax metadata in the Tree-sitter profile and a dependency-free structural fallback otherwise. The optional Tree-sitter profile adds WebAssembly syntax metadata without replacing semantic and DOM adapters.
 
 Regenerate the sample with SwiftSyntax:
 
@@ -208,7 +208,7 @@ The MCP server exposes seven bounded, read-only tools:
 
 Codex uses these tools to query the graph before broad source searches. MCP calls are labeled in the review timeline and mapped to the returned file or object. The MCP server cannot edit files, run shell commands, open Xcode, or access a different project. In `Inspect and fix` mode, source changes still use Codex's normal workspace tools, approvals, Git patch capture, and focused verification.
 
-Trace extraction is project-scoped and language-neutral: generated build folders and external files are ignored, project-wide source inventories are collapsed, repeated inspection/search events are deduplicated within each review phase, and build/test commands use concise outcome labels. The review records the detected primary language and full language mix so Codex uses appropriate terminology and tools for Swift, web, C#, Objective-C, or mixed projects. Fix reviews use a bounded supported-source snapshot when a Git baseline is unavailable, so edit steps can still show their unified diff.
+Trace extraction is project-scoped and language-neutral: generated build folders and external files are ignored, project-wide source inventories are collapsed, repeated inspection/search events are deduplicated within each review phase, and build/test commands use concise outcome labels. The review records the detected primary language and full language mix so Codex uses appropriate terminology and tools for Swift, web, Python, PHP, Java, C#, Objective-C, or mixed projects. Fix reviews use a bounded supported-source snapshot when a Git baseline is unavailable, so edit steps can still show their unified diff.
 
 Completed and imported traces can be replayed from the `Review path` panel. Replay progressively reveals mapped nodes and route streets, supports pause/resume and 0.5×, 1×, or 2× speed, and reveals the final report only when the conclusion step is reached.
 

@@ -22,6 +22,9 @@ export function App() {
 `);
   await write("styles.css", ".hero { color: red; }\n");
   await write("broken.js", "function broken( {\n");
+  await write("analytics.py", "class Analytics:\n    def summarize(self, values):\n        return values\n");
+  await write("Portal.php", "<?php\nclass Portal { public function render() { return \"ready\"; } }\n");
+  await write("App.java", "package demo;\npublic class App { public String render() { return \"ready\"; } }\n");
 
   const backend = await loadTreeSitterWasmBackend();
   const forcedFallback = await loadTreeSitterWasmBackend({ forceUnavailable: true });
@@ -39,7 +42,7 @@ export function App() {
   assert(result.diagnostics.treeSitter?.parser === "tree-sitter-wasm", "Tree-sitter diagnostics should be exposed");
 
   if (backend.available) {
-    assert(result.diagnostics.treeSitter.parsedFiles >= 4, "all web fixture files should be parsed by Tree-sitter");
+    assert(result.diagnostics.treeSitter.parsedFiles >= 7, "all web and programming-language fixture files should be parsed by Tree-sitter");
     assert(result.diagnostics.treeSitter.syntaxErrors > 0, "malformed JavaScript should produce a syntax diagnostic");
     const htmlFile = result.graph.nodes.find((node) => node.kind === "file" && node.file === "index.html");
     assert(htmlFile?.attributes?.treeSitter?.nodeType === "document", "HTML files should retain the Tree-sitter root type");
@@ -49,6 +52,15 @@ export function App() {
     assert(cssRule?.attributes?.treeSitter?.grammar === "css", "CSS rules should retain Tree-sitter CSS provenance");
     const tsxFile = result.graph.nodes.find((node) => node.kind === "file" && node.file === "src/App.tsx");
     assert(tsxFile?.attributes?.treeSitter?.grammar === "tsx", "TSX files should use the TSX grammar");
+    assert(result.graph.nodes.some((node) => node.language === "python" && node.kind === "class" && node.name === "Analytics"), "Python classes should come from Tree-sitter structure");
+    assert(result.graph.nodes.some((node) => node.language === "python" && node.kind === "method" && node.name === "summarize"), "Python methods should come from Tree-sitter structure");
+    assert(result.graph.nodes.some((node) => node.language === "php" && node.kind === "class" && node.name === "Portal"), "PHP classes should come from Tree-sitter structure");
+    assert(result.graph.nodes.some((node) => node.language === "php" && node.kind === "method" && node.name === "render"), "PHP methods should come from Tree-sitter structure");
+    assert(result.graph.nodes.some((node) => node.language === "java" && node.kind === "class" && node.name === "App"), "Java classes should come from Tree-sitter structure");
+    assert(result.graph.nodes.some((node) => node.language === "java" && node.kind === "method" && node.name === "render"), "Java methods should come from Tree-sitter structure");
+    assert(result.graph.nodes.find((node) => node.kind === "file" && node.file === "analytics.py")?.attributes?.treeSitter?.grammar === "python", "Python files should retain Tree-sitter provenance");
+    assert(result.graph.nodes.find((node) => node.kind === "file" && node.file === "Portal.php")?.attributes?.treeSitter?.grammar === "php", "PHP files should retain Tree-sitter provenance");
+    assert(result.graph.nodes.find((node) => node.kind === "file" && node.file === "App.java")?.attributes?.treeSitter?.grammar === "java", "Java files should retain Tree-sitter provenance");
   } else {
     assert(result.diagnostics.treeSitter.fallback === true, "missing optional dependencies should use the existing adapters");
     assert(result.diagnostics.treeSitter.parsedFiles === 0, "fallback mode should not claim parsed files");

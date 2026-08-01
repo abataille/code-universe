@@ -20,10 +20,10 @@ Each adapter declares:
 - `scan(context)`, returning a graph fragment and generic diagnostics
 
 The optional `tree-sitter` profile adds a WebAssembly syntax backend for JavaScript,
-TypeScript/TSX, HTML, and CSS. It is loaded lazily through `web-tree-sitter` and the
-grammar packages listed in `package.json`'s `optionalDependencies`. If those packages
-are omitted, the existing adapters continue unchanged and diagnostics report the
-fallback instead of failing project startup.
+TypeScript/TSX, HTML, CSS, Python, PHP, and Java. It is loaded lazily through
+`web-tree-sitter` and the grammar packages listed in `package.json`'s
+`optionalDependencies`. If those packages are omitted, the existing adapters continue
+unchanged and diagnostics report the fallback instead of failing project startup.
 
 ## Current adapters
 
@@ -68,7 +68,7 @@ Every `src`, `srcset`, `poster`, embeddable `data`, downloadable `href`, icon/ma
 
 Asset nodes are visible in the main 3D city as low plaques whose footprints follow the real image aspect ratio. Opening an HTML file also includes declarations from its inline scripts, so generated galleries and carousel arrays expose their image assets and `displays` connections even when the HTML contains no literal `<img>` element.
 
-The same city grammar applies to programming languages. Files are lots; classes, structs, services, components, and other types are buildings; callables become compact exterior offices or balconies; properties, fields, and variables become façade markers; and nested types become annex buildings. Dense types distribute members around all four façades and suppress low-value labels rather than growing a second member tower above the type. Inspection expands this architecture without switching to a generic nested-object diagram, so Swift, JavaScript/TypeScript, C#, Objective-C, HTML, and CSS retain one spatial vocabulary.
+The same city grammar applies to programming languages. Files are lots; classes, structs, services, components, and other types are buildings; callables become compact exterior offices or balconies; properties, fields, and variables become façade markers; and nested types become annex buildings. Dense types distribute members around all four façades and suppress low-value labels rather than growing a second member tower above the type. Inspection expands this architecture without switching to a generic nested-object diagram, so Swift, JavaScript/TypeScript, Python, PHP, Java, C#, Objective-C, HTML, and CSS retain one spatial vocabulary.
 
 The project-assets adapter indexes local images independently of source language. Xcode `.imageset` scale variants are represented as one logical image object with a preferred preview, scale, idiom, appearance, and catalog-property metadata. SF Symbols are external system image objects; runtime-computed names remain visible as low-confidence dynamic image objects. PNG/APNG, JPEG, GIF, WebP, SVG, BMP, ICO, and AVIF headers provide intrinsic dimensions where available. Direct web image files retain path-stable asset IDs.
 
@@ -82,11 +82,11 @@ Inline `<style>` rules, CSS custom properties, `@import`, keyframes, and CSS URL
 
 Selecting `tree-sitter` (or setting `CODE_UNIVERSE_SCANNER=tree-sitter`) keeps the
 existing TypeScript compiler, parse5/PostCSS, Swift, C#, Objective-C, and asset
-adapters as the graph producers. The WebAssembly backend parses supported web source
-files and annotates the resulting nodes with `attributes.treeSitter` and parser
-provenance. This gives the inspector concrete syntax node kinds, parse-error status,
-and embedded JavaScript/CSS coverage without changing stable node IDs or semantic
-TypeScript edges.
+adapters as the graph producers. The WebAssembly backend parses supported web,
+Python, PHP, and Java source files and annotates the resulting nodes with
+`attributes.treeSitter` and parser provenance. This gives the inspector concrete
+syntax node kinds, parse-error status, and embedded JavaScript/CSS coverage without
+changing stable node IDs or semantic TypeScript edges.
 
 The backend is intentionally optional and never downloads grammars at runtime. It
 records runtime and grammar versions in `project.parsers`, includes the parser
@@ -95,12 +95,24 @@ a grammar is unavailable. HTML `<script>` and `<style>` ranges are parsed with t
 embedded grammars, while the outer DOM remains owned by the existing HTML adapter.
 
 `Compare Parsers` now uses the same neutral graph for side-by-side parser checks. A
-web project compares the semantic/DOM adapter graph with the Tree-sitter graph and
-reports shared and parser-only nodes and edges, grammar coverage, embedded-language
-coverage, and syntax diagnostics. Swift projects retain the existing heuristic,
-SwiftSyntax, merged, and Xcode-index comparison. Mixed projects return both panels;
-the original Swift fields remain at the response root for compatibility with older
-clients.
+web, Python, PHP, or Java project compares its current adapter graph with the
+Tree-sitter graph and reports shared and parser-only nodes and edges, grammar coverage,
+embedded-language coverage, and syntax diagnostics. Swift projects retain the
+existing heuristic, SwiftSyntax, merged, and Xcode-index comparison. Mixed projects
+return both panels; the original Swift fields remain at the response root for
+compatibility with older clients.
+
+### Python, PHP, and Java
+
+The `tree-sitter-languages` adapter covers `.py`/`.pyw`, `.php`/`.phtml`, and `.java`.
+It emits files, namespaces/packages, classes, interfaces, traits, enums, records,
+functions, methods, constructors, properties, variables, and imports into the same
+graph schema. The normal profile uses a small structural fallback so a project still
+opens when optional grammars are absent. Selecting `Tree-sitter WASM` adds exact
+syntax node kinds, source ranges, parser provenance, and syntax-error diagnostics.
+These languages currently provide structural architecture rather than compiler-grade
+type or cross-file call resolution; that can be added behind the same adapter IDs
+later.
 
 ### C#
 
@@ -144,12 +156,12 @@ Set `CODE_UNIVERSE_EDITOR=xcode`, `vscode`, or `system` to override automatic se
 
 1. Schema v2 and v1 compatibility: complete.
 2. Adapter registry and preserved Swift adapter: complete.
-3. JavaScript/TypeScript and HTML/CSS adapters: complete.
+3. JavaScript/TypeScript, HTML/CSS, Python, PHP, and Java adapters: complete.
 4. Mixed-language project detection and graph merge: complete.
 5. Generic source lookup, review snapshots, diffs, and trace extraction: complete.
 6. Editor-provider integration and generic viewer controls: complete.
 7. TypeScript semantic index, incremental fingerprints, CSS Modules, and framework detection: complete.
 8. C# and Objective-C/Objective-C++ structural adapters: complete.
-9. Optional Tree-sitter WASM syntax backend for web languages: complete; opt-in and fallback-safe.
+9. Optional Tree-sitter WASM syntax backend for web, Python, PHP, and Java languages: complete; opt-in and fallback-safe.
 
 Roslyn/Clang semantic enrichment and persistent SQLite graph history remain optional roadmap work. The structural C# and Objective-C adapters are fully integrated without requiring those external toolchains.
