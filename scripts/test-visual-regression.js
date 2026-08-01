@@ -79,6 +79,15 @@ export class GalleryController {
   await page.screenshot({ path: languageScreenshot });
   const languageSelected = await page.evaluate(() =>
     (document.querySelector("#selectedDetails")?.textContent || "").includes("GalleryController"));
+  await page.locator("#compareParsersButton").click();
+  await page.waitForFunction(() => {
+    const text = document.querySelector("#parserDiff")?.textContent || "";
+    return text.includes("Tree-sitter") || text.includes("parser comparison");
+  }, null, { timeout: 30_000 });
+  const comparisonState = await page.evaluate(() => ({
+    analysisVisible: !document.querySelector("#inspectorPanelAnalysis")?.hidden,
+    comparisonText: document.querySelector("#parserDiff")?.textContent || ""
+  }));
   const htmlImage = await readFile(screenshot);
   const languageImage = await readFile(languageScreenshot);
   assert(htmlImage.length > 40_000, `HTML city snapshot is unexpectedly small (${htmlImage.length} bytes)`);
@@ -89,6 +98,8 @@ export class GalleryController {
   assert(htmlState.htmlSelected, "visual regression should open the HTML file city");
   assert(languageSelected, "visual regression should open a programming-language building");
   assert(htmlState.hierarchyVisible && htmlState.stableIdentityVisible, "inspector should expose hierarchy and stable identity");
+  assert(comparisonState.analysisVisible, "Compare Parsers should reveal the Analysis inspector tab");
+  assert(comparisonState.comparisonText.includes("Tree-sitter"), "Compare Parsers should render a comparison result");
   assert(errors.length === 0, `browser console errors: ${errors.join("; ")}`);
   console.log(`Visual regression passed with ${htmlImage.length}/${languageImage.length} screenshot bytes at ${htmlState.canvasWidth}×${htmlState.canvasHeight}.`);
 } finally {

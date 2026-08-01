@@ -455,6 +455,14 @@ async function scanPath(path, descriptor) {
 }
 
 async function compareParsers() {
+  // The comparison result lives in the Analysis inspector tab.  Selecting the
+  // action from the project rail must reveal that result instead of leaving it
+  // behind the default Object tab (or a previously collapsed right rail).
+  appShell.classList.remove("is-right-hidden");
+  syncRailButtons();
+  selectInspectorTab("analysis");
+  resize();
+
   const sourceRoot = state.graph?.project?.sourceRoot || localStorage.getItem(lastProjectPathKey);
   if (!sourceRoot) {
     parserDiff.innerHTML = "<p>Choose a project first, then compare its language adapters.</p>";
