@@ -8,8 +8,9 @@
     "mcp": "node scripts/code-universe-mcp.js",
     "test:scan": "node scripts/test-scan-fixtures.js",
     "test:languages": "node scripts/test-language-adapters.js",
+    "test:tree-sitter": "node scripts/test-tree-sitter-wasm.js",
     "test:visual": "node scripts/test-visual-regression.js",
-    "test": "npm run test:scan && npm run test:languages && npm run test:visual && npm run test:review && npm run test:mcp",
+    "test": "npm run test:scan && npm run test:languages && npm run test:tree-sitter && npm run test:visual && npm run test:review && npm run test:mcp",
     "test:review": "node scripts/test-review-flow.js",
     "test:mcp": "node scripts/test-mcp.js",
     "scan:sample": "node scripts/scan-swift.js examples/SampleSwiftApp public/sample-graph.json",
@@ -33,5 +34,12 @@
   },
   "devDependencies": {
     "playwright-core": "^1.62.0"
+  },
+  "optionalDependencies": {
+    "tree-sitter-css": "^0.25.0",
+    "tree-sitter-html": "^0.23.2",
+    "tree-sitter-javascript": "^0.25.0",
+    "tree-sitter-typescript": "^0.23.2",
+    "web-tree-sitter": "^0.26.11"
   }
 }

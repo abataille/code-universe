@@ -125,9 +125,11 @@ Available modes:
 - `Fast overview`: fastest adapter-supported structure scan.
 - `Best combined view`: balanced structure and relationship resolution.
 - `Accurate parse`: strongest local parser mode.
+- `Tree-sitter WASM`: optional WebAssembly syntax pass for JavaScript/TypeScript,
+  HTML, and CSS with graceful fallback to the existing adapters.
 - `Indexed map`: local semantic indexes when an adapter supports them.
 
-For Swift these profiles preserve the existing heuristic, merged, SwiftSyntax, and Xcode-index implementations. JavaScript and TypeScript use the TypeScript compiler parser; HTML and CSS use parse5 and PostCSS.
+For Swift these profiles preserve the existing heuristic, merged, SwiftSyntax, and Xcode-index implementations. JavaScript and TypeScript use the TypeScript compiler parser; HTML and CSS use parse5 and PostCSS. The optional Tree-sitter profile adds WebAssembly syntax metadata without replacing those semantic and DOM adapters.
 
 Regenerate the sample with SwiftSyntax:
 
@@ -150,7 +152,13 @@ heuristic
 merged
 swiftsyntax
 xcode-index
+tree-sitter
 ```
+
+Tree-sitter is an optional npm capability. A normal `npm install` includes the
+WebAssembly runtime and prebuilt web grammars; installations that omit optional
+dependencies continue to use the existing adapters and report the fallback in scan
+diagnostics. The Tree-sitter CLI is not required at runtime.
 
 ## Codex Behavior Reviews
 

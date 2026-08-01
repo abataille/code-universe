@@ -21,6 +21,7 @@ Schema v1 graphs remain loadable and are normalized in the viewer and server.
     ],
     "projectKind": "typescript",
     "scanProfile": "balanced",
+    "parsers": [],
     "adapters": [
       { "id": "typescript", "version": 1, "profile": "balanced" },
       { "id": "web-assets", "version": 1, "profile": "balanced" }
@@ -30,6 +31,11 @@ Schema v1 graphs remain loadable and are normalized in the viewer and server.
 ```
 
 Mixed-language projects run every applicable adapter. `primaryLanguage` is presentation metadata, not an instruction to exclude other languages.
+
+When the optional Tree-sitter profile is active, `project.parsers` contains the
+`tree-sitter-wasm` runtime and grammar versions, availability, and fallback state.
+The field is empty for the normal SwiftSyntax, TypeScript, HTML/CSS, C#, and
+Objective-C profiles.
 
 ## Nodes
 
@@ -103,6 +109,11 @@ Neutral categories:
 Additional structural kinds include `namespace`, `extension`, `delegate`, `event`, `enum_case`, `local_variable`, `closure`, `ivar`, and `block`.
 
 Adapter-specific attributes may add semantic data without changing the neutral contract. Current examples include `semanticName`, `framework`, `component`, `cssModuleClasses`, `domReferences`, C# namespaces/base types, Objective-C selectors/protocols/categories, CSS selector classes/IDs/dimensions, HTML/JSX tag/class/ID metadata, and asset source, existence, byte size, pixel dimensions, alternative-text, sizing, loading, media-role, and responsive-candidate metadata.
+
+Web nodes may additionally expose `attributes.treeSitter` with the optional parser
+backend ID, concrete grammar, matched syntax node type, embedded language, and parse
+error count. This is additive metadata; stable IDs, graph kinds, and semantic edges
+remain owned by the language adapters.
 
 `identity.stableId` is derived from category, kind, language, source file, qualified name, signature metadata, and overload ordinal. Existing adapter IDs remain untouched, but selection can survive line movement and rescans through the stable identity.
 

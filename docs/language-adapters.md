@@ -19,6 +19,12 @@ Each adapter declares:
 - supported `languages`, extensions, and scan profiles
 - `scan(context)`, returning a graph fragment and generic diagnostics
 
+The optional `tree-sitter` profile adds a WebAssembly syntax backend for JavaScript,
+TypeScript/TSX, HTML, and CSS. It is loaded lazily through `web-tree-sitter` and the
+grammar packages listed in `package.json`'s `optionalDependencies`. If those packages
+are omitted, the existing adapters continue unchanged and diagnostics report the
+fallback instead of failing project startup.
+
 ## Current adapters
 
 ### Swift
@@ -72,6 +78,22 @@ Filesystem depth remains a logical relationship, not a vertical stack. All direc
 
 Inline `<style>` rules, CSS custom properties, `@import`, keyframes, and CSS URL assets are parsed. `<base href>` affects relative HTML links and assets. The popup no longer truncates HTML at 64 internals; all meaningful elements remain available, while anonymous layout-only wrappers continue to affect full-DOM LOC and complexity without adding map noise.
 
+### Optional Tree-sitter WASM backend
+
+Selecting `tree-sitter` (or setting `CODE_UNIVERSE_SCANNER=tree-sitter`) keeps the
+existing TypeScript compiler, parse5/PostCSS, Swift, C#, Objective-C, and asset
+adapters as the graph producers. The WebAssembly backend parses supported web source
+files and annotates the resulting nodes with `attributes.treeSitter` and parser
+provenance. This gives the inspector concrete syntax node kinds, parse-error status,
+and embedded JavaScript/CSS coverage without changing stable node IDs or semantic
+TypeScript edges.
+
+The backend is intentionally optional and never downloads grammars at runtime. It
+records runtime and grammar versions in `project.parsers`, includes the parser
+fingerprint in scan caches, and falls back to the current adapters when the runtime or
+a grammar is unavailable. HTML `<script>` and `<style>` ranges are parsed with their
+embedded grammars, while the outer DOM remains owned by the existing HTML adapter.
+
 ### C#
 
 The C# adapter handles `.cs` files and detects `.sln`, `.csproj`, `global.json`, and `Directory.Build.props` project evidence. It emits namespace nodes, classes, records, structs, interfaces, enums, delegates, events, constructors, methods, properties, `using` modules, inheritance, interface implementation, type usage, and locally resolvable call relationships.
@@ -120,5 +142,6 @@ Set `CODE_UNIVERSE_EDITOR=xcode`, `vscode`, or `system` to override automatic se
 6. Editor-provider integration and generic viewer controls: complete.
 7. TypeScript semantic index, incremental fingerprints, CSS Modules, and framework detection: complete.
 8. C# and Objective-C/Objective-C++ structural adapters: complete.
+9. Optional Tree-sitter WASM syntax backend for web languages: complete; opt-in and fallback-safe.
 
 Roslyn/Clang semantic enrichment and persistent SQLite graph history remain optional roadmap work. The structural C# and Objective-C adapters are fully integrated without requiring those external toolchains.

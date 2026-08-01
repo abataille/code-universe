@@ -302,8 +302,16 @@ function getClientId() {
 
 function initializeParserMode() {
   const saved = localStorage.getItem(parserModeKey);
-  const aliases = { heuristic: "fast", merged: "balanced", swiftsyntax: "accurate", "xcode-index": "indexed" };
-  state.parserMode = ["fast", "balanced", "accurate", "indexed"].includes(saved) ? saved : aliases[saved] || "fast";
+  const aliases = {
+    heuristic: "fast",
+    merged: "balanced",
+    swiftsyntax: "accurate",
+    "xcode-index": "indexed",
+    "tree-sitter-wasm": "tree-sitter"
+  };
+  state.parserMode = ["fast", "balanced", "accurate", "tree-sitter", "indexed"].includes(saved)
+    ? saved
+    : aliases[saved] || "fast";
   localStorage.setItem(parserModeKey, state.parserMode);
   parserSelect.value = state.parserMode;
 }
@@ -1871,7 +1879,9 @@ function bindEvents() {
   });
 
   parserSelect.addEventListener("change", async () => {
-    state.parserMode = ["fast", "balanced", "accurate", "indexed"].includes(parserSelect.value) ? parserSelect.value : "balanced";
+    state.parserMode = ["fast", "balanced", "accurate", "tree-sitter", "indexed"].includes(parserSelect.value)
+      ? parserSelect.value
+      : "balanced";
     localStorage.setItem(parserModeKey, state.parserMode);
     const lastProjectPath = localStorage.getItem(lastProjectPathKey);
     if (!lastProjectPath) {
@@ -2792,6 +2802,7 @@ function formatTokenCount(value) {
 function describeParser(mode) {
   if (mode === "indexed" || mode === "xcode-index") return "indexed map";
   if (mode === "balanced" || mode === "merged") return "best combined view";
+  if (mode === "tree-sitter" || mode === "tree-sitter-wasm") return "Tree-sitter WASM parse";
   return mode === "accurate" || mode === "swiftsyntax" ? "accurate parse" : "fast overview";
 }
 
@@ -2820,6 +2831,13 @@ function formatScanSummary(diagnostics) {
   }
   if (diagnostics.xcodeIndexMessage) {
     parts.push(diagnostics.xcodeIndexMessage);
+  }
+  if (diagnostics.treeSitter?.fallback) {
+    parts.push(`Tree-sitter WASM unavailable; used fallback${diagnostics.treeSitter.reason ? ` (${diagnostics.treeSitter.reason})` : ""}`);
+  } else if (diagnostics.treeSitter?.partialFallback) {
+    parts.push(`Tree-sitter WASM partially available; ${diagnostics.treeSitter.skippedFiles || 0} files used fallback`);
+  } else if (diagnostics.treeSitter?.available) {
+    parts.push(`${diagnostics.treeSitter.parsedFiles || 0} files parsed with Tree-sitter WASM`);
   }
   parts.push(`source root ${diagnostics.sourceRoot}`);
   return parts.join(" · ");

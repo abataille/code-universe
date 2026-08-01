@@ -463,17 +463,20 @@ function resolveScannerMode(scanner) {
   if (["fast", "balanced", "accurate", "indexed"].includes(scanner)) {
     return scannerForProfile(scanner);
   }
-  if (["xcode-index", "merged", "swiftsyntax", "heuristic"].includes(scanner)) {
+  if (["xcode-index", "merged", "swiftsyntax", "heuristic", "tree-sitter", "tree-sitter-wasm"].includes(scanner)) {
+    if (scanner === "tree-sitter-wasm") return "tree-sitter";
     return scanner;
   }
-  if (["xcode-index", "merged", "swiftsyntax", "heuristic"].includes(scannerMode)) {
+  if (["xcode-index", "merged", "swiftsyntax", "heuristic", "tree-sitter", "tree-sitter-wasm"].includes(scannerMode)) {
+    if (scannerMode === "tree-sitter-wasm") return "tree-sitter";
     return scannerMode;
   }
   return "merged";
 }
 
 async function scanSwiftForAdapter(projectRoot, profile) {
-  const scanner = scannerForProfile(profile);
+  const requestedScanner = scannerForProfile(profile);
+  const scanner = requestedScanner === "tree-sitter" ? "merged" : requestedScanner;
   const result = scanner === "xcode-index"
     ? await scanSwiftFolderWithXcodeIndex(projectRoot)
     : scanner === "merged"
