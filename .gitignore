@@ -6,3 +6,4 @@ node_modules/
 dist/
 .tmp-code-universe*
 .code-universe-data/
+notarize-credentials.txt

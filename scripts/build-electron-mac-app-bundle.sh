@@ -97,10 +97,20 @@ iconutil -c icns "$ICONSET_DIR" -o "$ICON_PATH"
 
 PACKAGED_APP="$PACKAGE_OUT/Code Universe-darwin-$ELECTRON_ARCH/Code Universe.app"
 /usr/bin/ditto "$ICON_PATH" "$PACKAGED_APP/Contents/Resources/electron.icns"
+
+if [[ "$SIGN_IDENTITY" == "-" ]]; then
+  codesign --force --deep --sign - "$PACKAGED_APP"
+else
+  node "$ROOT_DIR/scripts/sign-electron-app.mjs" \
+    "$PACKAGED_APP" \
+    "$SIGN_IDENTITY" \
+    "$PACKAGED_APP/Contents/Resources/app/bin/scan-swift-syntax"
+fi
+
+codesign --verify --deep --strict --verbose=2 "$PACKAGED_APP"
 rm -rf "$APP_DIR" "$ARCHIVE_PATH" "$CHECKSUM_PATH"
 /usr/bin/ditto "$PACKAGED_APP" "$APP_DIR"
 
-codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_DIR"
 codesign --verify --deep --strict --verbose=2 "$APP_DIR"
 plutil -lint "$APP_DIR/Contents/Info.plist"
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ARCHIVE_PATH"

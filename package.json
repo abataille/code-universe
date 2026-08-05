@@ -21,6 +21,7 @@
     "mac:bundle": "zsh scripts/build-electron-mac-app-bundle.sh",
     "mac:bundle:native": "zsh scripts/build-mac-app-bundle.sh",
     "mac:archive": "zsh scripts/build-electron-mac-app-bundle.sh",
+    "mac:release": "zsh scripts/release-mac-app.sh",
     "mac:open": "npm run mac:bundle && open \"dist/Code Universe.app\""
   },
   "dependencies": {
