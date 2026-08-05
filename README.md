@@ -249,13 +249,33 @@ Build the app bundle:
 npm run mac:bundle
 ```
 
+The bundle task creates a self-contained Electron/Chromium app plus a ZIP archive
+and SHA-256 checksum in `dist/`. It renders the same npm UI as the browser version
+and includes the language adapters, optional Tree-sitter WASM grammars, and the
+SwiftSyntax scanner. The target Mac does not need the source repository, Node.js,
+npm, or Swift Package Manager.
+
+The earlier Swift/AppKit shell remains available as a rollback target:
+
+```sh
+npm run mac:bundle:native
+```
+
+Set `CODE_UNIVERSE_SIGN_IDENTITY` to a Developer ID Application certificate
+identity for a distributable signed build. Without one, the scripts create an
+ad-hoc-signed archive for local testing. The native rollback build additionally
+accepts `CODE_UNIVERSE_NODE_BINARY` when the build machine's Node executable has
+non-system dynamic-library dependencies.
+
 Open the bundle:
 
 ```sh
 npm run mac:open
 ```
 
-The shell starts the local Node server, waits for `/api/health`, then loads the browser UI. It is designed to work when opened from Xcode behaviors as well as from the command line.
+The Electron shell starts its bundled local server on an available private port,
+waits for `/api/health`, and then loads the npm UI in Chromium. The separate native
+shell remains designed for Xcode behaviors and command-line development.
 
 ## Scripts
 
@@ -270,6 +290,7 @@ npm run review -- help
 npm run mac:build
 npm run mac:run
 npm run mac:bundle
+npm run mac:bundle:native
 npm run mac:open
 ```
 

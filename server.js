@@ -22,6 +22,9 @@ const host = process.env.HOST || "127.0.0.1";
 const root = join(process.cwd(), "public");
 const scannerMode = process.env.CODE_UNIVERSE_SCANNER || "merged";
 const swiftSyntaxTimeoutMs = Number(process.env.CODE_UNIVERSE_SWIFTSYNTAX_TIMEOUT_MS || 45000);
+const cacheRoot = process.env.CODE_UNIVERSE_CACHE_ROOT
+  ? resolve(process.env.CODE_UNIVERSE_CACHE_ROOT)
+  : resolve(".swift-cache");
 const activeClients = new Map();
 let shutdownTimer = null;
 let pruneTimer = null;
@@ -867,7 +870,7 @@ function countBy(items, keyForItem) {
 }
 
 async function scanSwiftFolderWithSwiftSyntax(projectRoot) {
-  const outputDir = resolve(".swift-cache/server");
+  const outputDir = join(cacheRoot, "server");
   const outputPath = join(outputDir, `graph-${randomUUID()}.json`);
   await mkdir(outputDir, { recursive: true });
   let graph;
@@ -877,7 +880,7 @@ async function scanSwiftFolderWithSwiftSyntax(projectRoot) {
       maxBuffer: 1024 * 1024 * 12,
       env: {
         ...process.env,
-        CLANG_MODULE_CACHE_PATH: resolve(".swift-cache/clang-module-cache")
+        CLANG_MODULE_CACHE_PATH: join(cacheRoot, "clang-module-cache")
       }
     }).catch((error) => {
       if (error.killed || error.signal === "SIGTERM" || error.code === "ETIMEDOUT") {

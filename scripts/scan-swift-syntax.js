@@ -11,8 +11,10 @@ if (!inputRoot || !outputFile) {
 
 await mkdir(dirname(resolve(outputFile)), { recursive: true });
 
+const bundledScanner = process.env.CODE_UNIVERSE_SWIFTSYNTAX_SCANNER || null;
 const packagePath = resolve("scanners/swiftsyntax-scanner");
-const cachePath = resolve(".swift-cache/clang-module-cache");
+const cacheRoot = resolve(process.env.CODE_UNIVERSE_CACHE_ROOT || ".swift-cache");
+const cachePath = resolve(cacheRoot, "clang-module-cache");
 await mkdir(cachePath, { recursive: true });
 
 const swiftEnvironment = {
@@ -22,15 +24,17 @@ const swiftEnvironment = {
 delete swiftEnvironment.SWIFTSYNTAX_BUILD_DYNAMIC_LIBRARY;
 
 const child = spawn(
-  "swift",
-  [
-    "run",
-    "--package-path",
-    packagePath,
-    "scan-swift-syntax",
-    resolve(inputRoot),
-    resolve(outputFile)
-  ],
+  bundledScanner || "swift",
+  bundledScanner
+    ? [resolve(inputRoot), resolve(outputFile)]
+    : [
+      "run",
+      "--package-path",
+      packagePath,
+      "scan-swift-syntax",
+      resolve(inputRoot),
+      resolve(outputFile)
+    ],
   {
     stdio: "inherit",
     env: swiftEnvironment

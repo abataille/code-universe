@@ -18,7 +18,9 @@
     "review": "node scripts/code-universe-review.js",
     "mac:build": "swift build --package-path mac/CodeUniverseMac",
     "mac:run": "swift run --package-path mac/CodeUniverseMac CodeUniverseMac",
-    "mac:bundle": "zsh scripts/build-mac-app-bundle.sh",
+    "mac:bundle": "zsh scripts/build-electron-mac-app-bundle.sh",
+    "mac:bundle:native": "zsh scripts/build-mac-app-bundle.sh",
+    "mac:archive": "zsh scripts/build-electron-mac-app-bundle.sh",
     "mac:open": "npm run mac:bundle && open \"dist/Code Universe.app\""
   },
   "dependencies": {
@@ -33,6 +35,8 @@
     "@hono/node-server": "2.0.11"
   },
   "devDependencies": {
+    "@electron/packager": "^20.1.1",
+    "electron": "^43.3.0",
     "playwright-core": "^1.62.0"
   },
   "optionalDependencies": {

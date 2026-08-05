@@ -243,15 +243,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
 
   private func startLocalServerIfPossible() {
     guard let repoRoot = findRepoRoot() else {
+      appendLog("server-root-not-found")
       return
     }
 
     let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    process.arguments = ["npm", "start"]
+    if let bundledNode = bundledExecutable(relativePath: "runtime/node") {
+      process.executableURL = bundledNode
+      process.arguments = ["server.js"]
+      appendLog("using-bundled-node \(bundledNode.path)")
+    } else {
+      process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+      process.arguments = ["npm", "start"]
+      appendLog("using-development-node")
+    }
     process.currentDirectoryURL = repoRoot
     var environment = ProcessInfo.processInfo.environment
     environment["PORT"] = "4174"
+    environment["CODE_UNIVERSE_DATA_ROOT"] = applicationSupportDirectory()
+      .appendingPathComponent("reviews", isDirectory: true)
+      .path
+    environment["CODE_UNIVERSE_CACHE_ROOT"] = cachesDirectory().path
+    if let scanner = bundledExecutable(relativePath: "code-universe/bin/scan-swift-syntax") {
+      environment["CODE_UNIVERSE_SWIFTSYNTAX_SCANNER"] = scanner.path
+    }
     environment["PATH"] = [
       environment["PATH"],
       "/opt/homebrew/bin",
@@ -314,6 +329,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
        FileManager.default.fileExists(atPath: URL(fileURLWithPath: configuredRoot).appendingPathComponent("server.js").path) {
       return URL(fileURLWithPath: configuredRoot)
     }
+    if let resourceRoot = Bundle.main.resourceURL?.appendingPathComponent("code-universe", isDirectory: true),
+       FileManager.default.fileExists(atPath: resourceRoot.appendingPathComponent("server.js").path) {
+      return resourceRoot
+    }
     if let bundledRoot = Bundle.main.object(forInfoDictionaryKey: "CodeUniverseRepoRoot") as? String,
        FileManager.default.fileExists(atPath: URL(fileURLWithPath: bundledRoot).appendingPathComponent("server.js").path) {
       return URL(fileURLWithPath: bundledRoot)
@@ -326,6 +345,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
       candidate.deleteLastPathComponent()
     }
     return nil
+  }
+
+  private func bundledExecutable(relativePath: String) -> URL? {
+    guard let resourceURL = Bundle.main.resourceURL else {
+      return nil
+    }
+    let executable = resourceURL.appendingPathComponent(relativePath)
+    return FileManager.default.isExecutableFile(atPath: executable.path) ? executable : nil
+  }
+
+  private func applicationSupportDirectory() -> URL {
+    let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+      ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
+    let directory = base.appendingPathComponent("Code Universe", isDirectory: true)
+    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    return directory
+  }
+
+  private func cachesDirectory() -> URL {
+    let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+      ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Caches", isDirectory: true)
+    let directory = base.appendingPathComponent("Code Universe", isDirectory: true)
+    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    return directory
   }
 }
 

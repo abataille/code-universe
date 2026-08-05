@@ -3,21 +3,53 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PACKAGE_DIR="$ROOT_DIR/mac/CodeUniverseMac"
+SCANNER_PACKAGE_DIR="$ROOT_DIR/scanners/swiftsyntax-scanner"
 APP_DIR="$ROOT_DIR/dist/Code Universe.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
-BINARY_PATH="$PACKAGE_DIR/.build/arm64-apple-macosx/debug/CodeUniverseMac"
+SERVER_DIR="$RESOURCES_DIR/code-universe"
+RUNTIME_DIR="$RESOURCES_DIR/runtime"
+APP_VERSION="$(sed -nE 's/^[[:space:]]*"version": "([^"]+)".*/\1/p' "$ROOT_DIR/package.json" | head -1)"
+ARCHITECTURE="$(uname -m)"
+ARCHIVE_PATH="$ROOT_DIR/dist/Code-Universe-${APP_VERSION}-macOS-${ARCHITECTURE}.zip"
+CHECKSUM_PATH="$ARCHIVE_PATH.sha256"
+NODE_BINARY="${CODE_UNIVERSE_NODE_BINARY:-$(command -v node || true)}"
+SIGN_IDENTITY="${CODE_UNIVERSE_SIGN_IDENTITY:--}"
 ICONSET_DIR="$ROOT_DIR/.tmp-code-universe.iconset"
 ICON_PNG="$ROOT_DIR/.tmp-code-universe-icon.png"
 ICON_SWIFT="$ROOT_DIR/.tmp-code-universe-icon.swift"
 BUNDLE_VERSION="$(date +%Y%m%d%H%M%S)"
 
-swift build --package-path "$PACKAGE_DIR"
+if [ -z "$NODE_BINARY" ] || [ ! -x "$NODE_BINARY" ]; then
+  echo "A distributable Node.js executable is required. Set CODE_UNIVERSE_NODE_BINARY to an executable Node binary." >&2
+  exit 1
+fi
 
-rm -rf "$APP_DIR"
-mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
+if ! file "$NODE_BINARY" | grep -q "$ARCHITECTURE"; then
+  echo "Node.js architecture does not match this Mac ($ARCHITECTURE): $NODE_BINARY" >&2
+  exit 1
+fi
+
+swift build -c release --package-path "$PACKAGE_DIR"
+swift build -c release --package-path "$SCANNER_PACKAGE_DIR"
+BINARY_PATH="$(swift build -c release --show-bin-path --package-path "$PACKAGE_DIR")/CodeUniverseMac"
+SCANNER_BINARY="$(swift build -c release --show-bin-path --package-path "$SCANNER_PACKAGE_DIR")/scan-swift-syntax"
+
+rm -rf "$APP_DIR" "$ARCHIVE_PATH" "$CHECKSUM_PATH"
+mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$SERVER_DIR/bin" "$RUNTIME_DIR"
 cp "$BINARY_PATH" "$MACOS_DIR/CodeUniverseMac"
+cp "$NODE_BINARY" "$RUNTIME_DIR/node"
+cp "$SCANNER_BINARY" "$SERVER_DIR/bin/scan-swift-syntax"
+chmod +x "$MACOS_DIR/CodeUniverseMac" "$RUNTIME_DIR/node" "$SERVER_DIR/bin/scan-swift-syntax"
+
+/usr/bin/ditto "$ROOT_DIR/public" "$SERVER_DIR/public"
+/usr/bin/ditto "$ROOT_DIR/lib" "$SERVER_DIR/lib"
+/usr/bin/ditto "$ROOT_DIR/scripts" "$SERVER_DIR/scripts"
+/usr/bin/ditto "$ROOT_DIR/node_modules" "$SERVER_DIR/node_modules"
+cp "$ROOT_DIR/server.js" "$ROOT_DIR/package.json" "$ROOT_DIR/package-lock.json" "$SERVER_DIR/"
+rm -rf "$SERVER_DIR/node_modules/playwright-core"
+rm -f "$SERVER_DIR/node_modules/.bin/playwright-core"
 
 cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -27,7 +59,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>CFBundleExecutable</key>
   <string>CodeUniverseMac</string>
   <key>CFBundleIdentifier</key>
-  <string>local.code-universe.app</string>
+  <string>com.vclab.code-universe</string>
   <key>CFBundleName</key>
   <string>Code Universe</string>
   <key>CFBundleDisplayName</key>
@@ -39,13 +71,18 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>CFBundleIconName</key>
   <string>CodeUniverse</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1</string>
+  <string>$APP_VERSION</string>
   <key>CFBundleVersion</key>
   <string>$BUNDLE_VERSION</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
-  <key>CodeUniverseRepoRoot</key>
-  <string>$ROOT_DIR</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
   <key>CFBundleURLTypes</key>
   <array>
     <dict>
@@ -136,5 +173,21 @@ SWIFT
 fi
 
 touch "$APP_DIR"
+
+while IFS= read -r nested_code; do
+  codesign --force --sign "$SIGN_IDENTITY" "$nested_code"
+done < <(find "$SERVER_DIR/node_modules" -type f \( -name '*.node' -o -name '*.dylib' \) -print)
+codesign --force --sign "$SIGN_IDENTITY" "$RUNTIME_DIR/node"
+codesign --force --sign "$SIGN_IDENTITY" "$SERVER_DIR/bin/scan-swift-syntax"
+codesign --force --sign "$SIGN_IDENTITY" "$MACOS_DIR/CodeUniverseMac"
+codesign --force --sign "$SIGN_IDENTITY" "$APP_DIR"
+codesign --verify --deep --strict --verbose=2 "$APP_DIR"
+plutil -lint "$CONTENTS_DIR/Info.plist"
+
+/usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ARCHIVE_PATH"
+shasum -a 256 "$ARCHIVE_PATH" > "$CHECKSUM_PATH"
+
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_DIR" >/dev/null 2>&1 || true
-echo "$APP_DIR"
+echo "App bundle: $APP_DIR"
+echo "Download archive: $ARCHIVE_PATH"
+echo "SHA-256: $CHECKSUM_PATH"
