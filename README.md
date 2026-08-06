@@ -268,8 +268,8 @@ accepts `CODE_UNIVERSE_NODE_BINARY` when the build machine's Node executable has
 non-system dynamic-library dependencies.
 
 After storing notarization credentials in the login Keychain as
-`code-universe-notary`, create the signed, notarized, stapled, and verified public
-download in one command:
+`code-universe-notary`, create the signed, notarized, stapled, and verified DMG in
+one command:
 
 ```sh
 npm run mac:release
@@ -277,7 +277,9 @@ npm run mac:release
 
 Override the defaults with `CODE_UNIVERSE_SIGN_IDENTITY` or
 `CODE_UNIVERSE_NOTARY_PROFILE`. Credentials remain in Keychain and are never read
-from repository files.
+from repository files. The DMG is the primary public download and contains the app
+plus an Applications-folder shortcut. A notarized ZIP remains available as a
+secondary artifact for technical distribution and future update feeds.
 
 Open the bundle:
 
