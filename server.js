@@ -15,6 +15,7 @@ import { scanProject, profileForScanner, scannerForProfile } from "./lib/project
 import { discoverProjectFiles, isSupportedSourceFile } from "./lib/projects/discover-files.js";
 import { detectProjectLanguages } from "./lib/projects/detect.js";
 import { openSourceInEditor } from "./lib/editors/registry.js";
+import { activateLicenseDocument, readLicenseStatus } from "./lib/licensing/entitlements.js";
 
 const execFileAsync = promisify(execFile);
 const port = Number(process.env.PORT || 4173);
@@ -33,6 +34,13 @@ const universeScanCache = new Map();
 const reviewDataRoot = process.env.CODE_UNIVERSE_DATA_ROOT
   ? resolve(process.env.CODE_UNIVERSE_DATA_ROOT)
   : join(process.cwd(), ".code-universe-data", "reviews");
+const commercialLicensePath = process.env.CODE_UNIVERSE_LICENSE_PATH
+  ? resolve(process.env.CODE_UNIVERSE_LICENSE_PATH)
+  : join(homedir(), "Library", "Application Support", "Code Universe", "license.json");
+const commercialLicensePublicKeyPath = process.env.CODE_UNIVERSE_LICENSE_PUBLIC_KEY_PATH
+  ? resolve(process.env.CODE_UNIVERSE_LICENSE_PUBLIC_KEY_PATH)
+  : join(process.cwd(), "config", "license-public-key.pem");
+let commercialLicensePublicKeyPromise = null;
 const reviewCache = new Map();
 const activeCodexRuns = new Map();
 const activeMcpSessions = new Map();
@@ -78,6 +86,24 @@ const server = createServer(async (request, response) => {
 
     if (url.pathname === "/api/codex-settings" && request.method === "GET") {
       sendJson(response, 200, await codexSettings());
+      return;
+    }
+
+    if (url.pathname === "/api/license" && request.method === "GET") {
+      sendJson(response, 200, await readLicenseStatus({
+        licensePath: commercialLicensePath,
+        publicKey: await loadCommercialLicensePublicKey()
+      }));
+      return;
+    }
+
+    if (url.pathname === "/api/license/activate" && request.method === "POST") {
+      const document = await readJsonBody(request);
+      const status = await activateLicenseDocument(document, {
+        licensePath: commercialLicensePath,
+        publicKey: await loadCommercialLicensePublicKey()
+      });
+      sendJson(response, status.valid ? 200 : 400, status);
       return;
     }
 
@@ -185,6 +211,15 @@ const server = createServer(async (request, response) => {
 server.listen(port, host, () => {
   console.log(`Code Universe: http://${host}:${port}`);
 });
+
+async function loadCommercialLicensePublicKey() {
+  if (process.env.CODE_UNIVERSE_LICENSE_PUBLIC_KEY) return process.env.CODE_UNIVERSE_LICENSE_PUBLIC_KEY;
+  commercialLicensePublicKeyPromise ||= readFile(commercialLicensePublicKeyPath, "utf8").catch((error) => {
+    if (error?.code === "ENOENT") return "";
+    throw error;
+  });
+  return commercialLicensePublicKeyPromise;
+}
 
 async function serveStatic(url, response) {
   const requestedPath = url.pathname === "/" ? "/index.html" : url.pathname;

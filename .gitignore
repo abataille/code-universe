@@ -7,3 +7,7 @@ dist/
 .tmp-code-universe*
 .code-universe-data/
 notarize-credentials.txt
+*.license.json
+*private-key*.pem
+xcuserdata/
+*.xcuserstate

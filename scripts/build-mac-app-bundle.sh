@@ -2,9 +2,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+DIST_DIR="${CODE_UNIVERSE_DIST_DIR:-$ROOT_DIR/dist}"
 PACKAGE_DIR="$ROOT_DIR/mac/CodeUniverseMac"
 SCANNER_PACKAGE_DIR="$ROOT_DIR/scanners/swiftsyntax-scanner"
-APP_DIR="$ROOT_DIR/dist/Code Universe.app"
+APP_DIR="$DIST_DIR/Code Universe.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
@@ -12,7 +13,7 @@ SERVER_DIR="$RESOURCES_DIR/code-universe"
 RUNTIME_DIR="$RESOURCES_DIR/runtime"
 APP_VERSION="$(sed -nE 's/^[[:space:]]*"version": "([^"]+)".*/\1/p' "$ROOT_DIR/package.json" | head -1)"
 ARCHITECTURE="$(uname -m)"
-ARCHIVE_PATH="$ROOT_DIR/dist/Code-Universe-${APP_VERSION}-macOS-${ARCHITECTURE}.zip"
+ARCHIVE_PATH="$DIST_DIR/Code-Universe-${APP_VERSION}-macOS-${ARCHITECTURE}.zip"
 CHECKSUM_PATH="$ARCHIVE_PATH.sha256"
 NODE_BINARY="${CODE_UNIVERSE_NODE_BINARY:-$(command -v node || true)}"
 SIGN_IDENTITY="${CODE_UNIVERSE_SIGN_IDENTITY:--}"
@@ -20,6 +21,7 @@ ICONSET_DIR="$ROOT_DIR/.tmp-code-universe.iconset"
 ICON_PNG="$ROOT_DIR/.tmp-code-universe-icon.png"
 ICON_SWIFT="$ROOT_DIR/.tmp-code-universe-icon.swift"
 BUNDLE_VERSION="$(date +%Y%m%d%H%M%S)"
+mkdir -p "$DIST_DIR"
 
 if [ -z "$NODE_BINARY" ] || [ ! -x "$NODE_BINARY" ]; then
   echo "A distributable Node.js executable is required. Set CODE_UNIVERSE_NODE_BINARY to an executable Node binary." >&2
@@ -47,7 +49,11 @@ chmod +x "$MACOS_DIR/CodeUniverseMac" "$RUNTIME_DIR/node" "$SERVER_DIR/bin/scan-
 /usr/bin/ditto "$ROOT_DIR/lib" "$SERVER_DIR/lib"
 /usr/bin/ditto "$ROOT_DIR/scripts" "$SERVER_DIR/scripts"
 /usr/bin/ditto "$ROOT_DIR/node_modules" "$SERVER_DIR/node_modules"
-cp "$ROOT_DIR/server.js" "$ROOT_DIR/package.json" "$ROOT_DIR/package-lock.json" "$SERVER_DIR/"
+cp "$ROOT_DIR/server.js" "$ROOT_DIR/package.json" "$ROOT_DIR/package-lock.json" "$ROOT_DIR/LICENSE" "$ROOT_DIR/COMMERCIAL-LICENSE.md" "$SERVER_DIR/"
+if [[ -f "$ROOT_DIR/config/license-public-key.pem" ]]; then
+  mkdir -p "$SERVER_DIR/config"
+  cp "$ROOT_DIR/config/license-public-key.pem" "$SERVER_DIR/config/"
+fi
 rm -rf "$SERVER_DIR/node_modules/playwright-core"
 rm -f "$SERVER_DIR/node_modules/.bin/playwright-core"
 
@@ -185,7 +191,7 @@ codesign --verify --deep --strict --verbose=2 "$APP_DIR"
 plutil -lint "$CONTENTS_DIR/Info.plist"
 
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ARCHIVE_PATH"
-shasum -a 256 "$ARCHIVE_PATH" > "$CHECKSUM_PATH"
+(cd "$DIST_DIR" && shasum -a 256 "$(basename "$ARCHIVE_PATH")") > "$CHECKSUM_PATH"
 
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_DIR" >/dev/null 2>&1 || true
 echo "App bundle: $APP_DIR"

@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Product tests
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+      - name: Verify Chrome availability
+        run: test -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+      - name: Run product and policy tests
+        run: npm test
+
+  swift:
+    name: Swift builds
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Build SwiftSyntax scanner
+        run: swift build -c release --package-path scanners/swiftsyntax-scanner
+      - name: Build native Mac shell
+        run: swift build -c release --package-path mac/CodeUniverseMac
+
+  package:
+    name: Ad-hoc Mac package
+    needs:
+      - tests
+      - swift
+    runs-on: macos-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Build ad-hoc signed app
+        env:
+          CODE_UNIVERSE_SIGN_IDENTITY: "-"
+        run: npm run mac:bundle
+      - name: Validate packaged app and licence
+        run: |
+          codesign --verify --deep --strict --verbose=2 "dist/Code Universe.app"
+          plutil -lint "dist/Code Universe.app/Contents/Info.plist"
+          test -f "dist/Code Universe.app/Contents/Resources/app/LICENSE"
+          test -f "dist/Code Universe.app/Contents/Resources/app/COMMERCIAL-LICENSE.md"
+          grep -q "Licensor: Dr. Raymund Vorwerk" "dist/Code Universe.app/Contents/Resources/app/LICENSE"
+          checksum_file=$(find dist -maxdepth 1 -name '*.zip.sha256' -print -quit)
+          test -n "$checksum_file"
+          checksum_name=$(basename "$checksum_file")
+          (cd dist && shasum -a 256 -c "$checksum_name")

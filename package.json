@@ -1,8 +1,27 @@
 {
   "name": "code-universe",
   "version": "0.1.0",
+  "description": "Local architecture and AI-agent review workspace for understanding unfamiliar codebases and verifying risky changes.",
   "private": true,
   "type": "module",
+  "license": "BUSL-1.1",
+  "author": "Dr. Raymund Vorwerk",
+  "homepage": "https://www.vclab.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/abataille/code-universe.git"
+  },
+  "bugs": {
+    "url": "https://github.com/abataille/code-universe/issues"
+  },
+  "keywords": [
+    "architecture",
+    "code-analysis",
+    "codex",
+    "developer-tools",
+    "mcp",
+    "visualization"
+  ],
   "scripts": {
     "start": "node server.js",
     "mcp": "node scripts/code-universe-mcp.js",
@@ -10,7 +29,11 @@
     "test:languages": "node scripts/test-language-adapters.js",
     "test:tree-sitter": "node scripts/test-tree-sitter-wasm.js",
     "test:visual": "node scripts/test-visual-regression.js",
-    "test": "npm run test:scan && npm run test:languages && npm run test:tree-sitter && npm run test:visual && npm run test:review && npm run test:mcp",
+    "test:license": "node scripts/test-license-entitlements.js",
+    "license:keygen": "node scripts/generate-commercial-license-keys.js",
+    "license:issue": "node scripts/issue-commercial-license.js",
+    "check:repository": "node scripts/check-repository-policy.js",
+    "test": "npm run test:scan && npm run test:languages && npm run test:tree-sitter && npm run test:visual && npm run test:review && npm run test:mcp && npm run test:license && npm run check:repository",
     "test:review": "node scripts/test-review-flow.js",
     "test:mcp": "node scripts/test-mcp.js",
     "scan:sample": "node scripts/scan-swift.js examples/SampleSwiftApp public/sample-graph.json",
@@ -33,7 +56,11 @@
     "zod": "^3.25.76"
   },
   "overrides": {
-    "@hono/node-server": "2.0.11"
+    "@hono/node-server": "2.0.11",
+    "fast-uri": "3.1.6",
+    "hono": "4.13.5",
+    "ip-address": "10.7.0",
+    "nanoid": "3.3.18"
   },
   "devDependencies": {
     "@electron/packager": "^20.1.1",

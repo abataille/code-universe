@@ -185,6 +185,7 @@
             <input id="searchInput" type="search" placeholder="ContentView, AuthService..." />
           </label>
           <div class="chrome-actions" aria-label="Layout controls">
+            <button id="licenseButton" class="chrome-button license-button" type="button">Licence · Source</button>
             <button id="toggleLeftRailButton" class="chrome-button" type="button" aria-pressed="false">Controls</button>
             <button id="toggleRightRailButton" class="chrome-button" type="button" aria-pressed="false">Inspector</button>
             <button id="themeToggleButton" class="chrome-button" type="button" aria-pressed="false">Light UI</button>
@@ -318,6 +319,8 @@
         </div>
       </div>
     </dialog>
+
+    <input id="licenseFileInput" type="file" accept="application/json,.json" hidden />
 
     <script type="importmap">
       {

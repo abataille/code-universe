@@ -1,8 +1,20 @@
 # Code Universe
 
-Code Universe is a local 3D architecture map for Swift, JavaScript, TypeScript, HTML, CSS, Python, PHP, Java, C#, Objective-C, and Objective-C++ projects. It turns a codebase into a navigable city where files, components, types, functions, properties, modules, markup, styles, imports, and usage relationships can be inspected visually.
+**Understand the code. Verify the change.**
+
+Code Universe by VCLab is a local architecture and AI-agent review workspace for technical leads, agencies, and consultants working with unfamiliar codebases. It turns Swift, JavaScript, TypeScript, HTML, CSS, Python, PHP, Java, C#, Objective-C, and Objective-C++ projects into a navigable city where structure, dependencies, source, change impact, and review evidence can be inspected together.
 
 The app runs on your Mac. Source code is scanned locally and stays local.
+
+The primary workflow is to scan a repository, understand its architecture, investigate a proposed change, follow the agent's evidence trail, and review the diff and verification results before deciding what happens next.
+
+[Product strategy](docs/product-strategy.md) · [Public roadmap](ROADMAP.md) · [Business Source License 1.1](LICENSE) · [Commercial licensing](COMMERCIAL-LICENSE.md) · [Website](https://www.vclab.com)
+
+The source is available under BSL 1.1. Non-production use and the limited personal
+production use described in `LICENSE` are permitted without charge. Company use,
+client work, hosted offerings, managed services, and commercial embedding require
+a commercial licence from Dr. Raymund Vorwerk. Forks and redistributed copies remain under the
+same BSL terms. Each version converts to Apache-2.0 on its Change Date.
 
 ![Code Universe screenshot](docs/screenshots/code-universe-current.png)
 
@@ -290,6 +302,24 @@ npm run mac:open
 The Electron shell starts its bundled local server on an available private port,
 waits for `/api/health`, and then loads the npm UI in Chromium. The separate native
 shell remains designed for Xcode behaviors and command-line development.
+
+### Edit and run from Xcode
+
+Open `CodeUniverse.xcodeproj` to edit the existing JavaScript, TypeScript, HTML,
+CSS, Swift scanner, scripts, and documentation from Xcode without replacing the
+Electron runtime.
+
+Select the shared **Code Universe** scheme and press Run. Its external build target
+installs locked npm dependencies when necessary, builds the same self-contained
+Electron app into `dist/Code Universe.app`, and launches that bundle. Because the
+runtime is unchanged, this produces the same npm-based interface as `npm run
+mac:open`; the project is an Xcode build/editor wrapper, not a SwiftUI conversion.
+
+Select **Code Universe DMG Release** and choose Product > Build when you intentionally
+want to run the Developer ID signing, notarization, stapling, and DMG workflow. That
+scheme uses the existing Keychain profile and release script. Xcode Clean retains
+the generated app and release artifacts so an accidental clean does not discard a
+notarized download.
 
 ## Scripts
 

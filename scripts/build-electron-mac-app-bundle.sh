@@ -2,13 +2,14 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+DIST_DIR="${CODE_UNIVERSE_DIST_DIR:-$ROOT_DIR/dist}"
 SCANNER_PACKAGE_DIR="$ROOT_DIR/scanners/swiftsyntax-scanner"
 APP_VERSION="$(sed -nE 's/^[[:space:]]*"version": "([^"]+)".*/\1/p' "$ROOT_DIR/package.json" | head -1)"
 ARCHITECTURE="$(uname -m)"
 ELECTRON_ARCH="$ARCHITECTURE"
 [[ "$ARCHITECTURE" == "x86_64" ]] && ELECTRON_ARCH="x64"
-APP_DIR="$ROOT_DIR/dist/Code Universe.app"
-ARCHIVE_PATH="$ROOT_DIR/dist/Code-Universe-${APP_VERSION}-macOS-${ARCHITECTURE}.zip"
+APP_DIR="$DIST_DIR/Code Universe.app"
+ARCHIVE_PATH="$DIST_DIR/Code-Universe-${APP_VERSION}-macOS-${ARCHITECTURE}.zip"
 CHECKSUM_PATH="$ARCHIVE_PATH.sha256"
 SIGN_IDENTITY="${CODE_UNIVERSE_SIGN_IDENTITY:--}"
 BUILD_VERSION="$(date +%Y%m%d%H%M%S)"
@@ -23,13 +24,18 @@ trap cleanup EXIT
 
 swift build -c release --package-path "$SCANNER_PACKAGE_DIR"
 SCANNER_BINARY="$(swift build -c release --show-bin-path --package-path "$SCANNER_PACKAGE_DIR")/scan-swift-syntax"
+mkdir -p "$DIST_DIR"
 
 mkdir -p "$STAGE_DIR/bin" "$STAGE_DIR/desktop/electron"
 /usr/bin/ditto "$ROOT_DIR/public" "$STAGE_DIR/public"
 /usr/bin/ditto "$ROOT_DIR/lib" "$STAGE_DIR/lib"
 /usr/bin/ditto "$ROOT_DIR/scripts" "$STAGE_DIR/scripts"
 /usr/bin/ditto "$ROOT_DIR/node_modules" "$STAGE_DIR/node_modules"
-cp "$ROOT_DIR/server.js" "$ROOT_DIR/package-lock.json" "$STAGE_DIR/"
+cp "$ROOT_DIR/server.js" "$ROOT_DIR/package-lock.json" "$ROOT_DIR/LICENSE" "$ROOT_DIR/COMMERCIAL-LICENSE.md" "$STAGE_DIR/"
+if [[ -f "$ROOT_DIR/config/license-public-key.pem" ]]; then
+  mkdir -p "$STAGE_DIR/config"
+  cp "$ROOT_DIR/config/license-public-key.pem" "$STAGE_DIR/config/"
+fi
 cp "$ROOT_DIR/desktop/electron/main.cjs" "$STAGE_DIR/desktop/electron/"
 cp "$SCANNER_BINARY" "$STAGE_DIR/bin/scan-swift-syntax"
 chmod +x "$STAGE_DIR/bin/scan-swift-syntax"
@@ -42,6 +48,8 @@ cat > "$STAGE_DIR/package.json" <<JSON
   "version": "$APP_VERSION",
   "private": true,
   "type": "module",
+  "license": "BUSL-1.1",
+  "author": "Dr. Raymund Vorwerk",
   "main": "desktop/electron/main.cjs",
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
@@ -114,7 +122,7 @@ rm -rf "$APP_DIR" "$ARCHIVE_PATH" "$CHECKSUM_PATH"
 codesign --verify --deep --strict --verbose=2 "$APP_DIR"
 plutil -lint "$APP_DIR/Contents/Info.plist"
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ARCHIVE_PATH"
-shasum -a 256 "$ARCHIVE_PATH" > "$CHECKSUM_PATH"
+(cd "$DIST_DIR" && shasum -a 256 "$(basename "$ARCHIVE_PATH")") > "$CHECKSUM_PATH"
 
 echo "Electron app bundle: $APP_DIR"
 echo "Download archive: $ARCHIVE_PATH"

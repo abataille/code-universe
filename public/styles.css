@@ -207,6 +207,17 @@ body.is-light-ui .content-drawer-header {
   background: #f4f4f1;
 }
 
+body.is-light-ui .license-status-line,
+body.is-light-ui .license-facts,
+body.is-light-ui .license-use-boundary,
+body.is-light-ui .license-actions {
+  border-color: rgba(16, 19, 17, 0.14);
+}
+
+body.is-light-ui .license-use-boundary span {
+  color: #176f60;
+}
+
 body.is-light-ui .source-preview .is-target {
   background: #dfeef8;
   color: #101311;
@@ -1302,7 +1313,7 @@ h1 {
   position: fixed;
   inset: 14px 14px 14px auto;
   width: min(860px, calc(100vw - 48px));
-  height: auto;
+  height: calc(100vh - 28px);
   max-height: none;
   margin: 0;
   padding: 0;
@@ -1693,6 +1704,184 @@ h1 {
 
 .chrome-button:active {
   transform: translateY(1px) scale(0.98);
+}
+
+.license-button.is-licensed {
+  color: #07110e;
+  border-color: rgba(168, 234, 219, 0.74);
+  background: var(--accent-strong);
+}
+
+body.is-light-ui .license-button.is-licensed {
+  color: #ffffff;
+  border-color: #176f60;
+  background: #176f60;
+}
+
+.license-dossier {
+  display: grid;
+  align-content: start;
+  min-height: 100%;
+  padding: clamp(8px, 2vw, 20px);
+}
+
+.license-dossier.is-loading {
+  place-items: center;
+  color: var(--muted);
+}
+
+.license-status-line {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 18px;
+  padding: 10px 0 32px;
+  border-bottom: 1px solid var(--line);
+  animation: license-enter 220ms ease-out both;
+}
+
+.license-status-line h3 {
+  margin: 4px 0 8px;
+  font-size: clamp(28px, 5vw, 48px);
+  line-height: 1;
+  letter-spacing: -0.035em;
+}
+
+.license-status-line p {
+  max-width: 620px;
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.license-status-mark {
+  width: 12px;
+  height: 12px;
+  margin-top: 5px;
+  border: 2px solid var(--muted);
+  border-radius: 50%;
+}
+
+.license-status-mark.is-valid {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: 0 0 0 7px rgba(127, 214, 194, 0.12);
+}
+
+.license-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.license-facts div {
+  display: grid;
+  grid-template-columns: minmax(88px, 0.42fr) minmax(0, 1fr);
+  gap: 14px;
+  padding: 15px 0;
+}
+
+.license-facts dt,
+.license-use-boundary span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.license-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.license-use-boundary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 28px;
+  padding: 26px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.license-use-boundary div {
+  display: grid;
+  gap: 7px;
+}
+
+.license-use-boundary span {
+  color: var(--accent);
+}
+
+.license-use-boundary strong {
+  max-width: 290px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.license-actions {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 26px 0 14px;
+}
+
+.license-contact {
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.license-contact:hover {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.license-feedback {
+  min-height: 20px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.license-feedback.is-error {
+  color: var(--danger);
+}
+
+.license-dossier.is-activated .license-status-line {
+  animation: license-activated 520ms ease-out both;
+}
+
+@keyframes license-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes license-activated {
+  0% { opacity: 0.4; transform: translateY(10px); }
+  55% { opacity: 1; transform: translateY(-2px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 720px) {
+  .license-facts,
+  .license-use-boundary {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .license-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .license-status-line,
+  .license-dossier.is-activated .license-status-line {
+    animation: none;
+  }
 }
 
 .legend span {

@@ -38,6 +38,8 @@ const appShell = document.querySelector(".app-shell");
 const toggleLeftRailButton = document.querySelector("#toggleLeftRailButton");
 const toggleRightRailButton = document.querySelector("#toggleRightRailButton");
 const themeToggleButton = document.querySelector("#themeToggleButton");
+const licenseButton = document.querySelector("#licenseButton");
+const licenseFileInput = document.querySelector("#licenseFileInput");
 const reviewTitleInput = document.querySelector("#reviewTitleInput");
 const reviewModelSelect = document.querySelector("#reviewModelSelect");
 const reviewModelInput = document.querySelector("#reviewModelInput");
@@ -188,7 +190,8 @@ const state = {
   reviewReplayIndex: null,
   reviewReplayPlaying: false,
   reviewReplayTimer: null,
-  applyingReviewFindings: false
+  applyingReviewFindings: false,
+  licenseStatus: null
 };
 
 const scene = new THREE.Scene();
@@ -262,7 +265,7 @@ async function bootstrap() {
   initializeParserMode();
   bindEvents();
   resize();
-  await initializeCodexSettings();
+  await Promise.all([initializeCodexSettings(), initializeLicenseStatus()]);
   await loadInitialUniverse();
   window.setInterval(refreshActiveReview, 2000);
   requestRender();
@@ -369,6 +372,130 @@ function syncCustomModelField() {
   const custom = reviewModelSelect.value === "custom";
   reviewCustomModelLabel.hidden = !custom;
   reviewModelInput.hidden = !custom;
+}
+
+async function initializeLicenseStatus() {
+  try {
+    state.licenseStatus = await fetchLicenseStatus();
+  } catch (error) {
+    state.licenseStatus = {
+      valid: false,
+      configured: false,
+      edition: "unlicensed",
+      reason: "unavailable",
+      message: error.message
+    };
+  }
+  syncLicenseButton();
+}
+
+async function fetchLicenseStatus() {
+  const response = await fetch("/api/license");
+  const status = await response.json();
+  if (!response.ok) throw new Error(status.error || "Licence status is unavailable.");
+  return status;
+}
+
+function syncLicenseButton() {
+  const status = state.licenseStatus;
+  const label = status?.valid
+    ? status.edition === "team" ? "Team" : "Pro"
+    : status?.configured ? "Personal" : "Source";
+  licenseButton.textContent = `Licence · ${label}`;
+  licenseButton.classList.toggle("is-licensed", Boolean(status?.valid));
+  licenseButton.setAttribute("aria-label", `Open licence status: ${label}`);
+}
+
+async function openLicenseDrawer() {
+  openContentDrawer({
+    mode: "license",
+    eyebrow: "Local entitlement",
+    title: "Code Universe licence",
+    meta: "Checking the signed licence on this Mac…",
+    content: '<section class="license-dossier is-loading" data-license-screen><p>Reading licence status…</p></section>'
+  });
+  try {
+    state.licenseStatus = await fetchLicenseStatus();
+    syncLicenseButton();
+    renderLicenseDrawer();
+  } catch (error) {
+    renderLicenseDrawer({ feedback: error.message, error: true });
+  }
+}
+
+function renderLicenseDrawer({ feedback = "", error = false, activated = false } = {}) {
+  const status = state.licenseStatus || {};
+  const valid = status.valid === true;
+  const edition = valid ? (status.edition === "team" ? "Team" : "Pro") : status.configured ? "Personal source use" : "Source build";
+  const summary = valid
+    ? "This signed commercial licence was verified locally. No project data or activation telemetry was transmitted."
+    : status.configured
+      ? "No commercial licence is active. Production use remains limited to the Additional Use Grant in the repository licence."
+      : "This build does not contain the VCLab commercial verification key. It can inspect the public source licence but cannot activate Pro or Team.";
+  const expiry = valid && status.expiresAt ? formatLicenseDate(status.expiresAt) : valid ? "No expiry" : "—";
+  const features = valid && status.features?.length ? status.features.join(", ") : valid ? "Edition defaults" : "Commercial features inactive";
+  const importAction = status.configured
+    ? '<button class="button button-primary" type="button" data-license-import>Import signed licence</button>'
+    : '<button class="button" type="button" disabled>Verification key not installed</button>';
+
+  contentDrawerMeta.textContent = valid ? `Verified locally · ${edition}` : "BSL 1.1 · Local verification";
+  contentDrawerContent.innerHTML = `
+    <section class="license-dossier ${activated ? "is-activated" : ""}" data-license-screen>
+      <header class="license-status-line">
+        <span class="license-status-mark ${valid ? "is-valid" : ""}" aria-hidden="true"></span>
+        <div>
+          <span class="eyebrow">Current edition</span>
+          <h3>${escapeHtml(edition)}</h3>
+          <p>${escapeHtml(summary)}</p>
+        </div>
+      </header>
+      <dl class="license-facts">
+        <div><dt>Customer</dt><dd>${escapeHtml(valid ? status.customer : "Not activated")}</dd></div>
+        <div><dt>Licence ID</dt><dd>${escapeHtml(valid ? status.licenseId : "—")}</dd></div>
+        <div><dt>Valid until</dt><dd>${escapeHtml(expiry)}</dd></div>
+        <div><dt>Capabilities</dt><dd>${escapeHtml(features)}</dd></div>
+      </dl>
+      <div class="license-use-boundary">
+        <div><span>Personal</span><strong>Use within the BSL Additional Use Grant</strong></div>
+        <div><span>Commercial</span><strong>Company and client work require Pro or Team</strong></div>
+      </div>
+      <div class="license-actions">
+        ${importAction}
+        <a class="license-contact" href="https://www.vclab.com/contact.html" target="_blank" rel="noreferrer">Request a commercial licence ↗</a>
+      </div>
+      <p class="license-feedback ${error ? "is-error" : ""}" data-license-feedback>${escapeHtml(feedback || status.message || "Licence files are verified and stored only on this Mac.")}</p>
+    </section>`;
+}
+
+function formatLicenseDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "Invalid date" : new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(date);
+}
+
+async function activateLicenseFile(file) {
+  if (file.size > 128_000) throw new Error("The licence file is unexpectedly large.");
+  let document;
+  try {
+    document = JSON.parse(await file.text());
+  } catch {
+    throw new Error("The selected file is not a valid JSON licence document.");
+  }
+
+  const feedback = contentDrawerContent.querySelector("[data-license-feedback]");
+  const importButton = contentDrawerContent.querySelector("[data-license-import]");
+  if (importButton) importButton.disabled = true;
+  if (feedback) feedback.textContent = "Verifying signed licence…";
+
+  const response = await fetch("/api/license/activate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(document)
+  });
+  const status = await response.json();
+  if (!response.ok || !status.valid) throw new Error(status.message || status.error || "The licence could not be activated.");
+  state.licenseStatus = status;
+  syncLicenseButton();
+  renderLicenseDrawer({ feedback: "Commercial licence activated on this Mac.", activated: true });
 }
 
 function selectedReviewModel() {
@@ -1893,6 +2020,18 @@ function bindEvents() {
     applyUiTheme(theme);
   });
 
+  licenseButton.addEventListener("click", openLicenseDrawer);
+  licenseFileInput.addEventListener("change", async () => {
+    const [file] = licenseFileInput.files;
+    licenseFileInput.value = "";
+    if (!file) return;
+    try {
+      await activateLicenseFile(file);
+    } catch (error) {
+      renderLicenseDrawer({ feedback: error.message, error: true });
+    }
+  });
+
   mapPresetButtons.forEach((button) => {
     button.addEventListener("click", () => applyMapPreset(button.dataset.viewPreset));
   });
@@ -2011,6 +2150,11 @@ function bindEvents() {
   contentDrawer.addEventListener("click", (event) => {
     if (event.target === contentDrawer) {
       closeContentDrawer();
+      return;
+    }
+    const licenseImportButton = event.target.closest("[data-license-import]");
+    if (licenseImportButton) {
+      licenseFileInput.click();
       return;
     }
     const sourceButton = event.target.closest("[data-review-diff-source]");

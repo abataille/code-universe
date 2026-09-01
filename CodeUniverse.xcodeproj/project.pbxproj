@@ -1,0 +1,197 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXFileReference section */
+		A10000000000000000000010 /* server.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = server.js; sourceTree = "<group>"; };
+		A10000000000000000000011 /* package.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = package.json; sourceTree = "<group>"; };
+		A10000000000000000000012 /* package-lock.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "package-lock.json"; sourceTree = "<group>"; };
+		A10000000000000000000013 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
+		A10000000000000000000020 /* desktop */ = {isa = PBXFileReference; lastKnownFileType = folder; path = desktop; sourceTree = "<group>"; };
+		A10000000000000000000021 /* lib */ = {isa = PBXFileReference; lastKnownFileType = folder; path = lib; sourceTree = "<group>"; };
+		A10000000000000000000022 /* public */ = {isa = PBXFileReference; lastKnownFileType = folder; path = public; sourceTree = "<group>"; };
+		A10000000000000000000023 /* scripts */ = {isa = PBXFileReference; lastKnownFileType = folder; path = scripts; sourceTree = "<group>"; };
+		A10000000000000000000024 /* scanners */ = {isa = PBXFileReference; lastKnownFileType = folder; path = scanners; sourceTree = "<group>"; };
+		A10000000000000000000025 /* docs */ = {isa = PBXFileReference; lastKnownFileType = folder; path = docs; sourceTree = "<group>"; };
+		A10000000000000000000026 /* examples */ = {isa = PBXFileReference; lastKnownFileType = folder; path = examples; sourceTree = "<group>"; };
+		A10000000000000000000027 /* mac */ = {isa = PBXFileReference; lastKnownFileType = folder; path = mac; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		A10000000000000000000030 = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000010 /* server.js */,
+				A10000000000000000000011 /* package.json */,
+				A10000000000000000000012 /* package-lock.json */,
+				A10000000000000000000020 /* desktop */,
+				A10000000000000000000021 /* lib */,
+				A10000000000000000000022 /* public */,
+				A10000000000000000000023 /* scripts */,
+				A10000000000000000000024 /* scanners */,
+				A10000000000000000000027 /* mac */,
+				A10000000000000000000026 /* examples */,
+				A10000000000000000000025 /* docs */,
+				A10000000000000000000013 /* README.md */,
+				A10000000000000000000031 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A10000000000000000000031 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXLegacyTarget section */
+		A10000000000000000000001 /* Code Universe Development */ = {
+			isa = PBXLegacyTarget;
+			buildArgumentsString = "\"$(SRCROOT)/scripts/xcode-build-development.sh\" $(ACTION)";
+			buildConfigurationList = A10000000000000000000041 /* Build configuration list for PBXLegacyTarget \"Code Universe Development\" */;
+			buildPhases = (
+			);
+			buildToolPath = /bin/zsh;
+			buildWorkingDirectory = "$(SRCROOT)";
+			dependencies = (
+			);
+			name = "Code Universe Development";
+			passBuildSettingsInEnvironment = 1;
+			productName = "Code Universe";
+		};
+		A10000000000000000000002 /* Code Universe DMG Release */ = {
+			isa = PBXLegacyTarget;
+			buildArgumentsString = "\"$(SRCROOT)/scripts/xcode-build-release.sh\" $(ACTION)";
+			buildConfigurationList = A10000000000000000000042 /* Build configuration list for PBXLegacyTarget \"Code Universe DMG Release\" */;
+			buildPhases = (
+			);
+			buildToolPath = /bin/zsh;
+			buildWorkingDirectory = "$(SRCROOT)";
+			dependencies = (
+			);
+			name = "Code Universe DMG Release";
+			passBuildSettingsInEnvironment = 1;
+			productName = "Code Universe DMG";
+		};
+/* End PBXLegacyTarget section */
+
+/* Begin PBXProject section */
+		A10000000000000000000000 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 2660;
+				TargetAttributes = {
+					A10000000000000000000001 = {
+						CreatedOnToolsVersion = 26.6;
+					};
+					A10000000000000000000002 = {
+						CreatedOnToolsVersion = 26.6;
+					};
+				};
+			};
+			buildConfigurationList = A10000000000000000000040 /* Build configuration list for PBXProject \"CodeUniverse\" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A10000000000000000000030;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = A10000000000000000000031 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A10000000000000000000001 /* Code Universe Development */,
+				A10000000000000000000002 /* Code Universe DMG Release */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin XCBuildConfiguration section */
+		A10000000000000000000050 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+			};
+			name = Debug;
+		};
+		A10000000000000000000051 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+			};
+			name = Release;
+		};
+		A10000000000000000000052 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				PRODUCT_NAME = "Code Universe";
+			};
+			name = Debug;
+		};
+		A10000000000000000000053 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				PRODUCT_NAME = "Code Universe";
+			};
+			name = Release;
+		};
+		A10000000000000000000054 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				PRODUCT_NAME = "Code Universe DMG";
+			};
+			name = Debug;
+		};
+		A10000000000000000000055 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				PRODUCT_NAME = "Code Universe DMG";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A10000000000000000000040 /* Build configuration list for PBXProject \"CodeUniverse\" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000050 /* Debug */,
+				A10000000000000000000051 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000000041 /* Build configuration list for PBXLegacyTarget \"Code Universe Development\" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000052 /* Debug */,
+				A10000000000000000000053 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		A10000000000000000000042 /* Build configuration list for PBXLegacyTarget \"Code Universe DMG Release\" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000054 /* Debug */,
+				A10000000000000000000055 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A10000000000000000000000 /* Project object */;
+}

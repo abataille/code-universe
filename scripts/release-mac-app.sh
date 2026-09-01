@@ -2,18 +2,20 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+DIST_DIR="${CODE_UNIVERSE_DIST_DIR:-$ROOT_DIR/dist}"
 APP_VERSION="$(sed -nE 's/^[[:space:]]*"version": "([^"]+)".*/\1/p' "$ROOT_DIR/package.json" | head -1)"
 ARCHITECTURE="$(uname -m)"
-APP_DIR="$ROOT_DIR/dist/Code Universe.app"
-ARCHIVE_PATH="$ROOT_DIR/dist/Code-Universe-${APP_VERSION}-macOS-${ARCHITECTURE}.zip"
+APP_DIR="$DIST_DIR/Code Universe.app"
+ARCHIVE_PATH="$DIST_DIR/Code-Universe-${APP_VERSION}-macOS-${ARCHITECTURE}.zip"
 CHECKSUM_PATH="$ARCHIVE_PATH.sha256"
-DMG_PATH="$ROOT_DIR/dist/Code-Universe-${APP_VERSION}-macOS-${ARCHITECTURE}.dmg"
+DMG_PATH="$DIST_DIR/Code-Universe-${APP_VERSION}-macOS-${ARCHITECTURE}.dmg"
 DMG_CHECKSUM_PATH="$DMG_PATH.sha256"
-RESULT_PATH="$ROOT_DIR/dist/notarization-result.json"
-LOG_PATH="$ROOT_DIR/dist/notarization-log.json"
+RESULT_PATH="$DIST_DIR/notarization-result.json"
+LOG_PATH="$DIST_DIR/notarization-log.json"
 SIGN_IDENTITY="${CODE_UNIVERSE_SIGN_IDENTITY:-Developer ID Application: Raymund Vorwerk (C9STR7BGUR)}"
 KEYCHAIN_PROFILE="${CODE_UNIVERSE_NOTARY_PROFILE:-code-universe-notary}"
 DMG_STAGE="$(mktemp -d "$ROOT_DIR/.tmp-code-universe-dmg.XXXXXX")"
+mkdir -p "$DIST_DIR"
 
 cleanup() {
   rm -rf "$DMG_STAGE"
@@ -79,8 +81,8 @@ spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG
 
 rm -f "$ARCHIVE_PATH" "$CHECKSUM_PATH"
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ARCHIVE_PATH"
-shasum -a 256 "$ARCHIVE_PATH" > "$CHECKSUM_PATH"
-shasum -a 256 "$DMG_PATH" > "$DMG_CHECKSUM_PATH"
+(cd "$DIST_DIR" && shasum -a 256 "$(basename "$ARCHIVE_PATH")") > "$CHECKSUM_PATH"
+(cd "$DIST_DIR" && shasum -a 256 "$(basename "$DMG_PATH")") > "$DMG_CHECKSUM_PATH"
 
 echo "Notarized app: $APP_DIR"
 echo "Primary download: $DMG_PATH"

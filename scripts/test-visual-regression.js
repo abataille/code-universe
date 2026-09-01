@@ -4,15 +4,32 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { chromium } from "playwright-core";
+import { generateCommercialLicenseKeyPair, issueCommercialLicense } from "../lib/licensing/issuer.js";
 
 const root = await mkdtemp(join(tmpdir(), "code-universe-visual-"));
 const screenshot = join(tmpdir(), `code-universe-visual-${process.pid}.png`);
 const languageScreenshot = join(tmpdir(), `code-universe-language-city-${process.pid}.png`);
+const licenseScreenshot = join(tmpdir(), `code-universe-license-${process.pid}.png`);
 const port = await availablePort();
+const publicKeyPath = join(root, "license-public-key.pem");
+const activatedLicensePath = join(root, "activated-license.json");
+const importLicensePath = join(root, "team.license.json");
 let server;
 let browser;
 
 try {
+  const keys = generateCommercialLicenseKeyPair();
+  const teamLicense = issueCommercialLicense({
+    privateKey: keys.privateKey,
+    customer: "Visual Test Team",
+    edition: "team",
+    licenseId: "visual-team-license",
+    features: ["impact-reports", "team-policy"],
+    notBefore: "2026-01-01T00:00:00.000Z",
+    expiresAt: "2030-01-01T00:00:00.000Z"
+  });
+  await writeFile(publicKeyPath, keys.publicKey);
+  await writeFile(importLicensePath, `${JSON.stringify(teamLicense, null, 2)}\n`);
   await write("src/gallery.js", `
 export class GalleryController {
   hero = '../assets/hero.png';
@@ -33,7 +50,13 @@ export class GalleryController {
 
   server = spawn(process.execPath, ["server.js"], {
     cwd: process.cwd(),
-    env: { ...process.env, PORT: String(port), CODE_UNIVERSE_SCANNER: "heuristic" },
+    env: {
+      ...process.env,
+      PORT: String(port),
+      CODE_UNIVERSE_SCANNER: "heuristic",
+      CODE_UNIVERSE_LICENSE_PUBLIC_KEY_PATH: publicKeyPath,
+      CODE_UNIVERSE_LICENSE_PATH: activatedLicensePath
+    },
     stdio: ["ignore", "pipe", "pipe"]
   });
   await waitForServer(port);
@@ -88,10 +111,33 @@ export class GalleryController {
     analysisVisible: !document.querySelector("#inspectorPanelAnalysis")?.hidden,
     comparisonText: document.querySelector("#parserDiff")?.textContent || ""
   }));
+  await page.locator("#licenseButton").click();
+  await page.waitForSelector("[data-license-screen]:not(.is-loading)");
+  await page.locator("#licenseFileInput").setInputFiles(importLicensePath);
+  await page.waitForFunction(() => (document.querySelector("[data-license-screen]")?.textContent || "").includes("Commercial licence activated on this Mac."));
+  const licenseState = await page.evaluate(() => {
+    const drawer = document.querySelector("#contentDrawer");
+    const text = drawer?.textContent || "";
+    return {
+      open: Boolean(drawer?.open),
+      title: document.querySelector("#contentDrawerTitle")?.textContent || "",
+      teamEdition: text.includes("Visual Test Team") && text.includes("Team"),
+      verifiedLocally: text.includes("verified locally") || text.includes("Verified locally"),
+      bslVisible: text.includes("BSL Additional Use Grant"),
+      contactVisible: text.includes("Request a commercial licence")
+    };
+  });
+  await page.screenshot({ path: licenseScreenshot });
   const htmlImage = await readFile(screenshot);
   const languageImage = await readFile(languageScreenshot);
+  const licenseImage = await readFile(licenseScreenshot);
+  if (process.env.CODE_UNIVERSE_VISUAL_OUTPUT_DIR) {
+    await mkdir(process.env.CODE_UNIVERSE_VISUAL_OUTPUT_DIR, { recursive: true });
+    await writeFile(join(process.env.CODE_UNIVERSE_VISUAL_OUTPUT_DIR, "license-screen.png"), licenseImage);
+  }
   assert(htmlImage.length > 40_000, `HTML city snapshot is unexpectedly small (${htmlImage.length} bytes)`);
   assert(languageImage.length > 40_000, `language city snapshot is unexpectedly small (${languageImage.length} bytes)`);
+  assert(licenseImage.length > 40_000, `licence screen snapshot is unexpectedly small (${licenseImage.length} bytes)`);
   assert(htmlState.canvasWidth >= 600 && htmlState.canvasHeight >= 400,
     `3D canvas should render inside the desktop viewport, got ${htmlState.canvasWidth}×${htmlState.canvasHeight}`);
   assert(!htmlState.startupError, "visual regression page should not show a startup error");
@@ -100,6 +146,9 @@ export class GalleryController {
   assert(htmlState.hierarchyVisible && htmlState.stableIdentityVisible, "inspector should expose hierarchy and stable identity");
   assert(comparisonState.analysisVisible, "Compare Parsers should reveal the Analysis inspector tab");
   assert(comparisonState.comparisonText.includes("Tree-sitter"), "Compare Parsers should render a comparison result");
+  assert(licenseState.open && licenseState.title === "Code Universe licence", "licence button should open the focused licence drawer");
+  assert(licenseState.teamEdition && licenseState.verifiedLocally, "licence drawer should activate and display a verified Team licence");
+  assert(licenseState.bslVisible && licenseState.contactVisible, "licence drawer should retain BSL context and commercial contact");
   assert(errors.length === 0, `browser console errors: ${errors.join("; ")}`);
   console.log(`Visual regression passed with ${htmlImage.length}/${languageImage.length} screenshot bytes at ${htmlState.canvasWidth}×${htmlState.canvasHeight}.`);
 } finally {
@@ -108,6 +157,7 @@ export class GalleryController {
   await rm(root, { recursive: true, force: true });
   await rm(screenshot, { force: true });
   await rm(languageScreenshot, { force: true });
+  await rm(licenseScreenshot, { force: true });
 }
 
 async function write(path, source) {
