@@ -34,7 +34,7 @@ Code Universe uses a source-available, dual-licensing model.
 - Free use consists of BSL non-production use and the limited individual production use stated in `LICENSE`.
 - Company use, client work, hosting, managed services, and commercial embedding require a commercial licence from Dr. Raymund Vorwerk; forks and redistributed copies remain subject to BSL.
 - Each BSL version converts to Apache License 2.0 on its applicable Change Date.
-- Official Pro and Team binaries are signed and notarized; commercial entitlements are verified offline.
+- The existing local entitlement foundation is retained, but Pro/Team feature gating and payment automation are deferred until willingness to pay is validated.
 - Proprietary commercial modules and all private signing/payment material remain outside the public repository.
 - The legal licensor is **Dr. Raymund Vorwerk**; VCLab is the publisher and brand, not a separate legal entity.
 - The Additional Use Grant and commercial agreement require legal review before publication.
@@ -58,6 +58,14 @@ Every major change must strengthen at least one outcome:
 3. Verify what an AI coding agent inspected, changed, and tested.
 
 If a change does not improve one of these outcomes or validate willingness to pay, defer it.
+
+## Validation before monetization
+
+The current priority is distribution and observed product use, not a checkout
+system. Keep the BSL boundary and local licence verifier, but do not add payment
+automation, anti-tampering work, or commercial-only modules until Code Universe
+has at least one paid pilot or three credible statements of willingness to pay.
+Early commercial exceptions can be invoiced and licensed manually.
 
 ## Near-term boundaries
 

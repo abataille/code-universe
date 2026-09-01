@@ -56,7 +56,7 @@ Use a source-available, dual-licensing model:
 
 Objective: make the public repository trustworthy, installable, and aligned with the current product.
 
-Progress update — 1 September 2026: repository policies, issue forms, pull-request guidance, Dependabot, product CI, Swift builds, licence checks, ad-hoc package validation, an in-app licence screen, and secure-path key/issuance tooling are implemented locally. They are not yet committed or pushed.
+Progress update — 1 September 2026: repository policies, issue forms, pull-request guidance, Dependabot, product CI, Swift builds, licence checks, ad-hoc package validation, an in-app licence screen, and secure-path key/issuance tooling are implemented and committed locally. Publication remains pending review.
 
 ### Deliverables
 
@@ -76,9 +76,10 @@ Progress update — 1 September 2026: repository policies, issue forms, pull-req
 - CI passes from a clean clone.
 - The README communicates value and download options before implementation detail.
 
-## Phase 2 — Website conversion
+## Phase 2 — Public-preview validation
 
-Objective: convert interest into downloads, demonstrations, beta signups, and team conversations.
+Objective: turn public interest into real repository trials, observable feedback,
+and evidence that the workflow deserves further investment.
 
 ### Page sequence
 
@@ -86,24 +87,24 @@ Objective: convert interest into downloads, demonstrations, beta signups, and te
 2. Proof: one concrete repository-understanding result.
 3. Workflows: understand, assess impact, and review an agent.
 4. Trust: local processing, security boundaries, requirements, and current release.
-5. Conversion: download, watch demo, join Pro beta, or request a team pilot.
+5. Participation: try the preview, report friction, or discuss a concrete pilot.
 
 ### Deliverables
 
 - Use “Understand the code. Verify the change.” as the central promise.
-- Make “Download for Mac” the primary action after the new release is ready.
+- Make “Try the public preview” the primary action until a signed release is ready.
 - Embed a 60–90 second demonstration.
 - Demonstrate real permissively licensed Swift, TypeScript, and mixed-language repositories.
-- Add download, beta/pricing, getting-started, review, security, changelog, and FAQ pages.
-- Add a lightweight beta signup without weakening the privacy position.
+- Add getting-started, review, security, changelog, and FAQ pages as real user questions emerge.
+- Prefer GitHub issues and direct interviews over a speculative beta or pricing funnel.
 - Add a sitemap, icons, canonical URLs, social metadata, and SoftwareApplication structured data.
 - Keep all website, documentation, screenshots, and releases aligned.
 
 ### Completion criteria
 
 - Qualified visitors understand the audience and benefit within five seconds.
-- At least 15% click Download or Watch Demo.
-- At least 25% of download-page visitors begin a download.
+- Ten developers attempt a real repository task.
+- Five users describe the useful moment and the point where they stopped.
 - At least one real-repository case study is published.
 
 ## Phase 3 — Product changes
@@ -149,6 +150,9 @@ Objective: turn the visual map into a repeatable decision workflow.
 - Cloud repository hosting.
 - A replacement IDE.
 - Proprietary AI-model hosting.
+- Automated checkout and licence delivery.
+- Anti-tampering or code-obfuscation work.
+- Pro/Team feature gates before willingness to pay is demonstrated.
 
 ## Validation gates
 
@@ -158,7 +162,8 @@ Do not expand the roadmap materially until the product reaches:
 - 20 observed user sessions.
 - 40% completion of a real repository scan.
 - 25% seven-day return rate.
-- Five individuals willing to pay for Pro or two teams agreeing to a pilot.
+- One paid pilot or three credible statements of willingness to pay before
+  commercial infrastructure resumes.
 - One workflow with demonstrable time savings.
 
 ## Recommended sequence
@@ -167,8 +172,8 @@ Do not expand the roadmap materially until the product reaches:
 | --- | --- |
 | Week 1 | Phase 0 decisions, license, positioning, README foundation |
 | Week 2 | CI, clean installation, accurate `v0.2.0` release |
-| Week 3 | Website conversion, demo, download, and technical SEO |
-| Week 4 | Real-repository proof, beta signup, and outreach |
+| Week 3 | Public-preview website, demo, GitHub feedback path, and technical SEO |
+| Week 4 | Real-repository proof, observed trials, and direct outreach |
 | Weeks 5–6 | Guided first scan and simplified default workspace |
 | Weeks 7–9 | Change-impact workspace and comparisons |
 | Weeks 10–12 | Agent-neutral trace prototype and review reports |

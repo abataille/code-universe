@@ -2,11 +2,15 @@
 
 **Understand the code. Verify the change.**
 
-Code Universe by VCLab is a local architecture and AI-agent review workspace for technical leads, agencies, and consultants working with unfamiliar codebases. It turns Swift, JavaScript, TypeScript, HTML, CSS, Python, PHP, Java, C#, Objective-C, and Objective-C++ projects into a navigable city where structure, dependencies, source, change impact, and review evidence can be inspected together.
+Code Universe by VCLab is an early public preview for developers working with unfamiliar codebases or reviewing AI-assisted changes. It turns Swift, JavaScript, TypeScript, HTML, CSS, Python, PHP, Java, C#, Objective-C, and Objective-C++ projects into a navigable city where structure, dependencies, source, change impact, and review evidence can be inspected together.
 
 The app runs on your Mac. Source code is scanned locally and stays local.
 
 The primary workflow is to scan a repository, understand its architecture, investigate a proposed change, follow the agent's evidence trail, and review the diff and verification results before deciding what happens next.
+
+Try it on one real repository and report the useful moment, the confusing moment,
+and the point where the map stopped helping through the
+[GitHub issue forms](https://github.com/abataille/code-universe/issues/new/choose).
 
 [Product strategy](docs/product-strategy.md) · [Public roadmap](ROADMAP.md) · [Business Source License 1.1](LICENSE) · [Commercial licensing](COMMERCIAL-LICENSE.md) · [Website](https://www.vclab.com)
 

@@ -4,14 +4,15 @@ Code Universe helps technical leads, agencies, and consultants understand an
 unfamiliar repository and verify risky AI-assisted changes. Priorities are ordered
 by customer outcome, not by the number of visualizations or supported languages.
 
-## Now — launch readiness
+## Now — public-preview validation
 
 - Complete repository policies, contribution templates, and CI.
 - Validate clean installation and ad-hoc packaging on macOS.
 - Prepare an accurate signed and notarized `v0.2.0` release with checksums.
-- Choose the secure production-key location and commercial agreement for the
-  implemented in-app licence screen and issuer.
 - Publish installation requirements, known limitations, and upgrade notes.
+- Observe at least ten developers attempting a real repository task.
+- Record what helped, where they stopped, and whether they would return.
+- Publish one honest real-repository case study.
 
 ## Next — first success
 
@@ -37,6 +38,11 @@ managed services, and commercial embedding require a commercial licence from
 Dr. Raymund Vorwerk. VCLab is the publisher and brand. Commercial-only modules,
 customer licences, payment credentials, and private signing keys remain outside
 this repository.
+
+Further payment integration, automated licence delivery, anti-tampering work,
+and paid feature gates are intentionally deferred. Reconsider them only after at
+least one paid pilot or three credible statements of willingness to pay. Until
+then, any exceptional commercial pilot is handled manually.
 
 The detailed accepted working plan is maintained separately so this public roadmap
 can remain concise and current.

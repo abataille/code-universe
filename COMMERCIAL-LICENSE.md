@@ -22,22 +22,24 @@ BSL 1.1 permits copying, modification, and redistribution under its terms. A for
 or redistributed copy does not remove the production-use restriction, and its
 users must comply with the same BSL terms or obtain a commercial licence.
 
-## Commercial product structure
+## Commercial validation status
 
-- **Pro** is intended for one commercial user and an official signed Mac build.
-- **Team** is intended for multiple users and future shared review, policy, and
-  administration capabilities.
+- Pro and Team are product directions, not currently differentiated paid feature
+  packages.
 - Official releases are signed, notarized, and accompanied by SHA-256 checksums.
 - Commercial licences are verified locally with a signed licence document. The
   activation design does not require source code, project metadata, or telemetry
   to leave the Mac.
 - The app exposes the active edition, customer, expiry, and capabilities in a
   focused licence screen and imports signed JSON licence documents locally.
-- Commercial-only modules are maintained outside this public source repository
-  and may be distributed under separate commercial terms.
+- No automated checkout, licence server, or commercial feature gate is planned
+  until real usage demonstrates willingness to pay.
 
-Pricing and checkout are not yet public. To request a commercial licence or a
-team pilot, use [the VCLab contact page](https://www.vclab.com/contact.html).
+During the public-preview validation period, an exceptional commercial pilot can
+be arranged manually through the
+[VCLab contact page](https://www.vclab.com/contact.html). Building payment and
+automated licence delivery is reconsidered only after at least one paid pilot or
+three credible statements of willingness to pay.
 
 ## Before the first BSL release
 
