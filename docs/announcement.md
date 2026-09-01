@@ -1,54 +1,81 @@
-# Code Universe Announcement Copy
+# Code Universe 0.2.0 Public Preview
 
-Use this when sharing the repository with Swift, iOS, macOS, or Xcode communities.
+Use this copy when sharing the release with developer, software-architecture, Mac,
+or AI-assisted-development communities. Adapt the opening sentence to the audience,
+but keep the product status and limitations accurate.
 
-## Short Version
+## Short version
 
-I built Code Universe — a 3D architecture map for Swift and Xcode projects.
+I released Code Universe 0.2.0, a public preview that turns a local codebase into
+a navigable architecture city and connects AI-agent searches, source reads, edits,
+diffs, tests, and conclusions to the same map.
 
-It scans Swift code locally, visualizes files/types/functions/properties/dependencies, and lets you jump back into source in Xcode. The goal is simple: understand an unfamiliar codebase faster without replacing your normal IDE.
+It supports Swift, JavaScript, TypeScript, HTML, CSS, Python, PHP, Java, C#,
+Objective-C, and Objective-C++. Project scanning stays on the Mac.
 
-Repo: https://github.com/abataille/code-universe
+I am looking for developers willing to try one real repository task and report
+the useful moment, the confusing moment, and where the map stopped helping.
 
-## Longer Version
+Repository and download: https://github.com/abataille/code-universe
 
-I built Code Universe, a local 3D architecture map for Swift macOS and iOS projects.
+## Longer version
 
-The idea is to use it alongside Xcode when a project gets hard to reason about. Files become planes, SwiftUI views/services/models/functions/properties use different shapes, and dependency paths show how parts of the app relate. You can scan a full project or a single Swift file, switch parser modes, inspect objects, and open source locations back in Xcode.
+Code Universe began as a 3D map for Swift projects. Version 0.2.0 expands it into
+a local architecture and AI-agent review workspace for mixed-language codebases.
 
-It is not meant to replace Xcode. It is a visual companion for orientation, onboarding, and finding dense or important parts of a codebase.
+Files form districts, symbols rise above them, and relationships become visible
+paths. You can inspect exact source ranges, compare parser evidence, find structural
+hotspots, and replay what Codex searched, inspected, changed, and verified without
+separating that evidence from the architecture.
 
-I would love feedback from Swift developers:
+The public preview supports Swift, JavaScript, TypeScript, HTML, CSS, Python, PHP,
+Java, C#, Objective-C, and Objective-C++. The official Apple-silicon Mac download
+is signed and notarized. Normal project scanning stays local; starting a Codex
+review uses the locally installed Codex tooling and its configured account.
 
-- Does this help you understand a project faster?
-- Which relationships would be most useful to see?
-- What would make it fit better beside Xcode?
+This is a validation release, not a polished commercial launch. I would value
+feedback based on a real task:
 
-Repo: https://github.com/abataille/code-universe
+- Which question were you trying to answer?
+- Where did the map help?
+- What was confusing or noisy?
+- At what point did you return to your usual tools?
+- Would you use Code Universe again for a similar task?
 
-## Suggested Post
+Repository and download: https://github.com/abataille/code-universe
 
-Show HN / Swift community title:
+## Suggested Show HN post
+
+Title:
 
 ```text
-Code Universe: a 3D architecture map for Swift/Xcode projects
+Show HN: Code Universe – a local architecture map for reviewing AI-assisted changes
 ```
 
-Post body:
+Body:
 
 ```text
-I built Code Universe, a local 3D architecture map for Swift macOS and iOS projects.
+I built Code Universe, a public-preview Mac app that turns a local codebase into a
+navigable architecture city. It supports Swift, JavaScript, TypeScript, HTML, CSS,
+Python, PHP, Java, C#, and Objective-C, and can connect a Codex review trace to the
+files and symbols the agent searched, inspected, changed, and tested.
 
-It scans Swift code, visualizes files/types/functions/properties/dependencies, and can open selected locations back in Xcode. It is meant as a visual companion for understanding larger or unfamiliar codebases, not as an IDE replacement.
+The goal is not to replace an IDE. It is to help answer two questions before a
+risky change: how is this repository structured, and what evidence supports the
+agent's conclusion?
 
-I am especially interested in feedback from Swift developers: which relationships are useful, which views feel noisy, and what would make this more practical alongside Xcode.
+I am looking for feedback from real repository tasks, especially the moment where
+the visualization helps and the moment where it stops helping.
 
-Repo: https://github.com/abataille/code-universe
+Repository and signed Mac download: https://github.com/abataille/code-universe
 ```
 
-## Places To Share
+## Places to share
 
-- LinkedIn, Mastodon, X, or Bluesky.
-- Reddit communities such as `r/swift`, `r/iOSProgramming`, and `r/macapps`.
-- Swift community spaces where project showcases are welcome.
-- Friends or teams working with large Swift/Xcode projects.
+- Show HN and relevant software-architecture communities.
+- Swift, iOS, macOS, web-development, Python, Java, and .NET communities where
+  project showcases are permitted.
+- Communities focused on AI-assisted development, code review, and developer tools.
+- LinkedIn, Mastodon, Bluesky, or X with one product screenshot and one concrete
+  repository task.
+- Directly with developers who regularly inherit unfamiliar repositories.

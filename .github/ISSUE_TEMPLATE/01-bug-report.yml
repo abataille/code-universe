@@ -13,7 +13,7 @@ body:
     attributes:
       label: Code Universe version
       description: Use the app version, release tag, or commit hash.
-      placeholder: 0.1.0 or a0fc0d2
+      placeholder: 0.2.0 or a commit hash
     validations:
       required: true
   - type: input

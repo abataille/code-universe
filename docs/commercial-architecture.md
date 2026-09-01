@@ -1,7 +1,7 @@
 # Commercial Architecture
 
-Status: activation foundation implemented; paid capabilities and checkout not yet
-released.
+Status: activation foundation implemented; paid capabilities, feature gates, and
+checkout intentionally deferred during public-preview validation.
 
 ## Boundary
 
@@ -13,9 +13,9 @@ its BSL licence, and the generic entitlement verifier. It must not contain:
 - payment-provider credentials or webhook secrets;
 - proprietary Pro or Team implementation modules.
 
-Commercial modules should be built from a separate private repository/package and
-joined during the official release build. Public source must not import a private
-package in its default development or test path.
+If validated demand later justifies commercial modules, build them from a separate
+private repository/package and join them during the official release build. Public
+source must not import a private package in its default development or test path.
 
 ## Offline activation
 
@@ -35,8 +35,9 @@ overridden with `CODE_UNIVERSE_LICENSE_PATH`. The public key is distributed with
 the app; the matching private key must remain outside the repository and release
 bundle.
 
-Create the production key pair only after choosing a secure external private-key
-location and backup policy:
+Do not create a production key pair during public-preview validation. If a paid
+pilot later requires one, first choose a secure external private-key location and
+backup policy:
 
 ```sh
 npm run license:keygen -- \
@@ -64,9 +65,10 @@ npm run license:issue -- \
 Customer licence files are owner-readable by default. The issuer refuses to write
 them inside the repository or overwrite an existing document.
 
-No existing public capability is gated yet. Feature gates should be introduced
-only when a real paid capability exists, and each gate must be enforced in the
-local server or commercial module rather than only hidden in the browser UI.
+No existing public capability is gated. Resume feature-gate work only after at
+least one paid pilot or three credible statements of willingness to pay. A future
+gate must be enforced in the local server or commercial module rather than only
+hidden in the browser UI.
 
 ## Release control
 

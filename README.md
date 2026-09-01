@@ -12,7 +12,7 @@ Try it on one real repository and report the useful moment, the confusing moment
 and the point where the map stopped helping through the
 [GitHub issue forms](https://github.com/abataille/code-universe/issues/new/choose).
 
-[Product strategy](docs/product-strategy.md) · [Public roadmap](ROADMAP.md) · [Business Source License 1.1](LICENSE) · [Commercial licensing](COMMERCIAL-LICENSE.md) · [Website](https://www.vclab.com)
+[Product strategy](docs/product-strategy.md) · [Public roadmap](ROADMAP.md) · [Known limitations](docs/known-limitations.md) · [Business Source License 1.1](LICENSE) · [Commercial licensing](COMMERCIAL-LICENSE.md) · [Website](https://www.vclab.com)
 
 The source is available under BSL 1.1. Non-production use and the limited personal
 production use described in `LICENSE` are permitted without charge. Company use,
@@ -80,7 +80,14 @@ By default, most code objects are bright and opaque for readability. File lots, 
 
 ## Run
 
+The official `v0.2.0` public-preview download is available from
+[GitHub Releases](https://github.com/abataille/code-universe/releases). The Mac
+DMG is signed and notarized; verify its adjacent SHA-256 file before opening it.
+
+To run from source, install the locked dependencies and start the local server:
+
 ```sh
+npm ci
 npm start
 ```
 
