@@ -45,6 +45,7 @@ const server = spawn(process.execPath, ["server.js"], {
     CODEX_HOME: codexHome,
     CODE_UNIVERSE_DATA_ROOT: dataRoot,
     CODE_UNIVERSE_SCANNER: "heuristic",
+    CODE_UNIVERSE_SWIFTSYNTAX_TIMEOUT_MS: process.env.CODE_UNIVERSE_SWIFTSYNTAX_TIMEOUT_MS || "180000",
     CODE_UNIVERSE_CODEX_PATH: join(repositoryRoot, "scripts", "mock-codex-review.js")
   },
   stdio: ["ignore", "pipe", "pipe"]
