@@ -1,6 +1,6 @@
 {
   "name": "code-universe",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Local architecture and AI-agent review workspace for understanding unfamiliar codebases and verifying risky changes.",
   "private": true,
   "type": "module",
