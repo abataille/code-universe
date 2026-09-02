@@ -22,7 +22,9 @@ same BSL terms. Each version converts to Apache-2.0 on its Change Date.
 
 ![Code Universe screenshot](docs/screenshots/code-universe-current.png)
 
-[Watch the Code Universe demo](docs/export.mp4)
+## Demo
+
+<!-- CODE_UNIVERSE_DEMO_VIDEO -->
 
 ## Highlights
 
