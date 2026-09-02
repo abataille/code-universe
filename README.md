@@ -24,7 +24,7 @@ same BSL terms. Each version converts to Apache-2.0 on its Change Date.
 
 ## Demo
 
-<!-- CODE_UNIVERSE_DEMO_VIDEO -->
+https://github.com/user-attachments/assets/eac7d429-2a86-42ef-8645-ce8f640f27d5
 
 ## Highlights
 
