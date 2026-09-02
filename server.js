@@ -1104,7 +1104,7 @@ async function launchCodexReview(body) {
     "--config",
     `mcp_servers.code_universe.args=[${JSON.stringify(mcpScript)}]`,
     "--config",
-    'mcp_servers.code_universe.env_vars=["CODE_UNIVERSE_MCP_URL","CODE_UNIVERSE_REVIEW_ID","CODE_UNIVERSE_MCP_TOKEN"]',
+    'mcp_servers.code_universe.env_vars=["CODE_UNIVERSE_MCP_URL","CODE_UNIVERSE_REVIEW_ID","CODE_UNIVERSE_MCP_TOKEN","ELECTRON_RUN_AS_NODE"]',
     "--config",
     "mcp_servers.code_universe.required=true",
     "--config",

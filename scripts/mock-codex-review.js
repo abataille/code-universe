@@ -16,8 +16,12 @@ if (isObjectiveCFixture && (!prompt.includes("Primary language: Objective-C.") |
 if (!process.argv.some((argument) => argument.includes("mcp_servers.code_universe.command"))) {
   throw new Error("Code Universe did not configure the MCP server for the Codex review.");
 }
-if (!process.argv.some((argument) => argument.includes("mcp_servers.code_universe.env_vars"))) {
+const mcpEnvironmentConfig = process.argv.find((argument) => argument.includes("mcp_servers.code_universe.env_vars"));
+if (!mcpEnvironmentConfig) {
   throw new Error("Code Universe did not forward the MCP review environment.");
+}
+if (!mcpEnvironmentConfig.includes("ELECTRON_RUN_AS_NODE")) {
+  throw new Error("Code Universe did not preserve Electron's Node runtime mode for the MCP server.");
 }
 
 const mcpResponse = await fetch(new URL("/api/mcp/tool", process.env.CODE_UNIVERSE_MCP_URL), {
