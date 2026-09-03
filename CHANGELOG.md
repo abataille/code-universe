@@ -2,6 +2,20 @@
 
 All notable user-facing changes to Code Universe are recorded here.
 
+## 0.2.2 — 2026-09-03
+
+### Added
+
+- In-app Help guide covering project loading, map navigation, layers, code
+  inspection, architecture paths, and Codex behavior reviews.
+
+### Changed
+
+- Moved the object, path, and size legends from the map canvas into the left
+  Map layers panel while retaining the camera controls on the canvas.
+- Empty-space clicks now clear the current inspection and restore the full map
+  and camera position.
+
 ## 0.2.0 — 2026-09-01
 
 ### Added

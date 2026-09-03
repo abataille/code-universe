@@ -38,6 +38,7 @@ const appShell = document.querySelector(".app-shell");
 const toggleLeftRailButton = document.querySelector("#toggleLeftRailButton");
 const toggleRightRailButton = document.querySelector("#toggleRightRailButton");
 const themeToggleButton = document.querySelector("#themeToggleButton");
+const helpButton = document.querySelector("#helpButton");
 const licenseButton = document.querySelector("#licenseButton");
 const licenseFileInput = document.querySelector("#licenseFileInput");
 const reviewTitleInput = document.querySelector("#reviewTitleInput");
@@ -329,6 +330,49 @@ function applyUiTheme(theme) {
   themeToggleButton.setAttribute("aria-pressed", String(light));
   themeToggleButton.classList.toggle("is-active", light);
   themeToggleButton.textContent = light ? "Dark UI" : "Light UI";
+}
+
+function openHelpDrawer() {
+  openContentDrawer({
+    mode: "help",
+    eyebrow: "Getting started",
+    title: "How to use Code Universe",
+    meta: "From project folder to an explorable code map.",
+    content: `
+      <section class="help-guide" data-help-screen>
+        <header class="help-intro">
+          <span class="eyebrow">Quick start</span>
+          <p>Choose a project, explore its structure in the map, then select an object to understand the code behind it.</p>
+        </header>
+        <ol class="help-steps">
+          <li>
+            <span class="help-step-number">01</span>
+            <div><h3>Load a project</h3><p>Select <strong>Choose Project or File</strong>. Analysis stays on this Mac. Use the analysis-style menu to trade speed for parser detail.</p></div>
+          </li>
+          <li>
+            <span class="help-step-number">02</span>
+            <div><h3>Move through the map</h3><p>Drag to orbit, scroll to zoom, and use W/A/S/D or the arrow keys to move. Use E/Q or Page Up/Page Down to change height.</p></div>
+          </li>
+          <li>
+            <span class="help-step-number">03</span>
+            <div><h3>Read the universe</h3><p>Files form districts; views, services, models, functions, and properties become distinct objects. <strong>Map layers</strong> explains shapes, paths, and size.</p></div>
+          </li>
+          <li>
+            <span class="help-step-number">04</span>
+            <div><h3>Find and inspect code</h3><p>Search for a symbol or file, or click an object in the map. The Inspector shows identity, source location, dependencies, and available editor actions.</p></div>
+          </li>
+          <li>
+            <span class="help-step-number">05</span>
+            <div><h3>Follow architecture</h3><p>Turn path types on under <strong>Connection detail</strong>. Use Focus and the map presets to reduce noise around the structure you are investigating.</p></div>
+          </li>
+          <li>
+            <span class="help-step-number">06</span>
+            <div><h3>Review behavior with Codex</h3><p>Describe a problem, choose inspect-only or allow edits, and run a review. The Review tab replays which files Codex inspected, changed, and verified.</p></div>
+          </li>
+        </ol>
+        <footer class="help-note"><strong>Tip</strong><span>Start with the sample universe if you want to learn the controls without selecting your own project.</span></footer>
+      </section>`
+  });
 }
 
 async function initializeCodexSettings() {
@@ -1873,7 +1917,7 @@ function bindEvents() {
       selectEdge(selectedEdge);
       return;
     }
-    if (state.openShellId) hidePopup();
+    if (state.openShellId || state.selectedId || state.selectedEdgeKey) resetMapView();
   });
 
   searchInput.addEventListener("keydown", (event) => {
@@ -2020,6 +2064,7 @@ function bindEvents() {
     applyUiTheme(theme);
   });
 
+  helpButton.addEventListener("click", openHelpDrawer);
   licenseButton.addEventListener("click", openLicenseDrawer);
   licenseFileInput.addEventListener("change", async () => {
     const [file] = licenseFileInput.files;

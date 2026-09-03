@@ -64,6 +64,38 @@
               <span>Performance mode</span>
             </label>
           </div>
+          <div class="map-layer-reference" aria-label="Map legend">
+            <div class="map-layer-reference-group">
+              <span class="map-layer-reference-label">Objects</span>
+              <div class="map-layer-key shape-key">
+                <span><i class="shape-file"></i>File plane</span>
+                <span><i class="shape-view"></i>View building</span>
+                <span><i class="shape-service"></i>Service tower</span>
+                <span><i class="shape-module"></i>Module ring</span>
+                <span><i class="shape-cylinder"></i>Function/protocol</span>
+                <span><i class="shape-sphere"></i>Property/state</span>
+              </div>
+            </div>
+            <div class="map-layer-reference-group">
+              <span class="map-layer-reference-label">Paths</span>
+              <div class="map-layer-key edge-key">
+                <span><i class="edge-uses"></i>Uses</span>
+                <span><i class="edge-imports"></i>Imports</span>
+                <span><i class="edge-conforms"></i>Conforms to</span>
+                <span><i class="edge-inferred"></i>Inferred hint</span>
+                <span><i class="edge-index"></i>Xcode index</span>
+              </div>
+            </div>
+            <div class="map-layer-reference-group">
+              <span class="map-layer-reference-label">Size</span>
+              <div class="map-layer-key axis-key">
+                <span><b>X</b>vars/properties</span>
+                <span><b>Y</b>lines of code</span>
+                <span><b>Z</b>functions/methods</span>
+                <span><b>File</b>LOC footprint</span>
+              </div>
+            </div>
+          </div>
         </section>
 
         <section class="panel panel-review">
@@ -185,6 +217,7 @@
             <input id="searchInput" type="search" placeholder="ContentView, AuthService..." />
           </label>
           <div class="chrome-actions" aria-label="Layout controls">
+            <button id="helpButton" class="chrome-button" type="button" aria-label="Open Code Universe help">Help</button>
             <button id="licenseButton" class="chrome-button license-button" type="button">Licence · Source</button>
             <button id="toggleLeftRailButton" class="chrome-button" type="button" aria-pressed="false">Controls</button>
             <button id="toggleRightRailButton" class="chrome-button" type="button" aria-pressed="false">Inspector</button>
@@ -214,27 +247,6 @@
           <span>W/A/S/D or arrows: move</span>
           <span>PageUp/PageDown or E/Q: lift</span>
           <span>Click: inspect</span>
-        </div>
-        <div class="edge-legend">
-          <span><i class="edge-uses"></i>Uses</span>
-          <span><i class="edge-imports"></i>Imports</span>
-          <span><i class="edge-conforms"></i>Conforms to</span>
-          <span><i class="edge-inferred"></i>Inferred hint</span>
-          <span><i class="edge-index"></i>Xcode index</span>
-        </div>
-        <div class="shape-legend">
-          <span><i class="shape-file"></i>File plane</span>
-          <span><i class="shape-view"></i>View building</span>
-          <span><i class="shape-service"></i>Service tower</span>
-          <span><i class="shape-module"></i>Module ring</span>
-          <span><i class="shape-cylinder"></i>Function/protocol</span>
-          <span><i class="shape-sphere"></i>Property/state</span>
-        </div>
-        <div class="axis-legend" aria-label="Object size axis mapping">
-          <span><b>X</b> vars/properties</span>
-          <span><b>Y</b> lines of code</span>
-          <span><b>Z</b> functions/methods</span>
-          <span><b>File</b> LOC footprint</span>
         </div>
       </section>
 

@@ -102,6 +102,19 @@ export class GalleryController {
   await page.screenshot({ path: languageScreenshot });
   const languageSelected = await page.evaluate(() =>
     (document.querySelector("#selectedDetails")?.textContent || "").includes("GalleryController"));
+  await page.locator("#worldCanvas").evaluate((canvas) => {
+    const rect = canvas.getBoundingClientRect();
+    canvas.dispatchEvent(new MouseEvent("click", {
+      bubbles: true,
+      clientX: rect.left + 1,
+      clientY: rect.top + 1
+    }));
+  });
+  await page.waitForTimeout(50);
+  const emptyClickRestoredMap = await page.evaluate(() => {
+    const details = document.querySelector("#selectedDetails")?.textContent || "";
+    return details.includes("Click any object in the map to inspect");
+  });
   await page.locator("#compareParsersButton").click();
   await page.waitForFunction(() => {
     const text = document.querySelector("#parserDiff")?.textContent || "";
@@ -111,6 +124,19 @@ export class GalleryController {
     analysisVisible: !document.querySelector("#inspectorPanelAnalysis")?.hidden,
     comparisonText: document.querySelector("#parserDiff")?.textContent || ""
   }));
+  await page.locator("#helpButton").click();
+  const helpState = await page.evaluate(() => {
+    const drawer = document.querySelector("#contentDrawer");
+    const text = drawer?.textContent || "";
+    const actions = [...document.querySelectorAll(".chrome-actions > button")].map((button) => button.id);
+    return {
+      open: Boolean(drawer?.open),
+      title: document.querySelector("#contentDrawerTitle")?.textContent || "",
+      essentialsVisible: ["Load a project", "Move through the map", "Find and inspect code", "Review behavior with Codex"].every((label) => text.includes(label)),
+      beforeLicense: actions.indexOf("helpButton") === actions.indexOf("licenseButton") - 1
+    };
+  });
+  await page.locator("#contentDrawerCloseButton").click();
   await page.locator("#licenseButton").click();
   await page.waitForSelector("[data-license-screen]:not(.is-loading)");
   await page.locator("#licenseFileInput").setInputFiles(importLicensePath);
@@ -143,9 +169,13 @@ export class GalleryController {
   assert(!htmlState.startupError, "visual regression page should not show a startup error");
   assert(htmlState.htmlSelected, "visual regression should open the HTML file city");
   assert(languageSelected, "visual regression should open a programming-language building");
+  assert(emptyClickRestoredMap, "clicking empty map space should clear inspection and restore the full map view");
   assert(htmlState.hierarchyVisible && htmlState.stableIdentityVisible, "inspector should expose hierarchy and stable identity");
   assert(comparisonState.analysisVisible, "Compare Parsers should reveal the Analysis inspector tab");
   assert(comparisonState.comparisonText.includes("Tree-sitter"), "Compare Parsers should render a comparison result");
+  assert(helpState.open && helpState.title === "How to use Code Universe", "Help button should open the basic-functionality guide");
+  assert(helpState.essentialsVisible, "Help guide should explain the essential Code Universe workflow");
+  assert(helpState.beforeLicense, "Help button should sit immediately before the licence button");
   assert(licenseState.open && licenseState.title === "Code Universe licence", "licence button should open the focused licence drawer");
   assert(licenseState.teamEdition && licenseState.verifiedLocally, "licence drawer should activate and display a verified Team licence");
   assert(licenseState.bslVisible && licenseState.contactVisible, "licence drawer should retain BSL context and commercial contact");
