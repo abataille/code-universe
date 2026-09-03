@@ -63,9 +63,9 @@
     "nanoid": "3.3.18"
   },
   "devDependencies": {
-    "@electron/packager": "^20.1.1",
-    "electron": "^43.3.0",
-    "playwright-core": "^1.62.0"
+    "@electron/packager": "^20.3.0",
+    "electron": "^44.0.0",
+    "playwright-core": "^1.62.1"
   },
   "optionalDependencies": {
     "tree-sitter-css": "^0.25.0",
