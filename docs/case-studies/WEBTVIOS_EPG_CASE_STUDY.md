@@ -21,7 +21,7 @@ That situation matches Code Universe's intended workflow: understand an evolved 
 
 > In an older shipping Swift application modified repeatedly by AI without manual intervention, can Code Universe reconstruct the EPG implementation, localize a plausible post-download performance regression, and expose the supporting evidence without modifying the application?
 
-The reported timing is now specific: the performance problem appears **after downloading new data**. Before publishing, quantify the remaining user-visible symptom with an observable statement such as:
+The reported timing is specific: the performance problem appears **after downloading new data**. That report is sufficient context for this diagnostic demonstration; it is not a measured duration. If runtime validation is pursued later, quantify the user-visible symptom with an observable statement such as:
 
 - Opening the EPG sheet blocks interaction for **[x] seconds**.
 - The interface stalls for **[x] seconds** after EPG data finishes downloading.
@@ -349,13 +349,13 @@ A 30-second silent case-study replay is prepared in two H.264 exports:
 - [Architecture and review trace screenshot](media/code-universe-webtvios-overview.png).
 - [Detailed review result screenshot](media/code-universe-webtvios-review-result.png).
 
-The original 23.5-second Code Universe replay is preserved without cropping or overlays. A short title card establishes the founder-led case-study context, and an end card states the source-supported diagnosis while explicitly marking device measurement as the next step.
+The original 23.5-second Code Universe replay is preserved without cropping or overlays. A short title card establishes the founder-led case-study context, and an end card states the source-supported diagnosis and that no source changes were made. Device measurement is optional follow-up work, not a requirement for this demonstration.
 
-## Draft publication title
+## Publication title
 
 > Regaining control of an AI-modified Swift app: tracing an EPG regression with Code Universe
 
-## Draft summary
+## Publication summary
 
 > In a founder-led test, Code Universe mapped a shipping Swift television app that had been modified repeatedly by AI without manual source review. Its inspect-only review traced a reported post-download UI stall to a plausible main-thread chain that JSON-encodes and stores the complete 16,514-program feed, repeatedly filters it by channel, and then republishes root-owned SwiftUI state. Git history connected the behavior to a change that replaced filtered-result caching with full-feed caching. No application files were modified; the result is a source-supported diagnosis, not a measured performance claim.
 
@@ -368,4 +368,6 @@ The original 23.5-second Code Universe replay is preserved without cropping or o
 - [x] Include misses and false-positive graph relationships.
 - [x] Disclose that this is a founder-owned project and not an independent benchmark.
 - [x] State that no source change or measured performance improvement is claimed.
-- [ ] Publish the case study and media on the selected public surfaces.
+- [x] Prepare a prominent GitHub README preview and link to the complete study.
+- [x] Prepare the VCLab case-study section with the replay and a link to the complete study.
+- [ ] Verify the updated README and VCLab section on their live public URLs after deployment.

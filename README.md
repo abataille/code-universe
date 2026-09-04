@@ -26,6 +26,23 @@ same BSL terms. Each version converts to Apache-2.0 on its Change Date.
 
 https://github.com/user-attachments/assets/eac7d429-2a86-42ef-8645-ce8f640f27d5
 
+## Case study: understanding an AI-modified Swift app
+
+In a founder-led investigation of WebTViOS, a shipping App Store application,
+Code Universe mapped the EPG feature and connected a reported post-download stall
+to a source-supported main-thread processing chain and an earlier caching change.
+The inspect-only review retained 27 evidence events without modifying the app.
+
+[![Watch the 30-second WebTViOS investigation replay](docs/case-studies/media/webtvios-epg/code-universe-webtvios-epg-case-study-poster.jpg)](https://www.vclab.com/#case-study)
+
+[Read the full case study](docs/case-studies/WEBTVIOS_EPG_CASE_STUDY.md) ·
+[Watch on VCLab](https://www.vclab.com/#case-study) ·
+[Download the lightweight replay (1 MB)](https://raw.githubusercontent.com/abataille/code-universe/main/docs/case-studies/media/webtvios-epg/code-universe-webtvios-epg-case-study-github.mp4)
+
+This demonstrates architecture discovery and review traceability, not a measured
+performance improvement. No WebTViOS source was changed; device profiling remains
+optional follow-up work. The study also records false-positive graph relationships.
+
 ## Highlights
 
 - Explore Swift, web, Python, PHP, Java, .NET, and Objective-C projects as a navigable 3D code city.
