@@ -1,6 +1,7 @@
 # WebTViOS EPG Performance — Founder-Led Case Study Record
 
-**Status:** Review-ready diagnostic case study; runtime hypothesis clearly labeled as unmeasured
+**Status:** Published diagnostic case study; runtime hypothesis clearly labeled as unmeasured
+**Publication verified:** 4 September 2026 — [GitHub README](https://github.com/abataille/code-universe#case-study-understanding-an-ai-modified-swift-app) and [VCLab replay section](https://www.vclab.com/#case-study)
 **Study type:** Founder-led, single-project case study
 **Study date:** 2 September 2026
 **Application:** WebTViOS, a shipping App Store Swift application
@@ -370,4 +371,4 @@ The original 23.5-second Code Universe replay is preserved without cropping or o
 - [x] State that no source change or measured performance improvement is claimed.
 - [x] Prepare a prominent GitHub README preview and link to the complete study.
 - [x] Prepare the VCLab case-study section with the replay and a link to the complete study.
-- [ ] Verify the updated README and VCLab section on their live public URLs after deployment.
+- [x] Verify the updated README and VCLab section on their live public URLs after deployment (4 September 2026; desktop and mobile layouts, 30-second video metadata, and no horizontal overflow).
